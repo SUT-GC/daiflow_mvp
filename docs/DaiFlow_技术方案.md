@@ -66,7 +66,9 @@ daiflow start
 ```
 ~/.daiflow/
 ├── daiflow.db                        # SQLite 数据库
-└── projects/
+├── sessions/                         # SSE 过程日志（按 session_id 存储）
+│   └── {session_id}.jsonl            # 每行一个 JSON 事件（text_delta / tool_call 等）
+├── projects/
 │   └── {project_id}/
 │       ├── project.md                # 知识库索引文件
 │       └── skills/                   # 项目 skill 文件
@@ -143,7 +145,7 @@ CREATE TABLE tasks (
     -- 5 = coding        编码中
     -- 6 = reviewing     代码审查中
     -- 7 = done          已提交 MR
-    plan_session_id TEXT,              -- 技术方案+任务拆解共享的 Cody session id
+    plan_cody_session_id TEXT,         -- 技术方案+任务拆解共享的 Cody session id（Cody SDK 返回）
     mr_info         TEXT,              -- MR 相关信息，JSON
     created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -162,7 +164,7 @@ CREATE TABLE todos (
     description TEXT,              -- 详细描述
     status      INTEGER DEFAULT 0,
     -- status 枚举：0 = pending / 1 = running / 2 = done / 3 = failed
-    session_id  TEXT,              -- 该 todo 对应的 Cody session id
+    cody_session_id TEXT,          -- 该 todo 对应的 Cody session id（Cody SDK 返回）
     result      TEXT,              -- 执行结果摘要
     created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -189,24 +191,45 @@ CREATE TABLE settings (
 | `cody_api_key` | API Key |
 | `theme` | 界面主题，`dark`（默认）或 `light` |
 
-### 2.6 project_init_sessions 项目初始化 session 表
+### 2.6 sessions 统一会话表
 
-用于记录项目知识库生成时每个知识点对应的 Cody session，支持局部重新生成。
+DaiFlow 中所有 AI 交互场景（项目初始化、技术方案、Todo 拆解、Todo 编码、Code Review）统一抽象为 "Session"。每个 Session 代表一次业务动作，对应一个 Cody 对话。
+
+**两类 ID 的区别：**
+
+| 名称 | 含义 | 示例 |
+|------|------|------|
+| `session_id` | DaiFlow 业务 ID，标识"一次业务动作" | `init:proj_1:business_flow`、`task:42:plan` |
+| `cody_session_id` | Cody SDK 返回的会话 ID，标识一次 AI 对话 | Cody 内部生成的 UUID |
+
+> 注意：大多数场景一个 `session_id` 对应一个 `cody_session_id`，但**技术方案 + Todo 拆解共享同一个 Cody session**（保持上下文连续），因此两个 `session_id` 会共用一个 `cody_session_id`。
 
 ```sql
-CREATE TABLE project_init_sessions (
-    id           TEXT PRIMARY KEY,  -- UUID
-    project_id   TEXT NOT NULL,     -- 关联 projects.id
-    knowledge_type TEXT NOT NULL,   -- 知识点类型，如 frontend_structure / backend_structure /
-                                    -- module_overview / business_flow / data_entity /
-                                    -- api_interaction / dependencies / component_usage
-    session_id   TEXT,              -- 对应的 Cody session id
-    status       INTEGER DEFAULT 0,  -- 0 = pending / 1 = running / 2 = done / 3 = failed
-    created_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (project_id) REFERENCES projects(id)
+CREATE TABLE sessions (
+    session_id       TEXT PRIMARY KEY,  -- DaiFlow 业务 ID，如 "init:proj_1:frontend_structure"
+    cody_session_id  TEXT,              -- Cody SDK 返回的对话 ID
+    type             TEXT NOT NULL,     -- 类型：init / plan / todo_split / todo_exec / review
+    ref_id           TEXT NOT NULL,     -- 关联的业务实体 ID（project_id 或 task_id 或 todo_id）
+    layer            INTEGER,           -- 初始化场景的层级：1/2/3/4，其他场景为 NULL
+    status           TEXT DEFAULT 'waiting',  -- waiting / running / done / failed
+    error            TEXT,              -- 失败时的错误信息
+    started_at       DATETIME,
+    finished_at      DATETIME,
+    created_at       DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 ```
+
+**session_id 命名规范：**
+
+| 场景 | session_id 格式 | type | ref_id |
+|------|----------------|------|--------|
+| 项目初始化 — Skill 拉取 | `init:{project_id}:skill_fetch` | init | project_id |
+| 项目初始化 — 知识点生成 | `init:{project_id}:{knowledge_type}` | init | project_id |
+| 项目初始化 — project.md | `init:{project_id}:project_md` | init | project_id |
+| 技术方案生成 | `task:{task_id}:plan` | plan | task_id |
+| Todo 拆解 | `task:{task_id}:todo_split` | todo_split | task_id |
+| Todo 编码执行 | `task:{task_id}:todo:{todo_id}` | todo_exec | todo_id |
+| Code Review | `task:{task_id}:review` | review | task_id |
 
 ---
 
@@ -220,16 +243,18 @@ daiflow/
 ├── database.py              # SQLAlchemy 初始化
 ├── models.py                # ORM 模型
 ├── config.py                # 全局配置（daiflow 根目录路径等）
+├── sse_manager.py           # SSEManager 进程内 pub/sub 消息总线
+├── session_runner.py        # SessionRunner 统一 AI 任务执行器
 ├── routers/
 │   ├── settings.py          # 配置相关 API
 │   ├── projects.py          # 项目相关 API
 │   ├── tasks.py             # 任务相关 API
 │   ├── todos.py             # Todo 相关 API
-│   └── stream.py            # SSE 流式推送 API
+│   └── sessions.py          # 统一 Session API（status / logs / stream）
 ├── services/
-│   ├── project_service.py   # 项目业务逻辑
+│   ├── project_service.py   # 项目业务逻辑（含初始化 4 层编排）
 │   ├── task_service.py      # 任务业务逻辑
-│   ├── cody_service.py      # Cody SDK 封装
+│   ├── cody_service.py      # Cody SDK 封装（build_cody_client）
 │   ├── git_service.py       # git 操作封装
 │   └── skill_service.py     # Skill 管理（同步、mock 拉取）
 └── static/                  # React 构建产物（前端打包后放这里）
@@ -265,56 +290,275 @@ def build_cody_client(workdir: str, extra_roots: list[str] = []):
 - 项目知识生成：`workdir` 设为项目目录，`allowed_roots` 包含所有关联仓库的本地路径
 - 任务开发阶段：`workdir` 设为 task 目录，`allowed_roots` 包含所有关联仓库的本地路径
 
-**Session 管理策略：**
+### 3.3 SSEManager — 进程内消息总线
 
-| 阶段 | session_id 来源 | 存储位置 |
-|------|----------------|---------|
-| 项目知识生成（每个知识点） | Cody 首次调用自动生成 | project_init_sessions.session_id |
-| 技术方案 + 任务拆解 | Cody 首次调用自动生成 | tasks.plan_session_id |
-| 每个 todo 执行 | Cody 首次调用自动生成 | todos.session_id |
+所有 AI 任务都通过后台协程执行（`BackgroundTasks`），前端通过 SSE 端点实时接收进度。两者之间需要一个进程内的 pub/sub 机制桥接。
 
-### 3.3 SSE 流式推送设计
+```python
+import asyncio
+from collections import defaultdict
 
-使用 FastAPI 的 `StreamingResponse` 实现 SSE，将 Cody stream 的输出实时推送给前端。
+class SSEManager:
+    """进程内 pub/sub —— 后台任务发消息，SSE 端点订阅消息"""
+
+    def __init__(self):
+        self._channels: dict[str, list[asyncio.Queue]] = defaultdict(list)
+
+    def subscribe(self, session_id: str) -> asyncio.Queue:
+        """SSE 端点调用：创建一个 queue 加入该 session 的频道"""
+        queue = asyncio.Queue()
+        self._channels[session_id].append(queue)
+        return queue
+
+    async def publish(self, session_id: str, event: dict):
+        """后台任务调用：向该 session 的所有 subscriber 广播"""
+        for queue in self._channels[session_id]:
+            await queue.put(event)
+
+    def unsubscribe(self, session_id: str, queue: asyncio.Queue):
+        """SSE 断开时清理"""
+        self._channels[session_id].remove(queue)
+        if not self._channels[session_id]:
+            del self._channels[session_id]
+
+# 全局单例 —— FastAPI 进程内共享
+sse_manager = SSEManager()
+```
+
+**原理：** `sse_manager` 是 Python 进程内的全局单例，BackgroundTask 和 SSE handler 都跑在同一个 asyncio event loop 里，共享同一块内存。`publish` 往 Queue 里 put，`subscribe` 端的 `queue.get()` 就会被唤醒 — 纯内存、零延迟，不需要 Redis。
+
+### 3.4 SessionRunner — 统一的 AI 任务执行器
+
+DaiFlow 中所有 AI 交互场景（项目初始化、技术方案、Todo 拆解、Todo 编码、Code Review）本质相同：**后台跑 Cody → 过程写日志 → SSE 推前端 → 状态存 DB**。统一抽象为 `SessionRunner`。
+
+```python
+class SessionRunner:
+    """统一的 '跑一个 AI 任务并推流' 抽象"""
+
+    def __init__(self, session_id: str, sse_manager: SSEManager, db: AsyncSession):
+        self.session_id = session_id
+        self.sse = sse_manager
+        self.db = db
+        self.log_path = Path.home() / f".daiflow/sessions/{session_id}.jsonl"
+        self.cody_session_id: str | None = None
+
+    async def run(self, cody_client: AsyncCodyClient = None,
+                  cody_config: dict = None, prompt: str = ""):
+        """
+        执行一次 Cody 对话，统一处理流式输出 + 持久化 + SSE。
+        - 传入 cody_client：复用已有 Cody session（如技术方案 + Todo 拆解共享）
+        - 传入 cody_config：创建新的 Cody client
+        """
+        await self._set_status("running")
+        own_client = False
+
+        try:
+            if cody_client is None:
+                cody_client = await AsyncCodyClient(**cody_config)
+                own_client = True
+
+            async for chunk in cody_client.run_stream(prompt):
+                # StreamChunk: type, content, tool_name, args, tool_call_id, usage...
+                event = self._chunk_to_event(chunk)
+
+                if chunk.type == "compact":
+                    # 上下文压缩事件，仅记录日志，不推前端
+                    self._append_log(event)
+                    continue
+                if chunk.type == "done":
+                    # Cody 完成，记录 usage 并转为 status_change
+                    self._append_log(event)
+                    self.cody_session_id = chunk.session_id
+                    await self._set_status("done", usage=chunk.usage)
+                    continue
+
+                # 其他事件（text_delta / thinking / tool_call / tool_result）
+                # 1. 追加写日志文件（持久化，关了再开能回放）
+                self._append_log(event)
+                # 2. 推 SSE（实时增量）
+                await self.sse.publish(f"session:{self.session_id}", event)
+
+        except Exception as e:
+            await self._set_status("failed", error=str(e))
+            raise
+        finally:
+            if own_client:
+                await cody_client.close()
+
+    @staticmethod
+    def _chunk_to_event(chunk) -> dict:
+        """将 Cody SDK StreamChunk 转为 DaiFlow 事件 dict"""
+        event = {"type": chunk.type}
+        if chunk.content:
+            event["content"] = chunk.content
+        if chunk.tool_name:
+            event["tool_name"] = chunk.tool_name
+        if chunk.args:
+            event["args"] = chunk.args
+        if chunk.tool_call_id:
+            event["tool_call_id"] = chunk.tool_call_id
+        if chunk.usage:
+            event["usage"] = {"input_tokens": chunk.usage.input_tokens,
+                              "output_tokens": chunk.usage.output_tokens,
+                              "total_tokens": chunk.usage.total_tokens}
+        return event
+
+    async def _set_status(self, status: str, error: str = None):
+        """状态写 DB + 推一条状态事件"""
+        await update_session(self.db, self.session_id,
+                             status=status, cody_session_id=self.cody_session_id, error=error)
+        await self.sse.publish(self.session_id, {
+            "type": "status_change", "status": status, "error": error
+        })
+
+    def _append_log(self, event: dict):
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.log_path, "a") as f:
+            f.write(json.dumps(event, ensure_ascii=False) + "\n")
+```
+
+**各场景调用示例：**
+
+```python
+# ---- 技术方案生成 ----
+runner = SessionRunner(session_id=f"task:{task_id}:plan", sse_manager=sse, db=db)
+await runner.run(cody_config={...}, prompt=plan_prompt)
+
+# ---- 技术方案 + Todo 拆解共享 Cody session ----
+async with AsyncCodyClient(**config) as cody:
+    plan_runner = SessionRunner(f"task:{task_id}:plan", sse, db)
+    await plan_runner.run(cody_client=cody, prompt=plan_prompt)
+    # cody_session_id = "cody-xxx"
+
+    todo_runner = SessionRunner(f"task:{task_id}:todo_split", sse, db)
+    await todo_runner.run(cody_client=cody, prompt=split_prompt)
+    # cody_session_id = "cody-xxx" ← 同一个 Cody session
+
+# ---- 项目初始化（多个 runner 并发） ----
+runners = [
+    SessionRunner(f"init:{project_id}:{kt}", sse, db)
+    for kt in ["frontend_structure", "backend_structure", "business_flow"]
+]
+await asyncio.gather(*[
+    r.run(cody_config={...}, prompt=build_prompt(kt))
+    for r, kt in zip(runners, knowledge_types)
+])
+```
+
+### 3.5 SSE 流式推送设计
+
+基于 SSEManager + SessionRunner，所有 AI 交互场景共享统一的 3 个 API 端点。
+
+#### 3.5.1 Cody SDK 事件 → DaiFlow SSE 事件映射
+
+Cody SDK 的 `run_stream()` 返回 `StreamChunk`，DaiFlow 进行透传或转换：
+
+| Cody SDK StreamChunk.type | DaiFlow SSE event | 前端处理 | 说明 |
+|---------------------------|-------------------|---------|------|
+| `text_delta` | `text_delta` | 聊天框/日志逐字追加 | 直接透传，含 `content` |
+| `thinking` | `thinking` | 思考过程（可折叠展示） | 直接透传，含 `content` |
+| `tool_call` | `tool_call` | 显示工具调用 | 透传 `tool_name`、`args`、`tool_call_id` |
+| `tool_result` | `tool_result` | 显示工具结果 | 透传 `content`、`tool_name`、`tool_call_id` |
+| `done` | `status_change` | 标记完成 | DaiFlow 转换：收到 done 后更新 DB 状态，推 status_change |
+| `compact` | （不推送） | — | 上下文压缩事件，仅后端记录日志 |
+| — | `user_message` | — | **DaiFlow 注入**：仅写入 .jsonl（重进页面还原用户消息） |
+| — | `plan_updated` | 左面刷新 plan 内容 | **DaiFlow 注入**：检测到文件写入后推送 |
+| — | `session_status` | 初始化进度面板 | **DaiFlow 注入**：项目级 SSE 总线专用 |
+
+> `plan_updated` 和 `session_status` 不是 Cody SDK 事件，是 DaiFlow 根据业务逻辑注入的自定义事件。
 
 **SSE 事件格式：**
 
 ```
 data: {"type": "text_delta", "content": "正在分析项目结构..."}
 
-data: {"type": "tool_call", "tool_name": "read_file", "args": {"path": "src/index.ts"}}
+data: {"type": "thinking", "content": "让我先看看项目结构..."}
 
-data: {"type": "tool_result", "tool_name": "read_file", "content": "...文件内容..."}
+data: {"type": "tool_call", "tool_name": "read_file", "args": {"path": "src/index.ts"}, "tool_call_id": "tc_1"}
 
-data: {"type": "done", "session_id": "abc123"}
+data: {"type": "tool_result", "tool_name": "read_file", "content": "...文件内容...", "tool_call_id": "tc_1"}
 
-data: {"type": "error", "message": "执行失败"}
+data: {"type": "plan_updated", "content": "# 技术方案\n\n## 背景\n..."}
+
+data: {"type": "user_message", "content": "token 刷新不用单独处理"}  ← 仅写入 .jsonl，不推 SSE
+
+data: {"type": "status_change", "status": "done", "usage": {"total_tokens": 1234}}
+
+data: {"type": "status_change", "status": "failed", "error": "执行失败"}
 ```
 
-**FastAPI SSE 实现示例：**
+**统一的 3 个 Session API：**
 
 ```python
-from fastapi import FastAPI
-from fastapi.responses import StreamingResponse
-from cody import AsyncCodyClient
-import json
+@router.get("/api/sessions/{session_id}/status")
+async def get_session_status(session_id: str, db=Depends(get_db)):
+    """查 DB —— 任何时候都能拿到状态（支持页面刷新、重新打开）"""
+    session = await db.get(Session, session_id)
+    return {"session_id": session.session_id, "status": session.status,
+            "cody_session_id": session.cody_session_id, "error": session.error}
 
-async def cody_stream_generator(prompt: str, session_id: str | None, client):
-    async for chunk in client.stream(prompt, session_id=session_id):
-        data = {"type": chunk.type, "content": chunk.content}
-        if chunk.tool_name:
-            data["tool_name"] = chunk.tool_name
-        if chunk.session_id:
-            data["session_id"] = chunk.session_id
-        yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+@router.get("/api/sessions/{session_id}/logs")
+async def get_session_logs(session_id: str):
+    """读 .jsonl 文件 —— 历史回放（关了再开能看到完整过程）"""
+    log_path = Path.home() / f".daiflow/sessions/{session_id}.jsonl"
+    if not log_path.exists():
+        return []
+    return [json.loads(line) for line in log_path.read_text().splitlines()]
 
-@app.get("/api/tasks/{task_id}/plan/stream")
-async def stream_plan(task_id: str):
-    # 构建 prompt，创建 client...
-    return StreamingResponse(
-        cody_stream_generator(prompt, session_id, client),
-        media_type="text/event-stream"
-    )
+@router.get("/api/sessions/{session_id}/stream")
+async def session_stream(session_id: str):
+    """SSE —— 实时增量推送"""
+    queue = sse_manager.subscribe(session_id)
+    async def event_generator():
+        try:
+            while True:
+                event = await queue.get()
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                if event.get("type") == "status_change" and event["status"] in ("done", "failed"):
+                    break
+        finally:
+            sse_manager.unsubscribe(session_id, queue)
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+```
+
+**数据持久化三层保障：**
+
+| 数据 | 存储位置 | 用途 |
+| ---- | ---- | ---- |
+| 任务状态（waiting/running/done/failed） | SQLite `sessions` 表 | 页面刷新时通过 REST 查询恢复 |
+| SSE 过程日志（text_delta / tool_call 等） | `~/.daiflow/sessions/{session_id}.jsonl` | 关闭再打开时读文件回放 |
+| 实时推送 | 内存 `asyncio.Queue` | EventSource 实时接收增量 |
+
+**前端重连策略（通用）：**
+
+```
+页面打开
+  ├─ 1. GET /api/sessions/{id}/status   → 拿 DB 快照，渲染当前状态
+  ├─ 2. GET /api/sessions/{id}/logs     → 按需加载历史日志（已完成项）
+  └─ 3. 如果 status == "running"：
+         → EventSource(/api/sessions/{id}/stream) 接续实时推送
+```
+
+**Plan 页面重进策略（含对话恢复）：**
+
+```
+页面打开（/tasks/42 → PlanStage）
+  ├─ 1. GET /api/tasks/42
+  │     → tech_plan → 左面渲染 plan 内容
+  │     → status → 判断当前阶段
+  ├─ 2. GET /api/sessions/task:42:plan/status → session 状态
+  ├─ 3. GET /api/sessions/task:42:plan/logs
+  │     → .jsonl 中的所有事件 → rebuildMessages() 还原聊天记录：
+  │       ├─ user_message → 用户气泡
+  │       ├─ text_delta   → AI 文字（合并成完整回复）
+  │       ├─ thinking     → AI 思考（折叠展示）
+  │       ├─ tool_call    → 工具调用卡片
+  │       └─ tool_result  → 工具结果
+  │     → 右面渲染完整聊天历史
+  └─ 4. 判断 session status：
+       ├─ "done"    → 静态展示，等用户输入新消息
+       ├─ "running" → 接 SSE stream 续接实时更新
+       └─ "failed"  → 显示错误 + 重试按钮
 ```
 
 ### 3.4 Git Service 设计
@@ -348,8 +592,9 @@ git_service.push(local_path, branch)               # git push
 | GET | `/api/projects/{id}` | 获取项目详情 |
 | PUT | `/api/projects/{id}` | 更新项目 |
 | DELETE | `/api/projects/{id}` | 删除项目 |
-| POST | `/api/projects/{id}/init` | 触发项目初始化 |
-| GET | `/api/projects/{id}/init/stream` | SSE：项目初始化进度推送 |
+| POST | `/api/projects/{id}/init` | 触发项目初始化（批量创建 sessions + 后台任务，立即返回 sessions 列表） |
+| GET | `/api/projects/{id}/init/sessions` | 查询该项目所有初始化 sessions（按 layer 分组） |
+| GET | `/api/projects/{id}/init/stream` | 项目级 SSE 总线，推送所有初始化 session 的状态变更事件 |
 
 #### 任务相关
 
@@ -363,19 +608,27 @@ git_service.push(local_path, branch)               # git push
 | POST | `/api/tasks/{id}/start-coding` | 确认 todo，task status → 4 |
 | POST | `/api/tasks/{id}/start-review` | 所有 todo 完成后进入审查，task status → 6 |
 
-#### 开发流程 SSE
+#### 开发流程
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/api/tasks/{id}/plan/stream` | SSE：生成技术方案 |
-| POST | `/api/tasks/{id}/plan/chat` | 技术方案阶段对话（返回普通 JSON） |
-| GET | `/api/tasks/{id}/todo/stream` | SSE：生成 todo 列表 |
+| POST | `/api/tasks/{id}/plan` | 触发生成技术方案（后台任务） |
+| POST | `/api/tasks/{id}/plan/chat` | 技术方案阶段对话（SSE 流式返回，含 plan_updated 事件） |
+| POST | `/api/tasks/{id}/todo` | 触发生成 todo 列表（后台任务） |
 | POST | `/api/tasks/{id}/todo/chat` | 任务拆解阶段对话 |
 | GET | `/api/tasks/{id}/todos` | 获取 todo 列表 |
-| POST | `/api/todos/{id}/execute/stream` | SSE：执行单个 todo |
+| POST | `/api/todos/{id}/execute` | 触发执行单个 todo（后台任务） |
 | POST | `/api/todos/{id}/chat` | todo 执行后对话 |
 | GET | `/api/tasks/{id}/diff` | 获取整体 git diff |
 | POST | `/api/tasks/{id}/submit-mr` | 生成 commit message 并提交 MR |
+
+#### 统一 Session API（所有 AI 任务通用）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/sessions/{session_id}/status` | 查询 session 状态（从 DB 读，支持刷新恢复） |
+| GET | `/api/sessions/{session_id}/logs` | 获取历史日志（从 .jsonl 文件读，支持回放） |
+| GET | `/api/sessions/{session_id}/stream` | SSE 实时推送（从内存 Queue 读，增量接收） |
 
 ---
 
@@ -402,7 +655,10 @@ src/
 │   ├── TodoList/            # Todo 列表
 │   └── StreamLog/           # SSE 执行过程展示
 ├── hooks/
-│   ├── useSSE.ts            # SSE 连接封装
+│   ├── useSession.ts        # 统一 Session 封装（状态恢复 + 日志回放 + SSE 续接）
+│   ├── useInitProgress.ts   # 初始化进度 Hook（项目级 SSE 总线）
+│   ├── usePlanStage.ts      # 技术方案 Hook（plan 内容 + 对话 + plan_updated）
+│   ├── useSSE.ts            # 底层 SSE 连接封装
 │   └── useChat.ts           # 对话逻辑封装
 └── api/
     └── index.ts             # API 请求封装
@@ -470,30 +726,255 @@ async def check_settings(db: Session = Depends(get_db)):
 | Base URL | API 地址 | `https://open.bigmodel.cn/api/paas/v4/` |
 | API Key | 鉴权 Key | `sk-xxx`（保存后脱敏展示） |
 
-### 4.3 SSE 前端封装
+### 4.3 useSession — 统一 Session 前端封装
+
+所有 AI 交互页面复用同一个 hook，自动处理状态恢复、日志回放和 SSE 续接：
 
 ```typescript
-// hooks/useSSE.ts
-function useSSE(url: string) {
-  const [logs, setLogs] = useState<StreamChunk[]>([]);
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const [done, setDone] = useState(false);
+// hooks/useSession.ts
+function useSession(sessionId: string) {
+  const [status, setStatus] = useState<'waiting' | 'running' | 'done' | 'failed'>('waiting');
+  const [logs, setLogs] = useState<StreamEvent[]>([]);
 
-  const start = () => {
-    const es = new EventSource(url);
+  useEffect(() => {
+    // 1. 先从 DB 拉状态快照（支持页面刷新恢复）
+    fetch(`/api/sessions/${sessionId}/status`)
+      .then(r => r.json())
+      .then(data => setStatus(data.status));
+
+    // 2. 拉历史日志（支持关了再开回放）
+    fetch(`/api/sessions/${sessionId}/logs`)
+      .then(r => r.json())
+      .then(data => setLogs(data));
+  }, [sessionId]);
+
+  useEffect(() => {
+    // 3. 如果还在跑，接 SSE 实时推送
+    if (status !== 'running') return;
+    const es = new EventSource(`/api/sessions/${sessionId}/stream`);
     es.onmessage = (e) => {
-      const chunk = JSON.parse(e.data);
-      if (chunk.type === "done") {
-        setSessionId(chunk.session_id);
-        setDone(true);
-        es.close();
+      const event = JSON.parse(e.data);
+      if (event.type === 'status_change') {
+        setStatus(event.status);
+        if (event.status === 'done' || event.status === 'failed') es.close();
       } else {
-        setLogs(prev => [...prev, chunk]);
+        setLogs(prev => [...prev, event]);
       }
     };
-  };
+    return () => es.close();
+  }, [sessionId, status]);
 
-  return { logs, sessionId, done, start };
+  return { status, logs };
+}
+```
+
+**使用示例：**
+
+```typescript
+// 技术方案页 —— 单个 session
+function PlanStage({ taskId }: { taskId: string }) {
+  const { status, logs } = useSession(`task:${taskId}:plan`);
+  // ...
+}
+
+// Todo 编码页 —— 每个 todo 一个 session
+function CodingStage({ taskId, todoId }: { taskId: string; todoId: string }) {
+  const { status, logs } = useSession(`task:${taskId}:todo:${todoId}`);
+  // ...
+}
+```
+
+### 4.3.1 useInitProgress — 初始化进度 Hook
+
+初始化页面不适合为每个 session 单独创建 useSession（session 数量动态、需要感知 waiting→running），使用项目级 SSE 总线：
+
+```typescript
+// hooks/useInitProgress.ts
+function useInitProgress(projectId: string) {
+  const [sessions, setSessions] = useState<Record<number, SessionInfo[]>>({});
+  const [allDone, setAllDone] = useState(false);
+
+  useEffect(() => {
+    // 1. 拉取所有初始化 sessions（支持刷新恢复）
+    fetch(`/api/projects/${projectId}/init/sessions`)
+      .then(r => r.json())
+      .then(data => setSessions(data.layers));
+  }, [projectId]);
+
+  useEffect(() => {
+    // 2. 连接项目级 SSE 总线，监听状态变更
+    const es = new EventSource(`/api/projects/${projectId}/init/stream`);
+
+    es.addEventListener("session_status", (e) => {
+      const { session_id, status, layer, error } = JSON.parse(e.data);
+      setSessions(prev => {
+        const updated = { ...prev };
+        const layerSessions = [...(updated[layer] || [])];
+        const idx = layerSessions.findIndex(s => s.session_id === session_id);
+        if (idx >= 0) {
+          layerSessions[idx] = { ...layerSessions[idx], status, error };
+          updated[layer] = layerSessions;
+        }
+        return updated;
+      });
+    });
+
+    es.addEventListener("done", () => {
+      setAllDone(true);
+      es.close();
+    });
+
+    return () => es.close();
+  }, [projectId]);
+
+  return { sessions, allDone };
+}
+```
+
+**初始化页面使用：**
+
+```typescript
+function InitPage({ projectId }: { projectId: string }) {
+  const { sessions, allDone } = useInitProgress(projectId);
+
+  return (
+    <div>
+      {Object.entries(sessions).map(([layer, items]) => (
+        <LayerProgress key={layer} layer={Number(layer)} sessions={items} />
+      ))}
+      {allDone && <p>初始化完成！</p>}
+    </div>
+  );
+}
+
+// 用户点击某个 session 查看详情时，再用 useSession 获取日志
+function SessionDetail({ sessionId }: { sessionId: string }) {
+  const { status, logs } = useSession(sessionId);
+  return <StreamLog logs={logs} status={status} />;
+}
+```
+
+### 4.3.2 usePlanStage — 技术方案阶段 Hook
+
+技术方案页面是"左面 plan 内容 + 右面 AI 对话"的双面板模式。初次生成通过 `useSession` 接 SSE，后续对话通过 `POST /plan/chat` 的 SSE 流式返回，检测到文件写入时自动刷新左面 plan 内容。
+
+```typescript
+// hooks/usePlanStage.ts
+interface Message {
+  role: "user" | "ai";
+  content: string;
+  thinking?: string;
+  tools?: ToolEvent[];
+}
+
+function usePlanStage(taskId: string) {
+  const sessionId = `task:${taskId}:plan`;
+
+  // 左面：plan 内容
+  const [planContent, setPlanContent] = useState<string>("");
+  // 右面：聊天记录
+  const [messages, setMessages] = useState<Message[]>([]);
+  // 流式状态
+  const [streaming, setStreaming] = useState(false);
+
+  // 初次生成的 session 状态（useSession 处理 SSE）
+  const generation = useSession(sessionId);
+
+  // 初始加载：拿 plan 内容 + 历史对话日志
+  useEffect(() => {
+    fetch(`/api/tasks/${taskId}`)
+      .then(r => r.json())
+      .then(data => setPlanContent(data.tech_plan || ""));
+    fetch(`/api/sessions/${sessionId}/logs`)
+      .then(r => r.json())
+      .then(logs => setMessages(rebuildMessages(logs)));
+  }, [taskId]);
+
+  // 初次生成完成后，从 session logs 中提取 plan 内容
+  useEffect(() => {
+    if (generation.status === "done") {
+      fetch(`/api/tasks/${taskId}`)
+        .then(r => r.json())
+        .then(data => setPlanContent(data.tech_plan || ""));
+    }
+  }, [generation.status]);
+
+  // 发送聊天消息
+  async function sendMessage(text: string) {
+    setMessages(prev => [...prev, { role: "user", content: text }]);
+    setStreaming(true);
+
+    const aiMsg: Message = { role: "ai", content: "", tools: [] };
+    setMessages(prev => [...prev, aiMsg]);
+
+    // POST 返回 SSE 流（使用 fetch + ReadableStream 解析）
+    const resp = await fetch(`/api/tasks/${taskId}/plan/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: text }),
+    });
+
+    for await (const event of parseSSEStream(resp.body!)) {
+      switch (event.type) {
+        case "text_delta":
+          aiMsg.content += event.content;
+          setMessages(prev => [...prev]);
+          break;
+        case "thinking":
+          aiMsg.thinking = (aiMsg.thinking || "") + event.content;
+          break;
+        case "tool_call":
+          aiMsg.tools!.push({ type: "call", ...event });
+          setMessages(prev => [...prev]);
+          break;
+        case "tool_result":
+          aiMsg.tools!.push({ type: "result", ...event });
+          setMessages(prev => [...prev]);
+          break;
+        case "plan_updated":
+          // 左面实时刷新，无需额外请求
+          setPlanContent(event.content);
+          break;
+        case "done":
+          break;
+      }
+    }
+    setStreaming(false);
+  }
+
+  return { planContent, messages, sendMessage, streaming, generation };
+}
+```
+
+**页面使用：**
+
+```typescript
+function PlanStage({ taskId }: { taskId: string }) {
+  const { planContent, messages, sendMessage, streaming, generation } = usePlanStage(taskId);
+
+  return (
+    <div className="plan-stage">
+      {/* 左面：plan 内容 */}
+      <div className="plan-content">
+        <MarkdownViewer content={planContent} />
+        {generation.status === "done" && (
+          <div>
+            <button onClick={lockPlan}>锁定方案，进入任务拆解→</button>
+            <button onClick={regenerate}>重新生成</button>
+          </div>
+        )}
+      </div>
+
+      {/* 右面：AI 对话 */}
+      <ChatPanel
+        messages={messages}
+        onSend={sendMessage}
+        streaming={streaming}
+        generationStatus={generation.status}
+        generationLogs={generation.logs}
+      />
+    </div>
+  );
 }
 ```
 
@@ -540,49 +1021,203 @@ function useSSE(url: string) {
 
 ## 五、项目知识库生成流程
 
-### 5.1 两层生成架构
+### 5.1 四层生成架构
 
-知识库生成分两层执行，第一层各仓库独立分析，第二层基于第一层结果做跨仓库整合：
+知识库生成分四层执行，**层与层之间串行（await），层内并发（asyncio.gather）**：
 
 ```
-第一层（并发）：各仓库独立分析
+第一层（并发）：资源准备
+├── 从 Skill 中心拉取 Skill 文件
+├── 代码仓库访问准备（clone / pull）
+         ↓ 全部完成后
+第二层（并发）：各仓库独立分析
 ├── 前端仓库 → frontend_structure / business_flow / component_usage
 └── 后端仓库 → backend_structure
          ↓ 全部完成后
-第二层（并发）：跨仓库整合分析
+第三层（并发）：跨仓库整合分析
 ├── module_overview    （前端 + 后端）
 ├── data_entity        （前端 + 后端）
 ├── api_interaction    （前端 + 后端）
 └── dependencies       （前端 + 后端）
          ↓ 全部完成后
-最终生成 project.md（知识库索引文件）
+第四层：生成 project.md 知识库索引文件
 ```
+
+**后端实现：**
+
+```python
+async def init_project(project_id: str, repos: list[Repo]):
+    """层间 await 串行，层内 asyncio.gather 并发"""
+
+    # ---- Layer 1: 资源准备 ----
+    await asyncio.gather(
+        SessionRunner(f"init:{project_id}:skill_fetch", sse, db)
+            .run(cody_config=..., prompt=...),
+        *[prepare_repo(repo) for repo in repos]
+    )
+
+    # ---- Layer 2: 单仓独立分析 ----
+    layer2_tasks = []
+    for repo in repos:
+        for kt in get_knowledge_types(repo.repo_type):
+            layer2_tasks.append(
+                SessionRunner(f"init:{project_id}:{kt}", sse, db)
+                    .run(cody_config=..., prompt=build_prompt(kt, repo))
+            )
+    await asyncio.gather(*layer2_tasks, return_exceptions=True)
+
+    # ---- Layer 3: 跨仓整合 ----
+    layer3_types = ["module_overview", "api_interaction", "data_entity", "dependencies"]
+    await asyncio.gather(*[
+        SessionRunner(f"init:{project_id}:{kt}", sse, db)
+            .run(cody_config=..., prompt=build_prompt(kt))
+        for kt in layer3_types
+    ], return_exceptions=True)
+
+    # ---- Layer 4: 生成 project.md ----
+    await SessionRunner(f"init:{project_id}:project_md", sse, db) \
+        .run(cody_config=..., prompt=build_project_md_prompt())
+```
+
+> 使用 `return_exceptions=True` 确保某个知识点生成失败不会阻塞同层其他任务。
 
 ### 5.2 知识点列表
 
 | knowledge_type | 分层 | 依赖仓库 | 说明 |
 |----------------|------|---------|------|
-| `frontend_structure` | 第一层 | 前端仓库 | 前端目录结构、各目录职责和组织规范 |
-| `backend_structure` | 第一层 | 后端仓库 | 后端目录结构、各目录职责和组织规范 |
-| `business_flow` | 第一层 | 前端仓库 | 各模块业务流程，从前端交互视角梳理 |
-| `component_usage` | 第一层 | 前端仓库 | 前端组件结构、复用情况、抽象的公共组件 |
-| `module_overview` | 第二层 | 前端 + 后端 | 项目模块全景，前后端模块对应关系 |
-| `data_entity` | 第二层 | 前端 + 后端 | 各模块数据实体、数据流、表结构 |
-| `api_interaction` | 第二层 | 前端 + 后端 | 前后端接口交互关系、接口定义 |
-| `dependencies` | 第二层 | 前端 + 后端 | 各模块对下游的依赖关系 |
+| `skill_fetch` | 第一层 | — | 从 Skill 中心拉取配置的 Skill 文件 |
+| `frontend_structure` | 第二层 | 前端仓库 | 前端目录结构、各目录职责和组织规范 |
+| `backend_structure` | 第二层 | 后端仓库 | 后端目录结构、各目录职责和组织规范 |
+| `business_flow` | 第二层 | 前端仓库 | 各模块业务流程，从前端交互视角梳理 |
+| `component_usage` | 第二层 | 前端仓库 | 前端组件结构、复用情况、抽象的公共组件 |
+| `module_overview` | 第三层 | 前端 + 后端 | 项目模块全景，前后端模块对应关系 |
+| `data_entity` | 第三层 | 前端 + 后端 | 各模块数据实体、数据流、表结构 |
+| `api_interaction` | 第三层 | 前端 + 后端 | 前后端接口交互关系、接口定义 |
+| `dependencies` | 第三层 | 前端 + 后端 | 各模块对下游的依赖关系 |
+| `project_md` | 第四层 | — | 生成 project.md 知识库索引文件 |
 
 ### 5.3 生成流程
 
 ```
-1. 用户保存项目配置，触发项目初始化
-2. 后端为所有知识点创建 project_init_sessions 记录（status=0）
-3. 并发执行第一层各知识点分析（按仓库类型分配）
-4. 每个第一层知识点完成后：
-   a. 生成内容写入 projects/{project_id}/skills/{knowledge_type}/SKILL.md
-   b. 更新 project_init_sessions.status = 2（done）
-5. 第一层全部完成后，并发执行第二层跨仓库整合分析
-6. 第二层全部完成后，生成 project.md 知识库索引文件，写入 projects/{project_id}/project.md
-7. 前端通过 SSE 实时展示每个知识点的生成进度和 Cody 执行日志
+1. 用户保存项目配置，点击"保存并初始化"
+2. POST /api/projects/{id}/init：
+   a. 根据项目配置计算所有知识点，批量创建 sessions 记录（status=waiting，含 layer 字段）
+   b. 启动 BackgroundTask 执行 init_project()
+   c. 立即返回所有 sessions 列表（前端据此渲染初始化面板）
+3. 前端收到 sessions 列表后：
+   a. 按 layer 分组渲染进度面板
+   b. 连接 GET /api/projects/{id}/init/stream（项目级 SSE 总线）
+   c. 监听所有 session 的状态变更事件
+4. Layer 1: 并发执行资源准备（Skill 拉取 + 仓库 clone/pull）
+5. Layer 2: 并发执行各仓库独立分析，每个知识点通过 SessionRunner 执行：
+   a. 状态写入 sessions 表（running → done/failed）
+   b. 过程日志追加写入 ~/.daiflow/sessions/{session_id}.jsonl
+   c. 通过项目级 SSE 总线推送状态变更给前端
+   d. 生成内容写入 projects/{project_id}/skills/{knowledge_type}/SKILL.md
+6. Layer 3: 第二层全部完成后，并发执行跨仓库整合分析
+7. Layer 4: 第三层全部完成后，生成 project.md 知识库索引文件
+8. 前端交互：
+   - 项目级 SSE 总线推送 session 状态变更（waiting→running→done/failed）
+   - 用户点击某个 session 查看详情时，通过统一 Session API 获取日志
+   - 浏览器关闭再打开时，GET /api/projects/{id}/init/sessions 恢复全局进度
+```
+
+### 5.3.1 POST /api/projects/{id}/init 实现
+
+```python
+@router.post("/projects/{project_id}/init")
+async def start_init(project_id: str, bg: BackgroundTasks, db=Depends(get_db)):
+    project = get_project(db, project_id)
+
+    # 1. 根据项目配置计算所有知识点及层级
+    session_defs = compute_init_sessions(project)
+    # 返回: [("skill_fetch", 1), ("frontend_structure", 2), ..., ("project_md", 4)]
+
+    # 2. 批量创建 sessions 记录
+    sessions = []
+    for knowledge_type, layer in session_defs:
+        session_id = f"init:{project_id}:{knowledge_type}"
+        session = Session(
+            session_id=session_id,
+            type="init",
+            ref_id=project_id,
+            layer=layer,
+            status="waiting",
+        )
+        db.add(session)
+        sessions.append(session)
+    db.commit()
+
+    # 3. 启动后台任务
+    bg.add_task(init_project, project_id, project.repos)
+
+    # 4. 立即返回 sessions 列表
+    return {"sessions": [s.to_dict() for s in sessions]}
+```
+
+### 5.3.2 项目级 SSE 总线
+
+初始化涉及多个 session 并发执行，前端需要一个统一入口感知所有 session 的状态变更（尤其是 waiting → running 的转换）。
+
+**设计：** 使用 SSEManager 的 channel 机制，以 `project:init:{project_id}` 为 channel。SessionRunner 在状态变更时同时向两个 channel 推送：
+- `session:{session_id}` — 单 session 详细事件（text_delta / tool_call 等）
+- `project:init:{project_id}` — 项目级状态摘要事件
+
+```python
+# SessionRunner._set_status() 中增加项目级推送
+async def _set_status(self, status: str, error: str = None):
+    # ... 原有逻辑：更新 DB + 推送 session channel ...
+
+    # 如果是 init 类型，额外推送到项目级 channel
+    if self.session.type == "init":
+        await self.sse.publish(
+            f"project:init:{self.session.ref_id}",
+            {
+                "event": "session_status",
+                "session_id": self.session_id,
+                "status": status,
+                "layer": self.session.layer,
+                "error": error,
+            }
+        )
+```
+
+```python
+@router.get("/projects/{project_id}/init/stream")
+async def init_stream(project_id: str):
+    """项目级 SSE 总线：推送所有初始化 session 的状态变更"""
+    channel = f"project:init:{project_id}"
+    queue = sse_manager.subscribe(channel)
+    try:
+        async def event_generator():
+            while True:
+                data = await queue.get()
+                if data is None:  # 所有层完成，发送终止信号
+                    yield {"event": "done", "data": "{}"}
+                    break
+                yield {"event": "session_status", "data": json.dumps(data)}
+        return EventSourceResponse(event_generator())
+    finally:
+        sse_manager.unsubscribe(channel, queue)
+```
+
+### 5.3.3 查询初始化 Sessions
+
+```python
+@router.get("/projects/{project_id}/init/sessions")
+async def get_init_sessions(project_id: str, db=Depends(get_db)):
+    """查询该项目所有初始化 sessions，按 layer 分组返回"""
+    sessions = db.query(Session).filter(
+        Session.type == "init",
+        Session.ref_id == project_id
+    ).order_by(Session.layer, Session.created_at).all()
+
+    # 按 layer 分组
+    grouped = {}
+    for s in sessions:
+        grouped.setdefault(s.layer, []).append(s.to_dict())
+
+    return {"layers": grouped}
 ```
 
 ### 5.4 Skill 文件结构
@@ -998,7 +1633,7 @@ user-invocable: false
 
 ### 5.6 project.md 索引文件
 
-**生成时机**：第二层所有知识点生成完成后，单独跑一个 session 生成。
+**生成时机**：第三层所有知识点生成完成后（第四层），通过 SessionRunner 单独跑一个 session 生成。
 
 **生成 Prompt**：
 
@@ -1131,12 +1766,13 @@ async def initialize_task(task_id: str):
 **Python 实现：**
 
 ```python
-async def generate_plan_stream(task_id: str):
+async def generate_plan(task_id: str):
+    """通过 SessionRunner 执行，自动处理 SSE 推送 + 日志持久化 + 状态写 DB"""
     task = get_task(task_id)
     project = get_project(task.project_id)
 
     extra_roots = [repo.local_path for repo in project.repos]
-    client = build_cody_client(
+    cody_config = build_cody_config(
         workdir=f"~/.daiflow/tasks/{task_id}",
         extra_roots=extra_roots
     )
@@ -1147,12 +1783,100 @@ async def generate_plan_stream(task_id: str):
         tech_plan=task.tech_plan or ""
     )
 
-    async with client:
-        async for chunk in client.stream(prompt, session_id=task.plan_session_id):
-            yield chunk
-            if chunk.type == "done":
-                update_task(task_id, plan_session_id=chunk.session_id)
+    runner = SessionRunner(
+        session_id=f"task:{task_id}:plan",
+        sse_manager=sse_manager, db=db
+    )
+    await runner.run(cody_config=cody_config, prompt=prompt)
+
+    # 记录 Cody session ID，供后续 Todo 拆解复用
+    update_task(task_id, plan_cody_session_id=runner.cody_session_id)
 ```
+
+### 6.2.1 技术方案阶段对话
+
+Plan 生成后，用户可以在右侧聊天框与 AI 讨论修改方案。**对话复用同一个 Cody session**，上下文连续。
+
+**关键设计：**
+- `POST /api/tasks/{id}/plan/chat` **返回 SSE 流**（不是普通 JSON），支持 AI 回复逐字显示
+- 检测到文件写入时（`tool_result` 且 `tool_name` 为 `write_file` / `edit_file`），注入 `plan_updated` 事件，直接把最新 plan 内容推给前端
+- 左面 plan 内容实时刷新，无需前端额外请求
+
+**后端实现：**
+
+```python
+@router.post("/tasks/{task_id}/plan/chat")
+async def plan_chat(task_id: str, body: ChatRequest, db=Depends(get_db)):
+    """技术方案阶段对话 —— SSE 流式返回，复用 Cody session"""
+    task = get_task(db, task_id)
+    session_id = f"task:{task_id}:plan"
+    log_path = Path.home() / f".daiflow/sessions/{session_id}.jsonl"
+
+    extra_roots = [repo.local_path for repo in get_project(task.project_id).repos]
+    cody_config = build_cody_config(
+        workdir=f"~/.daiflow/tasks/{task_id}",
+        extra_roots=extra_roots
+    )
+
+    current_plan = task.tech_plan or ""
+
+    async def event_generator():
+        # 先记录用户消息到日志（重进页面时能还原完整对话链）
+        user_event = {"type": "user_message", "content": body.message}
+        with open(log_path, "a") as f:
+            f.write(json.dumps(user_event, ensure_ascii=False) + "\n")
+
+        async with AsyncCodyClient(**cody_config) as cody:
+            async for chunk in cody.run_stream(
+                body.message,
+                session_id=task.plan_cody_session_id  # 复用已有 Cody session
+            ):
+                if chunk.type in ("compact",):
+                    continue
+                if chunk.type == "done":
+                    yield f"data: {json.dumps({'type': 'done', 'usage': chunk.usage})}\n\n"
+                    break
+
+                event = SessionRunner._chunk_to_event(chunk)
+
+                # AI 事件写日志文件（支持关闭后回放）
+                with open(log_path, "a") as f:
+                    f.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+                # 检测文件写入 → 注入 plan_updated 事件
+                nonlocal current_plan
+                if chunk.type == "tool_result" and chunk.tool_name in ("write_file", "edit_file"):
+                    new_plan = read_plan_file(task_id)
+                    if new_plan != current_plan:
+                        current_plan = new_plan
+                        task.tech_plan = new_plan
+                        db.commit()
+                        plan_event = {"type": "plan_updated", "content": new_plan}
+                        yield f"data: {json.dumps(plan_event, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+```
+
+**事件流示例：**
+
+```
+用户发送: "token 刷新在 utils/auth.ts 已有，不用单独处理"
+
+.jsonl 写入: {"type": "user_message", "content": "token 刷新在 utils/auth.ts 已有，不用单独处理"}
+
+SSE 推送:
+→ data: {"type": "thinking", "content": "用户说 token 刷新已有..."}
+→ data: {"type": "text_delta", "content": "好的，"}
+→ data: {"type": "text_delta", "content": "已移除 token 刷新的注意事项。"}
+→ data: {"type": "tool_call", "tool_name": "edit_file", "args": {"path": "plan.md", ...}}
+→ data: {"type": "tool_result", "tool_name": "edit_file", "content": "文件已更新"}
+→ data: {"type": "plan_updated", "content": "# 技术方案\n\n## 背景\n...（最新内容）"}
+→ data: {"type": "done", "usage": {"total_tokens": 856}}
+```
+
+> `user_message` 仅写入 `.jsonl` 文件，不通过 SSE 推给前端（前端已经知道用户说了什么）。重进页面时 `rebuildMessages()` 从 `.jsonl` 读到 `user_message` 事件，还原出完整的对话链。
 
 ### 6.3 任务拆解生成
 
@@ -1182,22 +1906,27 @@ async def generate_plan_stream(task_id: str):
 **Python 实现：**
 
 ```python
-async def generate_todo_stream(task_id: str):
+async def generate_todo(task_id: str):
+    """与技术方案共享 Cody session，保持上下文连续"""
     task = get_task(task_id)
     plan_path = f"~/.daiflow/tasks/{task_id}/plan.md"
     plan_content = open(plan_path).read()
 
     extra_roots = [repo.local_path for repo in get_project(task.project_id).repos]
-    client = build_cody_client(
+    cody_config = build_cody_config(
         workdir=f"~/.daiflow/tasks/{task_id}",
         extra_roots=extra_roots
     )
 
     prompt = TODO_PROMPT_TEMPLATE.format(plan_md_content=plan_content)
 
-    async with client:
-        async for chunk in client.stream(prompt, session_id=task.plan_session_id):
-            yield chunk
+    # 复用技术方案阶段的 Cody session（通过 plan_cody_session_id）
+    runner = SessionRunner(
+        session_id=f"task:{task_id}:todo_split",
+        sse_manager=sse_manager, db=db
+    )
+    await runner.run(cody_config=cody_config, prompt=prompt)
+    # runner.cody_session_id == task.plan_cody_session_id（同一个 Cody 对话）
 ```
 
 ### 6.4 Todo 写入数据库
@@ -1248,16 +1977,15 @@ async def start_coding(task_id: str):
 **Python 实现：**
 
 ```python
-async def execute_todo_stream(todo_id: str):
+async def execute_todo(todo_id: str):
+    """每个 todo 独立 Cody session，通过 SessionRunner 统一管理"""
     todo = get_todo(todo_id)
     task = get_task(todo.task_id)
     project = get_project(task.project_id)
 
-    update_todo_status(todo_id, 1)  # running
-
     plan_content = open(f"~/.daiflow/tasks/{task.id}/plan.md").read()
     extra_roots = [repo.local_path for repo in project.repos]
-    client = build_cody_client(
+    cody_config = build_cody_config(
         workdir=f"~/.daiflow/tasks/{task.id}",
         extra_roots=extra_roots
     )
@@ -1268,14 +1996,14 @@ async def execute_todo_stream(todo_id: str):
         plan_md_content=plan_content
     )
 
-    async with client:
-        async for chunk in client.stream(prompt, session_id=todo.session_id):
-            yield chunk
-            if chunk.type == "done":
-                update_todo(todo_id,
-                    session_id=chunk.session_id,
-                    status=2  # done
-                )
+    runner = SessionRunner(
+        session_id=f"task:{task.id}:todo:{todo_id}",
+        sse_manager=sse_manager, db=db
+    )
+    await runner.run(cody_config=cody_config, prompt=prompt)
+
+    # 记录 Cody session ID 到 todos 表
+    update_todo(todo_id, cody_session_id=runner.cody_session_id, status=2)
 ```
 
 ---
@@ -1332,7 +2060,7 @@ if __name__ == "__main__":
 - [ ] 初始化项目仓库，确定前后端目录结构
 - [ ] 搭建 FastAPI 后端框架，配置 uvicorn 启动
 - [ ] 初始化 SQLAlchemy + SQLite，实现 `init_db()` 建表逻辑
-- [ ] 创建所有数据库表：`settings`、`projects`、`project_repos`、`tasks`、`todos`、`project_init_sessions`
+- [ ] 创建所有数据库表：`settings`、`projects`、`project_repos`、`tasks`、`todos`、`sessions`
 - [ ] 实现 `get_setting` / `set_setting` 工具函数
 - [ ] 搭建 React + TypeScript 前端框架（Vite）
 - [ ] 配置前端代理，开发阶段转发 `/api` 请求到后端
@@ -1360,20 +2088,32 @@ if __name__ == "__main__":
 
 ---
 
-### 阶段四：项目知识库生成
+### 阶段四：基础设施 — SSEManager + SessionRunner
+
+- [ ] 后端：实现 `SSEManager`（进程内 asyncio.Queue pub/sub 消息总线）
+- [ ] 后端：实现 `SessionRunner`（统一 AI 任务执行器：Cody 调用 + 日志写文件 + 状态写 DB + SSE 推送）
+- [ ] 后端：实现统一 Session API（`GET /api/sessions/{id}/status`、`/logs`、`/stream`）
+- [ ] 前端：实现 `useSession` hook（状态恢复 + 日志回放 + SSE 续接）
+- [ ] 验证：SessionRunner 执行后 DB 状态正确、.jsonl 日志可回放、SSE 实时推送正常
+
+---
+
+### 阶段五：项目知识库生成
 
 - [ ] 后端：封装 `build_cody_client(workdir, extra_roots)`，从 settings 读取配置
 - [ ] 后端：实现 `skill_service`，支持 mock 从 Skill 中心拉取 skill 文件
-- [ ] 后端：实现第一层知识点生成（`frontend_structure`、`backend_structure`、`business_flow`、`component_usage`），每个知识点独立 session，并发执行
-- [ ] 后端：实现第二层知识点生成（`module_overview`、`api_interaction`、`data_entity`、`dependencies`），第一层完成后触发
-- [ ] 后端：实现 `project.md` 索引文件生成，第二层完成后触发
-- [ ] 后端：实现 `POST /api/projects/{id}/init` 触发初始化，`GET /api/projects/{id}/init/stream` SSE 推送进度
-- [ ] 前端：实现项目初始化进度页面，展示每个知识点的生成状态和 Cody 执行日志（StreamLog 组件）
+- [ ] 后端：实现 4 层初始化编排（层间串行 await，层内并发 asyncio.gather）
+- [ ] 后端：Layer 1 — 资源准备（Skill 拉取 + 仓库访问），并发执行
+- [ ] 后端：Layer 2 — 单仓独立分析（`frontend_structure`、`backend_structure`、`business_flow`、`component_usage`），每个知识点通过独立 SessionRunner 并发执行
+- [ ] 后端：Layer 3 — 跨仓库整合（`module_overview`、`api_interaction`、`data_entity`、`dependencies`），Layer 2 全部完成后并发执行
+- [ ] 后端：Layer 4 — 生成 `project.md` 索引文件，Layer 3 全部完成后执行
+- [ ] 后端：实现 `POST /api/projects/{id}/init` 触发后台初始化任务
+- [ ] 前端：实现项目初始化进度页面，通过 `useSession` 展示每个知识点状态和执行日志
 - [ ] 验证：项目初始化后 `~/.daiflow/projects/{id}/skills/` 下有完整 SKILL.md 文件，`project.md` 生成正确
 
 ---
 
-### 阶段五：任务管理
+### 阶段六：任务管理
 
 - [ ] 后端：实现任务 CRUD 接口
 - [ ] 后端：实现任务初始化逻辑：同步 skill 到 `tasks/{id}/.cody/skills/`，同步 `project.md`，切换各仓库代码分支
@@ -1384,24 +2124,23 @@ if __name__ == "__main__":
 
 ---
 
-### 阶段六：开发流程 — 技术方案阶段
+### 阶段七：开发流程 — 技术方案阶段
 
 - [ ] 后端：实现技术方案生成 prompt 模板 `PLAN_PROMPT_TEMPLATE`
-- [ ] 后端：实现 `GET /api/tasks/{id}/plan/stream` SSE 接口，触发 Cody 生成 `plan.md`
-- [ ] 后端：实现 `POST /api/tasks/{id}/plan/chat` 对话接口，复用 `plan_session_id`
+- [ ] 后端：实现 `POST /api/tasks/{id}/plan` 触发后台生成 plan.md（通过 SessionRunner）
+- [ ] 后端：实现 `POST /api/tasks/{id}/plan/chat` 对话接口，复用 `plan_cody_session_id`
 - [ ] 后端：实现 `POST /api/tasks/{id}/lock-plan` 锁定方案，更新 task status = 3
-- [ ] 前端：实现技术方案阶段页面（左侧 Markdown 展示 plan.md，右侧 AI 对话 + SSE 执行日志）
-- [ ] 前端：实现 `useSSE` hook
+- [ ] 前端：实现技术方案阶段页面（左侧 Markdown 展示 plan.md，右侧 AI 对话 + 通过 useSession 展示执行日志）
 - [ ] 前端：实现 `ChatPanel` 通用对话组件
 - [ ] 前端：实现顶部阶段进度条组件 `StageProgress`
 - [ ] 验证：AI 生成 plan.md，人工对话可修改，锁定后进入下一阶段
 
 ---
 
-### 阶段七：开发流程 — 任务拆解阶段
+### 阶段八：开发流程 — 任务拆解阶段
 
 - [ ] 后端：实现任务拆解 prompt 模板 `TODO_PROMPT_TEMPLATE`
-- [ ] 后端：实现 `GET /api/tasks/{id}/todo/stream` SSE 接口，触发 Cody 生成 `todo.json`
+- [ ] 后端：实现 `POST /api/tasks/{id}/todo` 触发后台生成 todo.json（通过 SessionRunner，复用 Cody session）
 - [ ] 后端：实现 `POST /api/tasks/{id}/todo/chat` 对话接口
 - [ ] 后端：实现 `POST /api/tasks/{id}/start-coding`：将 `todo.json` 批量写入 todos 表，task status = 4（todo_ready）；用户点击「执行编码」按钮后 task status 变为 5（coding）
 - [ ] 前端：实现任务拆解阶段页面（左侧 todo 列表，右侧 AI 对话）
@@ -1409,10 +2148,10 @@ if __name__ == "__main__":
 
 ---
 
-### 阶段八：开发流程 — 编写代码阶段
+### 阶段九：开发流程 — 编写代码阶段
 
 - [ ] 后端：实现 todo 执行 prompt 模板 `TODO_EXECUTE_PROMPT_TEMPLATE`
-- [ ] 后端：实现 `POST /api/todos/{id}/execute/stream` SSE 接口，执行单个 todo
+- [ ] 后端：实现 `POST /api/todos/{id}/execute` 触发后台执行单个 todo（通过 SessionRunner）
 - [ ] 后端：实现 `POST /api/todos/{id}/chat` 对话接口，复用该 todo 的 `session_id`
 - [ ] 后端：实现 `GET /api/tasks/{id}/todos` 获取 todo 列表及状态
 - [ ] 前端：实现编写代码阶段页面（左侧 todo 列表含执行按钮，中间执行日志 + diff，右侧对话）
@@ -1422,7 +2161,7 @@ if __name__ == "__main__":
 
 ---
 
-### 阶段九：开发流程 — 代码审查 & 提交
+### 阶段十：开发流程 — 代码审查 & 提交
 
 - [ ] 后端：实现 `POST /api/tasks/{id}/start-review`：task status = 6（reviewing）
 - [ ] 后端：实现 `GET /api/tasks/{id}/diff`，调用 `git diff` 返回所有仓库的变更内容
@@ -1432,7 +2171,7 @@ if __name__ == "__main__":
 
 ---
 
-### 阶段十：集成测试 & 打包
+### 阶段十一：集成测试 & 打包
 
 - [ ] 端到端走通完整流程：配置 → 创建项目 → 知识库生成 → 创建任务 → 技术方案 → 任务拆解 → 编码 → 提交
 - [ ] 构建前端产物，FastAPI 静态托管，验证单服务访问正常
