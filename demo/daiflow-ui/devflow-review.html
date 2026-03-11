@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="zh" data-theme="dark">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DaiFlow · 代码审查</title>
+<link rel="stylesheet" href="shared.css">
+<style>
+#page { display: flex; flex-direction: column; height: 100%; }
+#page .content { flex: 1; display: flex; overflow: hidden; padding: 0; }
+
+/* ── diff main ── */
+.diff-main { flex: 1; overflow-y: auto; display: flex; flex-direction: column; }
+
+.diff-summary-bar {
+  display: flex; align-items: center;
+  padding: 10px 20px; border-bottom: 1px solid var(--border);
+  background: var(--bg-1); flex-shrink: 0; gap: 0;
+}
+.summary-stat {
+  display: flex; align-items: center; gap: 6px;
+  padding: 0 20px; border-right: 1px solid var(--border);
+}
+.summary-stat:first-child { padding-left: 0; }
+.summary-stat:last-child  { border-right: none; }
+.summary-num { font-family: var(--mono); font-size: 18px; font-weight: 700; }
+.summary-label { font-size: 11.5px; color: var(--t2); }
+
+.diff-file-block { border-bottom: 1px solid var(--border); }
+.diff-file-header {
+  padding: 9px 18px; background: var(--bg-3);
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 10px;
+  cursor: pointer; user-select: none; transition: background .15s;
+}
+.diff-file-header:hover { background: var(--bg-4); }
+.diff-file-path { font-family: var(--mono); font-size: 12px; color: var(--t1); flex: 1; }
+.diff-file-stats { display: flex; gap: 8px; font-family: var(--mono); font-size: 11px; }
+.s-add { color: var(--green); } .s-rm { color: var(--red); }
+.collapse-icon { font-size: 10px; color: var(--t3); transition: transform .2s; }
+.diff-file-block.collapsed .collapse-icon { transform: rotate(-90deg); }
+.diff-file-block.collapsed .diff-body { display: none; }
+
+.diff-body { overflow-x: auto; }
+.diff-table { width: 100%; font-family: var(--mono); font-size: 11.5px; border-collapse: collapse; min-width: 560px; }
+.diff-table .ln  { width: 36px; text-align: right; padding: 1px 9px; color: var(--t3); user-select: none; border-right: 1px solid var(--border); }
+.diff-table .ln2 { width: 36px; text-align: right; padding: 1px 9px; color: var(--t3); user-select: none; border-right: 1px solid var(--border); }
+.diff-table .code { padding: 1px 16px; white-space: pre; color: var(--t1); }
+.diff-table .add .ln, .diff-table .add .ln2, .diff-table .add .code { background: var(--diff-add-bg); }
+.diff-table .add .code { color: var(--green); border-left: 2px solid var(--diff-add-bd); }
+.diff-table .rm  .ln, .diff-table .rm  .ln2, .diff-table .rm  .code  { background: var(--diff-rm-bg); }
+.diff-table .rm  .code { color: var(--red); border-left: 2px solid var(--diff-rm-bd); }
+.diff-table .hunk td { background: var(--blue-d); color: var(--blue); font-size: 10.5px; padding: 2px 14px; }
+
+/* ── commit modal ── */
+.modal-overlay {
+  position: fixed; inset: 0; z-index: 999;
+  background: rgba(8,10,15,.88); backdrop-filter: blur(12px);
+  display: none; align-items: center; justify-content: center;
+}
+.modal-overlay.show { display: flex; }
+.modal-box {
+  width: 560px; border-radius: 14px; padding: 28px 28px 24px;
+  background: var(--bg-2); border: 1px solid var(--border-md);
+  box-shadow: 0 28px 80px rgba(0,0,0,.6);
+  display: flex; flex-direction: column; gap: 16px;
+}
+.modal-head { display: flex; align-items: center; gap: 10px; }
+.modal-head-title { font-size: 16px; font-weight: 700; flex: 1; }
+.gen-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--blue); box-shadow: 0 0 7px var(--blue);
+  animation: genpulse 1.1s infinite; display: none;
+}
+.gen-dot.on { display: block; }
+@keyframes genpulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.3;transform:scale(.7)} }
+.modal-sub { font-size: 13px; color: var(--t2); margin-top: -8px; }
+
+/* typewriter box */
+.commit-box {
+  background: var(--bg-1); border: 1px solid var(--border-md);
+  border-radius: var(--r); padding: 14px 16px;
+  font-family: var(--mono); font-size: 12px; line-height: 1.8;
+  min-height: 130px; outline: none; white-space: pre-wrap;
+  word-break: break-all; transition: border .15s; position: relative;
+}
+.commit-box[contenteditable="true"]:focus { border-color: var(--border-hi); }
+.commit-line-subject { color: var(--t0); font-weight: 600; font-size: 12.5px; }
+.commit-line-body    { color: var(--t2); font-size: 11px; }
+
+.typing-indicator {
+  display: flex; gap: 4px; align-items: center;
+  padding: 4px 0;
+}
+.typing-indicator span {
+  width: 4px; height: 4px; border-radius: 50%;
+  background: var(--blue); animation: tdot 1.2s infinite;
+}
+.typing-indicator span:nth-child(2){ animation-delay:.2s }
+.typing-indicator span:nth-child(3){ animation-delay:.4s }
+@keyframes tdot{ 0%,60%,100%{opacity:.2;transform:scale(.8)} 30%{opacity:1;transform:scale(1)} }
+
+.git-meta {
+  background: var(--bg-3); border: 1px solid var(--border);
+  border-radius: var(--r); padding: 11px 14px;
+  display: flex; flex-direction: column; gap: 5px;
+}
+.git-meta-row { display: flex; gap: 10px; font-size: 12px; align-items: center; }
+.git-meta-key { color: var(--t2); width: 56px; flex-shrink: 0; }
+.git-meta-val { font-family: var(--mono); font-size: 11.5px; }
+.val-branch { color: var(--teal); }
+.val-remote { color: var(--blue); }
+
+.modal-footer { display: flex; gap: 10px; justify-content: flex-end; }
+
+/* success screen */
+.success-screen {
+  display: none; flex-direction: column;
+  align-items: center; gap: 14px; padding: 8px 0; text-align: center;
+}
+.success-screen.on { display: flex; }
+.success-icon {
+  width: 54px; height: 54px; border-radius: 50%;
+  background: var(--green-d); border: 2px solid rgba(74,222,128,.35);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 24px;
+}
+.success-title { font-size: 16px; font-weight: 700; }
+.success-sub   { font-size: 13px; color: var(--t2); line-height: 1.55; }
+.commit-hash   { font-family: var(--mono); font-size: 11px; color: var(--teal); background: var(--teal-d); padding: 3px 10px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="logo"><div class="logo-mark">D</div><div class="logo-text">dai<span>flow</span></div></div>
+    <div class="nav-group">
+      <div class="nav-label">工作区</div>
+      <a class="nav-item" href="projects.html"><span class="nav-icon">⬡</span>项目<span class="nav-badge">3</span></a>
+      <a class="nav-item active" href="tasks.html"><span class="nav-icon">◈</span>任务<span class="nav-badge">4</span></a>
+    </div>
+    <div class="sidebar-bottom">
+      <a class="nav-item" href="settings.html" style="margin-bottom:10px"><span class="nav-icon">⚙</span>设置</a>
+      <div class="sidebar-divider"></div>
+      <div class="model-pill"><div class="model-dot"></div><span class="model-text">glm-4 · 已连接</span></div>
+    </div>
+  </aside>
+
+  <div class="main" id="page">
+    <div class="topbar">
+      <a href="tasks.html" class="topbar-back">←</a>
+      <span class="topbar-title">新增预算预警邮件通知功能</span>
+      <span class="topbar-branch">⎇ feature/budget-alert</span>
+      <div class="topbar-right">
+        <button class="theme-btn" onclick="toggleTheme()">☀</button>
+        <button class="btn btn-teal btn-sm" onclick="openModal()">提交 MR →</button>
+      </div>
+    </div>
+    <div class="stage-bar">
+      <a href="devflow-plan.html" class="stage-step done"><div class="step-num">✓</div>技术方案</a>
+      <span class="stage-chevron">›</span>
+      <a href="devflow-todo.html" class="stage-step done"><div class="step-num">✓</div>任务拆解</a>
+      <span class="stage-chevron">›</span>
+      <a href="devflow-coding.html" class="stage-step done"><div class="step-num">✓</div>编写代码</a>
+      <span class="stage-chevron">›</span>
+      <div class="stage-step active"><div class="step-num">4</div>代码审查</div>
+    </div>
+
+    <div class="content">
+
+      <!-- ── 左：diff ── -->
+      <div class="diff-main">
+        <div class="diff-summary-bar">
+          <div class="summary-stat"><span class="summary-num" style="color:var(--green)">+63</span><span class="summary-label">新增</span></div>
+          <div class="summary-stat"><span class="summary-num" style="color:var(--red)">-18</span><span class="summary-label">删除</span></div>
+          <div class="summary-stat"><span class="summary-num" style="color:var(--t1)">5</span><span class="summary-label">文件</span></div>
+          <div class="summary-stat"><span class="summary-num" style="color:var(--blue)">4</span><span class="summary-label">TODO 完成</span></div>
+        </div>
+
+        <!-- file 1 -->
+        <div class="diff-file-block">
+          <div class="diff-file-header" onclick="toggleFile(this)">
+            <span class="diff-file-path">services/predict_service.py</span>
+            <div class="diff-file-stats"><span class="s-add">+21</span><span class="s-rm">-8</span></div>
+            <span class="collapse-icon">▾</span>
+          </div>
+          <div class="diff-body"><table class="diff-table">
+            <tr class="hunk"><td class="ln"></td><td class="ln2"></td><td class="code">@@ -12,8 +12,10 @@ class PredictService:</td></tr>
+            <tr class="ctx"><td class="ln">12</td><td class="ln2">12</td><td class="code">    def __init__(self, config):</td></tr>
+            <tr class="ctx"><td class="ln">13</td><td class="ln2">13</td><td class="code">        self.config = config</td></tr>
+            <tr class="rm"><td class="ln">14</td><td class="ln2">  </td><td class="code">        self.base_url = "https://api.v1.predict.io"</td></tr>
+            <tr class="rm"><td class="ln">15</td><td class="ln2">  </td><td class="code">        self.headers = {"X-API-Token": config.token}</td></tr>
+            <tr class="add"><td class="ln">  </td><td class="ln2">14</td><td class="code">        self.base_url = "https://api.v2.predict.io"</td></tr>
+            <tr class="add"><td class="ln">  </td><td class="ln2">15</td><td class="code">        self.headers = {"Authorization": f"Bearer {config.token}"}</td></tr>
+            <tr class="ctx"><td class="ln">16</td><td class="ln2">16</td><td class="code">        self.timeout = config.timeout</td></tr>
+            <tr class="hunk"><td class="ln"></td><td class="ln2"></td><td class="code">@@ -18,7 +18,9 @@ class PredictService:</td></tr>
+            <tr class="ctx"><td class="ln">18</td><td class="ln2">18</td><td class="code">    def predict(self, payload):</td></tr>
+            <tr class="rm"><td class="ln">19</td><td class="ln2">  </td><td class="code">        resp = self._post("/v1/predict", payload)</td></tr>
+            <tr class="rm"><td class="ln">20</td><td class="ln2">  </td><td class="code">        return resp.json()["result"]</td></tr>
+            <tr class="add"><td class="ln">  </td><td class="ln2">19</td><td class="code">        resp = self._post("/v2/predict", payload)</td></tr>
+            <tr class="add"><td class="ln">  </td><td class="ln2">20</td><td class="code">        data = resp.json()</td></tr>
+            <tr class="add"><td class="ln">  </td><td class="ln2">21</td><td class="code">        return PredictResponse(**data)</td></tr>
+          </table></div>
+        </div>
+
+        <!-- file 2 -->
+        <div class="diff-file-block">
+          <div class="diff-file-header" onclick="toggleFile(this)">
+            <span class="diff-file-path">schemas/predict.py</span>
+            <div class="diff-file-stats"><span class="s-add">+12</span><span class="s-rm">-4</span></div>
+            <span class="collapse-icon">▾</span>
+          </div>
+          <div class="diff-body"><table class="diff-table">
+            <tr class="hunk"><td class="ln"></td><td class="ln2"></td><td class="code">@@ -18,8 +18,12 @@ class PredictResponse(BaseModel):</td></tr>
+            <tr class="ctx"><td class="ln">18</td><td class="ln2">18</td><td class="code">class PredictResponse(BaseModel):</td></tr>
+            <tr class="ctx"><td class="ln">19</td><td class="ln2">19</td><td class="code">    task_id: str</td></tr>
+            <tr class="ctx"><td class="ln">20</td><td class="ln2">20</td><td class="code">    status: str</td></tr>
+            <tr class="rm"><td class="ln">21</td><td class="ln2">  </td><td class="code">    predict_result: List[float]</td></tr>
+            <tr class="rm"><td class="ln">22</td><td class="ln2">  </td><td class="code">    created_at: datetime</td></tr>
+            <tr class="add"><td class="ln">  </td><td class="ln2">21</td><td class="code">    predict_result: Dict[str, Any]</td></tr>
+            <tr class="add"><td class="ln">  </td><td class="ln2">22</td><td class="code">    confidence: float = 0.0</td></tr>
+            <tr class="add"><td class="ln">  </td><td class="ln2">23</td><td class="code">    version: str = "v2"</td></tr>
+            <tr class="add"><td class="ln">  </td><td class="ln2">24</td><td class="code">    created_at: datetime</td></tr>
+          </table></div>
+        </div>
+
+        <!-- file 3 -->
+        <div class="diff-file-block">
+          <div class="diff-file-header" onclick="toggleFile(this)">
+            <span class="diff-file-path">utils/api_client.py</span>
+            <div class="diff-file-stats"><span class="s-add">+18</span><span class="s-rm">-2</span></div>
+            <span class="collapse-icon">▾</span>
+          </div>
+          <div class="diff-body"><table class="diff-table">
+            <tr class="hunk"><td class="ln"></td><td class="ln2"></td><td class="code">@@ -8,8 +8,22 @@</td></tr>
+            <tr class="ctx"><td class="ln"> 8</td><td class="ln2"> 8</td><td class="code">from .exceptions import AppError</td></tr>
+            <tr class="ctx"><td class="ln"> 9</td><td class="ln2"> 9</td><td class="code"> </td></tr>
+            <tr class="add"><td class="ln">  </td><td class="ln2">10</td><td class="code">V2_ERROR_MAP = {</td></tr>
+            <tr class="add"><td class="ln">  </td><td class="ln2">11</td><td class="code">    400: "bad_request",</td></tr>
+            <tr class="add"><td class="ln">  </td><td class="ln2">12</td><td class="code">    401: "unauthorized",</td></tr>
+            <tr class="add"><td class="ln">  </td><td class="ln2">13</td><td class="code">    429: "rate_limited",</td></tr>
+            <tr class="add"><td class="ln">  </td><td class="ln2">14</td><td class="code">    503: "service_unavailable",</td></tr>
+            <tr class="add"><td class="ln">  </td><td class="ln2">15</td><td class="code">    500: "server_error",</td></tr>
+            <tr class="add"><td class="ln">  </td><td class="ln2">16</td><td class="code">}</td></tr>
+            <tr class="ctx"><td class="ln">10</td><td class="ln2">17</td><td class="code"> </td></tr>
+            <tr class="ctx"><td class="ln">11</td><td class="ln2">18</td><td class="code">def handle_response(resp):</td></tr>
+            <tr class="rm"><td class="ln">12</td><td class="ln2">  </td><td class="code">    if resp.status_code != 200:</td></tr>
+            <tr class="rm"><td class="ln">13</td><td class="ln2">  </td><td class="code">        raise Exception(resp.text)</td></tr>
+            <tr class="add"><td class="ln">  </td><td class="ln2">19</td><td class="code">    if resp.status_code != 200:</td></tr>
+            <tr class="add"><td class="ln">  </td><td class="ln2">20</td><td class="code">        code = V2_ERROR_MAP.get(resp.status_code, "unknown")</td></tr>
+            <tr class="add"><td class="ln">  </td><td class="ln2">21</td><td class="code">        raise AppError(code, resp.json())</td></tr>
+          </table></div>
+        </div>
+
+        <!-- file 4 -->
+        <div class="diff-file-block">
+          <div class="diff-file-header" onclick="toggleFile(this)">
+            <span class="diff-file-path">src/api/predict.ts</span>
+            <div class="diff-file-stats"><span class="s-add">+8</span><span class="s-rm">-3</span></div>
+            <span class="collapse-icon">▾</span>
+          </div>
+          <div class="diff-body"><table class="diff-table">
+            <tr class="hunk"><td class="ln"></td><td class="ln2"></td><td class="code">@@ -3,7 +3,12 @@</td></tr>
+            <tr class="rm"><td class="ln"> 3</td><td class="ln2">  </td><td class="code">export interface PredictResult {</td></tr>
+            <tr class="rm"><td class="ln"> 4</td><td class="ln2">  </td><td class="code">  result: number[]</td></tr>
+            <tr class="rm"><td class="ln"> 5</td><td class="ln2">  </td><td class="code">}</td></tr>
+            <tr class="add"><td class="ln">  </td><td class="ln2"> 3</td><td class="code">export interface PredictResult {</td></tr>
+            <tr class="add"><td class="ln">  </td><td class="ln2"> 4</td><td class="code">  predict_result: Record&lt;string, unknown&gt;</td></tr>
+            <tr class="add"><td class="ln">  </td><td class="ln2"> 5</td><td class="code">  confidence: number</td></tr>
+            <tr class="add"><td class="ln">  </td><td class="ln2"> 6</td><td class="code">  version: string</td></tr>
+            <tr class="add"><td class="ln">  </td><td class="ln2"> 7</td><td class="code">}</td></tr>
+          </table></div>
+        </div>
+
+        <!-- file 5 -->
+        <div class="diff-file-block">
+          <div class="diff-file-header" onclick="toggleFile(this)">
+            <span class="diff-file-path">src/hooks/usePredict.ts</span>
+            <div class="diff-file-stats"><span class="s-add">+4</span><span class="s-rm">-1</span></div>
+            <span class="collapse-icon">▾</span>
+          </div>
+          <div class="diff-body"><table class="diff-table">
+            <tr class="hunk"><td class="ln"></td><td class="ln2"></td><td class="code">@@ -18,5 +18,7 @@</td></tr>
+            <tr class="ctx"><td class="ln">18</td><td class="ln2">18</td><td class="code">  const run = async (payload) => {</td></tr>
+            <tr class="ctx"><td class="ln">19</td><td class="ln2">19</td><td class="code">    const res = await predictApi(payload)</td></tr>
+            <tr class="rm"><td class="ln">20</td><td class="ln2">  </td><td class="code">    setResult(res.result)</td></tr>
+            <tr class="add"><td class="ln">  </td><td class="ln2">20</td><td class="code">    setResult(res.predict_result)</td></tr>
+            <tr class="add"><td class="ln">  </td><td class="ln2">21</td><td class="code">    setConfidence(res.confidence)</td></tr>
+            <tr class="ctx"><td class="ln">21</td><td class="ln2">22</td><td class="code">  }</td></tr>
+          </table></div>
+        </div>
+
+      </div><!-- /diff-main -->
+
+      <!-- ── 右：AI 审查聊天 ── -->
+      <div class="chat-panel">
+        <div class="chat-header"><div class="dot-live"></div>AI 审查</div>
+        <div class="chat-messages">
+          <div class="msg">
+            <div class="avatar avatar-ai">AI</div>
+            <div class="bubble">
+              代码全部写完，梳理了本次改动的要点：
+              <div class="log-block">
+                <div class="log-line log-ok"><span>✓</span> 类型变更安全，前后端已同步</div>
+                <div class="log-line log-ok"><span>✓</span> 错误处理完整，覆盖 4xx/5xx/503</div>
+                <div class="log-line log-tool"><span>!</span> 建议补充 predict_service 单测</div>
+                <div class="log-line log-tool"><span>!</span> confidence 默认 0.0，请确认兜底值</div>
+              </div>
+              整体改动干净，影响范围可控，确认没问题就可以提交。
+            </div>
+          </div>
+          <div class="msg user">
+            <div class="avatar avatar-u">我</div>
+            <div class="bubble">单测下个迭代补，confidence 默认 0.0 没问题</div>
+          </div>
+          <div class="msg">
+            <div class="avatar avatar-ai">AI</div>
+            <div class="bubble">好的，已记录。点右上角「提交 MR」生成 commit message 并推送。</div>
+          </div>
+        </div>
+        <div class="chat-input-row">
+          <textarea class="chat-input" rows="1" placeholder="和 AI 讨论代码..."></textarea>
+          <button class="send-btn"><svg viewBox="0 0 14 14"><path d="M1 7l12-6-5 12V8z"/></svg></button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- ══ COMMIT MODAL ══ -->
+<div class="modal-overlay" id="modal-overlay">
+  <div class="modal-box">
+
+    <!-- ── 生成 + 确认阶段 ── -->
+    <div id="phase-form">
+      <div class="modal-head">
+        <div class="gen-dot on" id="gen-dot"></div>
+        <div class="modal-head-title" id="modal-title">正在生成 Commit Message...</div>
+      </div>
+      <div class="modal-sub" id="modal-sub">AI 正在分析本次改动，自动生成规范的提交信息</div>
+
+      <div class="commit-box" id="commit-box" contenteditable="false">
+        <div class="typing-indicator" id="typing-indicator">
+          <span></span><span></span><span></span>
+        </div>
+      </div>
+
+      <div class="git-meta">
+        <div class="git-meta-row">
+          <span class="git-meta-key">分支</span>
+          <span class="git-meta-val val-branch">⎇ feature/budget-alert</span>
+        </div>
+        <div class="git-meta-row">
+          <span class="git-meta-key">远程</span>
+          <span class="git-meta-val val-remote">origin → github.com:mmp/hc_predict</span>
+        </div>
+        <div class="git-meta-row">
+          <span class="git-meta-key">改动</span>
+          <span class="git-meta-val">5 个文件，+63 -18</span>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn btn-ghost" onclick="closeModal()">取消</button>
+        <button class="btn btn-teal" id="confirm-btn" disabled onclick="doPush()">确认 Commit &amp; Push</button>
+      </div>
+    </div>
+
+    <!-- ── 推送成功阶段 ── -->
+    <div class="success-screen" id="phase-success">
+      <div class="success-icon">✓</div>
+      <div class="success-title">Commit &amp; Push 成功</div>
+      <div class="success-sub">代码已推送到远程分支<br>可以去 GitLab / GitHub 创建 MR 了</div>
+      <span class="commit-hash">a3f82c1d</span>
+      <div style="display:flex;gap:10px;margin-top:6px">
+        <button class="btn btn-ghost" onclick="closeModal()">关闭</button>
+        <a href="tasks.html" class="btn btn-primary">返回任务列表</a>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+/* ── theme ── */
+function toggleTheme() {
+  const h = document.documentElement;
+  const dark = h.getAttribute('data-theme') === 'dark';
+  h.setAttribute('data-theme', dark ? 'light' : 'dark');
+  document.querySelector('.theme-btn').textContent = dark ? '🌙' : '☀';
+}
+
+/* ── diff collapse ── */
+function toggleFile(header) {
+  header.closest('.diff-file-block').classList.toggle('collapsed');
+}
+
+/* ── modal ── */
+const COMMIT_TEXT =
+`feat(predict): migrate predict API from v1 to v2
+
+- Replace v1 endpoint with v2 in predict_service.py,
+  switch auth header to Bearer token
+- Refactor PredictResponse: predict_result List→Dict,
+  add confidence (default 0.0) and version fields
+- Add V2_ERROR_MAP in api_client.py, cover 400/401/429/503/500,
+  unified AppError raise
+- Update TypeScript PredictResult interface in src/api/predict.ts
+- Adapt usePredict hook for new predict_result object structure`;
+
+function openModal() {
+  document.getElementById('modal-overlay').classList.add('show');
+  // reset to form phase
+  document.getElementById('phase-form').style.display = 'block';
+  document.getElementById('phase-success').classList.remove('on');
+
+  const box = document.getElementById('commit-box');
+  const typing = document.getElementById('typing-indicator');
+  const confirmBtn = document.getElementById('confirm-btn');
+  const genDot = document.getElementById('gen-dot');
+  const title = document.getElementById('modal-title');
+  const sub = document.getElementById('modal-sub');
+
+  // reset state
+  box.innerHTML = '';
+  box.appendChild(typing);
+  box.contentEditable = 'false';
+  confirmBtn.disabled = true;
+  genDot.classList.add('on');
+  title.textContent = '正在生成 Commit Message...';
+  sub.textContent = 'AI 正在分析本次改动，自动生成规范的提交信息';
+
+  setTimeout(() => {
+    typing.remove();
+    typewrite(box, COMMIT_TEXT, () => {
+      box.contentEditable = 'true';
+      confirmBtn.disabled = false;
+      genDot.classList.remove('on');
+      title.textContent = 'Commit Message';
+      sub.textContent = '可直接编辑内容，确认后执行 git commit & push';
+    });
+  }, 1000);
+}
+
+function typewrite(el, text, onDone) {
+  const chars = text.split('');
+  let i = 0;
+  el.textContent = '';
+
+  function tick() {
+    if (i >= chars.length) {
+      // colorize: first line subject, rest body
+      const lines = el.textContent.split('\n');
+      el.innerHTML = lines.map((line, idx) =>
+        idx === 0
+          ? `<span class="commit-line-subject">${esc(line)}</span>`
+          : `<span class="commit-line-body">${esc(line)}</span>`
+      ).join('\n');
+      onDone && onDone();
+      return;
+    }
+    el.textContent += chars[i++];
+    // fast at start for subject line, then normal speed
+    setTimeout(tick, i < 45 ? 16 : 7);
+  }
+  tick();
+}
+
+function esc(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function closeModal() {
+  document.getElementById('modal-overlay').classList.remove('show');
+}
+
+function doPush() {
+  const btn = document.getElementById('confirm-btn');
+  btn.disabled = true;
+  btn.textContent = '推送中...';
+
+  setTimeout(() => {
+    document.getElementById('phase-form').style.display = 'none';
+    document.getElementById('phase-success').classList.add('on');
+  }, 1500);
+}
+
+document.getElementById('modal-overlay').addEventListener('click', function(e) {
+  if (e.target === this) closeModal();
+});
+</script>
+</body>
+</html>
