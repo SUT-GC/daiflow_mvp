@@ -12,7 +12,7 @@ DaiFlow is a local AI-powered programming workbench that productizes the full de
 
 - **Frontend:** React + TypeScript, built with Vite
 - **Backend:** Python 3.11+ with FastAPI (async), SSE for streaming
-- **AI Engine:** Cody SDK (`AsyncCodyClient`) — in-process, no external service
+- **AI Engine:** Cody SDK (`pip install cody-ai`, `from cody import AsyncCodyClient`) — in-process, no external service; see `docs/Cody_sdk.md` for full API
 - **Database:** SQLite via SQLAlchemy ORM
 - **Local Storage:** `~/.daiflow/` directory for projects, tasks, and skill files
 

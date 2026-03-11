@@ -34,9 +34,17 @@ DaiFlow 是一个本地软件，整体分为三层：
 |----|------|------|
 | 前端 | React + TypeScript | SPA，构建后由 FastAPI 静态托管 |
 | 后端 | Python 3.11+ + FastAPI | 异步框架，原生支持 SSE |
-| AI 引擎 | Cody SDK（AsyncCodyClient） | in-process 调用，无需额外进程 |
+| AI 引擎 | Cody SDK（AsyncCodyClient） | `pip install cody-ai`，in-process 调用，无需额外进程 |
 | 数据库 | SQLite + SQLAlchemy | 本地存储结构化数据 |
 | 本地存储 | 文件系统 | `.daiflow/` 目录管理文件数据 |
+
+**依赖安装：**
+
+```bash
+pip install cody-ai
+```
+
+> Cody SDK 的 PyPI 包名为 `cody-ai`，安装后通过 `from cody import AsyncCodyClient` 引入。详细用法参见 `docs/Cody_sdk.md`。
 
 ### 1.3 启动方式
 
@@ -236,7 +244,7 @@ Cody SDK 以 in-process 方式运行，`cody_service.py` 负责封装所有与 C
 model、base_url、api_key 从 settings 表读取，每次创建 client 时动态获取：
 
 ```python
-from cody.sdk import Cody
+from cody import Cody
 
 def build_cody_client(workdir: str, extra_roots: list[str] = []):
     model   = get_setting("cody_model")
