@@ -105,11 +105,13 @@
 </div>
 <script>
 function toggleTheme() {
-  const h = document.documentElement;
-  const dark = h.getAttribute('data-theme') === 'dark';
-  h.setAttribute('data-theme', dark ? 'light' : 'dark');
-  document.querySelector('.theme-btn').textContent = dark ? '🌙' : '☀';
+  const current = document.documentElement.getAttribute('data-theme');
+  const next = current === 'dark' ? 'light' : 'dark';
+  localStorage.setItem('daiflow-theme', next);
+  document.documentElement.setAttribute('data-theme', next);
+  document.querySelector('.theme-btn').textContent = next === 'dark' ? '☀' : '🌙';
 }
+(function() { const t = localStorage.getItem('daiflow-theme') || 'dark'; document.documentElement.setAttribute('data-theme', t); document.querySelector('.theme-btn').textContent = t === 'dark' ? '☀' : '🌙'; })();
 </script>
 </body>
 </html>
