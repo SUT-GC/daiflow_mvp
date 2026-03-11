@@ -96,8 +96,11 @@ src/
 │   └── StreamLog/           # SSE execution log display
 ├── hooks/
 │   ├── useSession.ts        # Unified session hook (status restore + log replay + SSE)
+│   ├── useStageChat.ts      # Common stage chat hook (shared by all 4 stages)
 │   ├── useInitProgress.ts   # Init page hook (project-level SSE bus for all init sessions)
 │   ├── usePlanStage.ts      # Plan stage hook (plan content + chat + plan_updated sync)
+│   ├── useTodoStage.ts      # Todo stage hook (todo list + chat + todo_updated sync)
+│   ├── useCodingStage.ts    # Coding stage hook (todo exec + diff + chat + code_updated)
 │   ├── useSSE.ts            # Low-level SSE connection wrapper (EventSource)
 │   └── useChat.ts           # Chat interaction logic
 └── api/
@@ -122,6 +125,7 @@ All AI interactions share a unified pattern: **SessionRunner** executes Cody →
 - Project knowledge generation: independent Cody session per knowledge type (concurrent)
 - Tech plan + todo decomposition: shared single Cody session (context continuity via `tasks.plan_cody_session_id`)
 - Individual todo execution: independent Cody session per todo (plan.md as shared context)
+- Code review: independent Cody session (`tasks.review_cody_session_id`)
 
 ### Project Knowledge (Four-Layer Generation)
 
@@ -141,7 +145,7 @@ Output: `~/.daiflow/projects/{project_id}/skills/{knowledge_type}/SKILL.md`
 | Settings | `GET/PUT /api/settings`, `GET /api/settings/check` |
 | Projects | CRUD `/api/projects`, `POST .../init`, `GET .../init/sessions`, `GET .../init/stream` (SSE) |
 | Tasks | CRUD `/api/tasks`, `POST .../lock-plan`, `POST .../start-coding`, `POST .../start-review` |
-| Dev Flow | `POST /api/tasks/{id}/plan`, `POST .../plan/chat`, `POST .../todo`, `POST /api/todos/{id}/execute` |
+| Dev Flow | `POST /api/tasks/{id}/plan`, `POST .../plan/chat`, `POST .../todo`, `POST .../todo/chat`, `POST /api/todos/{id}/execute`, `POST .../todos/{id}/chat`, `POST .../review/chat` |
 | Sessions | `GET /api/sessions/{id}/status`, `GET .../logs`, `GET .../stream` (SSE) |
 | Review | `GET /api/tasks/{id}/diff`, `POST /api/tasks/{id}/submit-mr` |
 
@@ -149,7 +153,7 @@ Output: `~/.daiflow/projects/{project_id}/skills/{knowledge_type}/SKILL.md`
 
 - **projects** — id, name, description, skill_names (JSON array)
 - **project_repos** — id, project_id (FK), git_url, local_path, repo_type (frontend/backend/custom), description
-- **tasks** — id, name, project_id (FK), description, branch, prd, tech_plan, status, plan_cody_session_id, mr_info
+- **tasks** — id, name, project_id (FK), description, branch, prd, tech_plan, status, plan_cody_session_id, review_cody_session_id, mr_info
 - **todos** — id, task_id (FK), seq, title, description, status, cody_session_id, result
 - **sessions** — session_id (PK, business ID), cody_session_id, type, ref_id, layer (init层级:1/2/3/4, 其他NULL), status, error, started_at, finished_at
 - **settings** — key/value pairs: `cody_model`, `cody_base_url`, `cody_api_key`, `theme`
@@ -171,8 +175,9 @@ Output: `~/.daiflow/projects/{project_id}/skills/{knowledge_type}/SKILL.md`
 - Skill files use YAML frontmatter + Markdown body, with `user-invocable: false`
 - All AI tasks go through SessionRunner → SSEManager → unified Session API
 - Cody SDK StreamChunk types: `text_delta`, `thinking`, `tool_call`, `tool_result`, `done`, `compact`
-- DaiFlow SSE event types: above + `status_change` (converted from done), `plan_updated` (file write detection), `session_status` (init bus)
-- Chat endpoints (`POST .../plan/chat`, `POST .../todo/chat`) return SSE streams, not JSON
+- DaiFlow SSE event types: above + `status_change` (converted from done), `plan_updated` / `todo_updated` / `code_updated` (file write detection per stage), `session_status` (init bus)
+- All 4 stage chat endpoints return SSE streams (not JSON), share common pattern: `useStageChat` hook + `stage_chat()` backend template
+- Stage-specific updated events: `plan_updated` (push full content), `todo_updated` (push full content), `code_updated` (push null, frontend re-fetches diff)
 - Session logs persisted to `~/.daiflow/sessions/{session_id}.jsonl` for replay after restart
 - Multi-repo support via `allowed_roots` in Cody client config
 - Frontend routing: settings guard checks `/api/settings/check` before allowing access to main app
