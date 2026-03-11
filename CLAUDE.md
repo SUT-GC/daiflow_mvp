@@ -162,6 +162,7 @@ Output: `~/.daiflow/projects/{project_id}/skills/{knowledge_type}/SKILL.md`
 
 - **Task:** 0=created, 1=initializing, 2=planning, 3=plan_locked, 4=todo_ready, 5=coding, 6=reviewing, 7=done
 - **Todo:** 0=pending, 1=running, 2=done, 3=failed
+- **Session:** 0=waiting, 1=running, 2=done, 3=failed
 
 ## Key File Locations
 

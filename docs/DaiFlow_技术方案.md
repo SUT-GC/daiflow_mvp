@@ -212,7 +212,8 @@ CREATE TABLE sessions (
     type             TEXT NOT NULL,     -- 类型：init / plan / todo_split / todo_exec / review
     ref_id           TEXT NOT NULL,     -- 关联的业务实体 ID（project_id 或 task_id 或 todo_id）
     layer            INTEGER,           -- 初始化场景的层级：1/2/3/4，其他场景为 NULL
-    status           TEXT DEFAULT 'waiting',  -- waiting / running / done / failed
+    status           INTEGER DEFAULT 0,
+    -- status 枚举：0 = waiting / 1 = running / 2 = done / 3 = failed
     error            TEXT,              -- 失败时的错误信息
     started_at       DATETIME,
     finished_at      DATETIME,
@@ -350,7 +351,7 @@ class SessionRunner:
         - 传入 cody_client：复用已有 Cody session（如技术方案 + Todo 拆解共享）
         - 传入 cody_config：创建新的 Cody client
         """
-        await self._set_status("running")
+        await self._set_status(1)  # running
         own_client = False
 
         try:
@@ -370,7 +371,7 @@ class SessionRunner:
                     # Cody 完成，记录 usage 并转为 status_change
                     self._append_log(event)
                     self.cody_session_id = chunk.session_id
-                    await self._set_status("done", usage=chunk.usage)
+                    await self._set_status(2, usage=chunk.usage)  # done
                     continue
 
                 # 其他事件（text_delta / thinking / tool_call / tool_result）
@@ -380,7 +381,7 @@ class SessionRunner:
                 await self.sse.publish(f"session:{self.session_id}", event)
 
         except Exception as e:
-            await self._set_status("failed", error=str(e))
+            await self._set_status(3, error=str(e))  # failed
             raise
         finally:
             if own_client:
@@ -404,8 +405,8 @@ class SessionRunner:
                               "total_tokens": chunk.usage.total_tokens}
         return event
 
-    async def _set_status(self, status: str, error: str = None):
-        """状态写 DB + 推一条状态事件"""
+    async def _set_status(self, status: int, error: str = None, usage: dict = None):
+        """状态写 DB + 推一条状态事件（status: 0=waiting,1=running,2=done,3=failed）"""
         await update_session(self.db, self.session_id,
                              status=status, cody_session_id=self.cody_session_id, error=error)
         await self.sse.publish(self.session_id, {
@@ -483,9 +484,9 @@ data: {"type": "plan_updated", "content": "# 技术方案\n\n## 背景\n..."}
 
 data: {"type": "user_message", "content": "token 刷新不用单独处理"}  ← 仅写入 .jsonl，不推 SSE
 
-data: {"type": "status_change", "status": "done", "usage": {"total_tokens": 1234}}
+data: {"type": "status_change", "status": 2, "usage": {"total_tokens": 1234}}
 
-data: {"type": "status_change", "status": "failed", "error": "执行失败"}
+data: {"type": "status_change", "status": 3, "error": "执行失败"}
 ```
 
 **统一的 3 个 Session API：**
@@ -515,7 +516,7 @@ async def session_stream(session_id: str):
             while True:
                 event = await queue.get()
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-                if event.get("type") == "status_change" and event["status"] in ("done", "failed"):
+                if event.get("type") == "status_change" and event["status"] in (2, 3):  # done / failed
                     break
         finally:
             sse_manager.unsubscribe(session_id, queue)
@@ -526,7 +527,7 @@ async def session_stream(session_id: str):
 
 | 数据 | 存储位置 | 用途 |
 | ---- | ---- | ---- |
-| 任务状态（waiting/running/done/failed） | SQLite `sessions` 表 | 页面刷新时通过 REST 查询恢复 |
+| Session 状态（0=waiting/1=running/2=done/3=failed） | SQLite `sessions` 表 | 页面刷新时通过 REST 查询恢复 |
 | SSE 过程日志（text_delta / tool_call 等） | `~/.daiflow/sessions/{session_id}.jsonl` | 关闭再打开时读文件回放 |
 | 实时推送 | 内存 `asyncio.Queue` | EventSource 实时接收增量 |
 
@@ -536,7 +537,7 @@ async def session_stream(session_id: str):
 页面打开
   ├─ 1. GET /api/sessions/{id}/status   → 拿 DB 快照，渲染当前状态
   ├─ 2. GET /api/sessions/{id}/logs     → 按需加载历史日志（已完成项）
-  └─ 3. 如果 status == "running"：
+  └─ 3. 如果 status == 1（running）：
          → EventSource(/api/sessions/{id}/stream) 接续实时推送
 ```
 
@@ -557,9 +558,9 @@ async def session_stream(session_id: str):
   │       └─ tool_result  → 工具结果
   │     → 右面渲染完整聊天历史
   └─ 4. 判断 session status：
-       ├─ "done"    → 静态展示，等用户输入新消息
-       ├─ "running" → 接 SSE stream 续接实时更新
-       └─ "failed"  → 显示错误 + 重试按钮
+       ├─ 2（done）    → 静态展示，等用户输入新消息
+       ├─ 1（running） → 接 SSE stream 续接实时更新
+       └─ 3（failed）  → 显示错误 + 重试按钮
 ```
 
 ### 3.4 Git Service 设计
@@ -738,7 +739,7 @@ async def check_settings(db: Session = Depends(get_db)):
 ```typescript
 // hooks/useSession.ts
 function useSession(sessionId: string) {
-  const [status, setStatus] = useState<'waiting' | 'running' | 'done' | 'failed'>('waiting');
+  const [status, setStatus] = useState<number>(0);  // 0=waiting,1=running,2=done,3=failed
   const [logs, setLogs] = useState<StreamEvent[]>([]);
 
   useEffect(() => {
@@ -755,13 +756,13 @@ function useSession(sessionId: string) {
 
   useEffect(() => {
     // 3. 如果还在跑，接 SSE 实时推送
-    if (status !== 'running') return;
+    if (status !== 1) return;  // not running
     const es = new EventSource(`/api/sessions/${sessionId}/stream`);
     es.onmessage = (e) => {
       const event = JSON.parse(e.data);
       if (event.type === 'status_change') {
         setStatus(event.status);
-        if (event.status === 'done' || event.status === 'failed') es.close();
+        if (event.status === 2 || event.status === 3) es.close();  // done or failed
       } else {
         setLogs(prev => [...prev, event]);
       }
@@ -791,7 +792,7 @@ function CodingStage({ taskId, todoId }: { taskId: string; todoId: string }) {
 
 ### 4.3.1 useInitProgress — 初始化进度 Hook
 
-初始化页面不适合为每个 session 单独创建 useSession（session 数量动态、需要感知 waiting→running），使用项目级 SSE 总线：
+初始化页面不适合为每个 session 单独创建 useSession（session 数量动态、需要感知 0→1 状态变更），使用项目级 SSE 总线：
 
 ```typescript
 // hooks/useInitProgress.ts
@@ -1106,7 +1107,7 @@ async def init_project(project_id: str, repos: list[Repo]):
 ```
 1. 用户保存项目配置，点击"保存并初始化"
 2. POST /api/projects/{id}/init：
-   a. 根据项目配置计算所有知识点，批量创建 sessions 记录（status=waiting，含 layer 字段）
+   a. 根据项目配置计算所有知识点，批量创建 sessions 记录（status=0 即 waiting，含 layer 字段）
    b. 启动 BackgroundTask 执行 init_project()
    c. 立即返回所有 sessions 列表（前端据此渲染初始化面板）
 3. 前端收到 sessions 列表后：
@@ -1115,14 +1116,14 @@ async def init_project(project_id: str, repos: list[Repo]):
    c. 监听所有 session 的状态变更事件
 4. Layer 1: 并发执行资源准备（Skill 拉取 + 仓库 clone/pull）
 5. Layer 2: 并发执行各仓库独立分析，每个知识点通过 SessionRunner 执行：
-   a. 状态写入 sessions 表（running → done/failed）
+   a. 状态写入 sessions 表（1=running → 2=done/3=failed）
    b. 过程日志追加写入 ~/.daiflow/sessions/{session_id}.jsonl
    c. 通过项目级 SSE 总线推送状态变更给前端
    d. 生成内容写入 projects/{project_id}/skills/{knowledge_type}/SKILL.md
 6. Layer 3: 第二层全部完成后，并发执行跨仓库整合分析
 7. Layer 4: 第三层全部完成后，生成 project.md 知识库索引文件
 8. 前端交互：
-   - 项目级 SSE 总线推送 session 状态变更（waiting→running→done/failed）
+   - 项目级 SSE 总线推送 session 状态变更（0→1→2/3）
    - 用户点击某个 session 查看详情时，通过统一 Session API 获取日志
    - 浏览器关闭再打开时，GET /api/projects/{id}/init/sessions 恢复全局进度
 ```
@@ -1147,7 +1148,7 @@ async def start_init(project_id: str, bg: BackgroundTasks, db=Depends(get_db)):
             type="init",
             ref_id=project_id,
             layer=layer,
-            status="waiting",
+            status=0,  # waiting
         )
         db.add(session)
         sessions.append(session)
@@ -1162,7 +1163,7 @@ async def start_init(project_id: str, bg: BackgroundTasks, db=Depends(get_db)):
 
 ### 5.3.2 项目级 SSE 总线
 
-初始化涉及多个 session 并发执行，前端需要一个统一入口感知所有 session 的状态变更（尤其是 waiting → running 的转换）。
+初始化涉及多个 session 并发执行，前端需要一个统一入口感知所有 session 的状态变更（尤其是 0→1 即 waiting→running 的转换）。
 
 **设计：** 使用 SSEManager 的 channel 机制，以 `project:init:{project_id}` 为 channel。SessionRunner 在状态变更时同时向两个 channel 推送：
 - `session:{session_id}` — 单 session 详细事件（text_delta / tool_call 等）
@@ -1170,7 +1171,7 @@ async def start_init(project_id: str, bg: BackgroundTasks, db=Depends(get_db)):
 
 ```python
 # SessionRunner._set_status() 中增加项目级推送
-async def _set_status(self, status: str, error: str = None):
+async def _set_status(self, status: int, error: str = None, usage: dict = None):
     # ... 原有逻辑：更新 DB + 推送 session channel ...
 
     # 如果是 init 类型，额外推送到项目级 channel
