@@ -13,6 +13,12 @@
 .card-title { font-size: 12px; font-weight: 600; color: var(--t1); margin-bottom: 18px; display: flex; align-items: center; gap: 8px; }
 .card-title::before { content: ''; width: 3px; height: 12px; background: linear-gradient(var(--blue), var(--teal)); border-radius: 2px; }
 .actions { display: flex; gap: 10px; margin-top: 24px; }
+.theme-switch { display: flex; gap: 8px; }
+.theme-option { flex: 1; padding: 12px; border-radius: var(--r); background: var(--bg-3); border: 2px solid var(--border); cursor: pointer; text-align: center; transition: all .15s; }
+.theme-option:hover { border-color: var(--border-md); }
+.theme-option.selected { border-color: var(--blue); background: var(--blue-d); }
+.theme-option-icon { font-size: 22px; margin-bottom: 4px; }
+.theme-option-label { font-size: 12px; font-weight: 600; color: var(--t1); }
 </style>
 </head>
 <body data-theme="dark">
@@ -62,16 +68,54 @@
         <button class="btn btn-primary">保存配置</button>
         <button class="btn btn-ghost">测试连接</button>
       </div>
+
+      <div style="margin-top:36px">
+        <div class="eyebrow">Appearance</div>
+        <div class="page-title">外观设置</div>
+        <div class="page-desc">选择界面主题，配置将自动保存并应用到所有页面。</div>
+      </div>
+
+      <div class="card settings-card">
+        <div class="card-title">主题模式</div>
+        <div class="theme-switch">
+          <div class="theme-option" data-theme-value="dark" onclick="selectTheme('dark')">
+            <div class="theme-option-icon">🌙</div>
+            <div class="theme-option-label">深色模式</div>
+          </div>
+          <div class="theme-option" data-theme-value="light" onclick="selectTheme('light')">
+            <div class="theme-option-icon">☀️</div>
+            <div class="theme-option-label">浅色模式</div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </div>
 <script>
-function toggleTheme() {
-  const h = document.documentElement;
-  const dark = h.getAttribute('data-theme') === 'dark';
-  h.setAttribute('data-theme', dark ? 'light' : 'dark');
-  document.querySelector('.theme-btn').textContent = dark ? '🌙' : '☀';
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  document.body.setAttribute('data-theme', theme);
+  document.querySelector('.theme-btn').textContent = theme === 'dark' ? '☀' : '🌙';
+  document.querySelectorAll('.theme-option').forEach(el => {
+    el.classList.toggle('selected', el.dataset.themeValue === theme);
+  });
 }
+
+function selectTheme(theme) {
+  localStorage.setItem('daiflow-theme', theme);
+  applyTheme(theme);
+}
+
+function toggleTheme() {
+  const current = document.documentElement.getAttribute('data-theme');
+  selectTheme(current === 'dark' ? 'light' : 'dark');
+}
+
+// 初始化：从 localStorage 读取主题配置
+(function() {
+  const saved = localStorage.getItem('daiflow-theme') || 'dark';
+  applyTheme(saved);
+})();
 </script>
 </body>
 </html>

@@ -1,0 +1,64 @@
+import json
+
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from daiflow.config import SESSIONS_DIR, safe_filename
+from daiflow.database import get_db
+from daiflow.models import Session, SessionStatus
+from daiflow.sse_manager import sse_manager
+
+router = APIRouter(prefix="/api/sessions", tags=["sessions"])
+
+
+@router.get("/{session_id:path}/status")
+async def get_session_status(session_id: str, db: AsyncSession = Depends(get_db)):
+    session = await db.get(Session, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {
+        "session_id": session.session_id,
+        "cody_session_id": session.cody_session_id,
+        "type": session.type,
+        "ref_id": session.ref_id,
+        "layer": session.layer,
+        "status": session.status,
+        "error": session.error,
+        "started_at": session.started_at.isoformat() if session.started_at else None,
+        "finished_at": session.finished_at.isoformat() if session.finished_at else None,
+    }
+
+
+@router.get("/{session_id:path}/logs")
+async def get_session_logs(session_id: str):
+    log_path = SESSIONS_DIR / f"{safe_filename(session_id)}.jsonl"
+    if not log_path.exists():
+        return []
+    logs = []
+    with open(log_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                logs.append(json.loads(line))
+    return logs
+
+
+@router.get("/{session_id:path}/stream")
+async def session_stream(session_id: str):
+    channel = f"session:{session_id}"
+
+    async def event_generator():
+        queue = sse_manager.subscribe(channel)
+        try:
+            while True:
+                event = await queue.get()
+                yield f"data: {json.dumps(event)}\n\n"
+                if event.get("type") == "status_change":
+                    status = event.get("status")
+                    if status in (SessionStatus.DONE, SessionStatus.FAILED):
+                        break
+        finally:
+            sse_manager.unsubscribe(channel, queue)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
