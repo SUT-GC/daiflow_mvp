@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
-import { getInitSessions, connectSSE } from '../api'
+import { getInitSessions } from '../api'
+import { wsClient } from '../ws'
 
 export interface InitSession {
   session_id: string
@@ -17,7 +18,7 @@ export function useInitProgress(projectId: string | null) {
   useEffect(() => {
     if (!projectId) return
 
-    let eventSource: { close: () => void } | null = null
+    let unsub: (() => void) | null = null
 
     async function load() {
       try {
@@ -28,12 +29,12 @@ export function useInitProgress(projectId: string | null) {
         const allSessions = (Object.values(data) as InitSession[][]).flat()
         if (allSessions.length > 0 && allSessions.every(s => s.status >= 2)) {
           setDone(true)
-          return // No need for SSE — already finished
+          return // No need for WS — already finished
         }
 
-        // Connect to project-level SSE bus
-        eventSource = connectSSE(
-          `/projects/${projectId}/init/stream`,
+        // Subscribe to project-level init bus via WebSocket
+        unsub = wsClient.subscribe(
+          `project:init:${projectId}`,
           (event) => {
             if (event.type === 'session_status') {
               setLayers(prev => {
@@ -51,7 +52,6 @@ export function useInitProgress(projectId: string | null) {
               setDone(true)
             }
           },
-          () => { eventSource = null }
         )
       } catch (err) {
         console.error('Init progress error:', err)
@@ -59,7 +59,7 @@ export function useInitProgress(projectId: string | null) {
     }
 
     load()
-    return () => { eventSource?.close() }
+    return () => { unsub?.() }
   }, [projectId])
 
   return { layers, done }

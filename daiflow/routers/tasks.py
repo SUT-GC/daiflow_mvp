@@ -2,26 +2,21 @@ import json
 import shutil
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from daiflow.config import TASKS_DIR, get_language_setting
+from daiflow.config import TASKS_DIR
 from daiflow.database import get_db
 from daiflow.models import ProjectRepo, Session, Task, TaskStatus, Todo
-from daiflow.services.cody_service import build_cody_client
 from daiflow.services.git_service import commit, get_diff, push
-from daiflow.services.skill_service import get_task_dir
 from daiflow.services.task_service import (
     execute_todo,
     generate_plan,
     generate_todos,
     init_task,
     start_coding,
-    sync_todos_from_file,
 )
-from daiflow.session_runner import make_file_write_detector, run_stage_chat
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
@@ -59,10 +54,6 @@ class TaskUpdate(BaseModel):
     branch: str | None = None
     prd: str | None = None
     tech_plan: str | None = None
-
-
-class ChatMessage(BaseModel):
-    message: str
 
 
 def _task_to_dict(t: Task) -> dict:
@@ -233,42 +224,6 @@ async def trigger_plan(
     return {"ok": True}
 
 
-@router.post("/{task_id}/plan/chat")
-async def plan_chat(
-    task_id: str, data: ChatMessage, db: AsyncSession = Depends(get_db)
-):
-    task = await db.get(Task, task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-
-    session_id = f"task:{task_id}:plan"
-    task_dir = get_task_dir(task_id)
-    plan_path = task_dir / "plan.md"
-
-    _, allowed_roots = await _get_task_repos(db, task.project_id)
-    client = await build_cody_client(db, str(task_dir), allowed_roots)
-
-    async def on_plan_match(_file_path):
-        if plan_path.exists():
-            content = plan_path.read_text(encoding="utf-8")
-            task.tech_plan = content
-            await db.commit()
-            return content
-        return None
-
-    on_tool_result = make_file_write_detector("plan.md", "plan_updated", on_plan_match)
-    lang = await get_language_setting(db)
-
-    async def generator():
-        async with client:
-            async for chunk in run_stage_chat(
-                session_id, client, task.plan_cody_session_id, data.message, on_tool_result, language=lang
-            ):
-                yield chunk
-
-    return StreamingResponse(generator(), media_type="text/event-stream")
-
-
 # ── Todo Stage ──
 
 
@@ -283,41 +238,6 @@ async def trigger_todo(
         raise HTTPException(status_code=404, detail="Task not found")
     background_tasks.add_task(generate_todos, task_id)
     return {"ok": True}
-
-
-@router.post("/{task_id}/todo/chat")
-async def todo_chat(
-    task_id: str, data: ChatMessage, db: AsyncSession = Depends(get_db)
-):
-    task = await db.get(Task, task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-
-    session_id = f"task:{task_id}:todo_split"
-    task_dir = get_task_dir(task_id)
-    todo_path = task_dir / "todo.json"
-
-    _, allowed_roots = await _get_task_repos(db, task.project_id)
-    client = await build_cody_client(db, str(task_dir), allowed_roots)
-
-    async def on_todo_match(_file_path):
-        if todo_path.exists():
-            content = todo_path.read_text(encoding="utf-8")
-            await sync_todos_from_file(db, task_id, content)
-            return content
-        return None
-
-    on_tool_result = make_file_write_detector("todo.json", "todo_updated", on_todo_match)
-    lang = await get_language_setting(db)
-
-    async def generator():
-        async with client:
-            async for chunk in run_stage_chat(
-                session_id, client, task.plan_cody_session_id, data.message, on_tool_result, language=lang
-            ):
-                yield chunk
-
-    return StreamingResponse(generator(), media_type="text/event-stream")
 
 
 @router.get("/{task_id}/todos")
@@ -361,33 +281,6 @@ async def get_task_diff(task_id: str, db: AsyncSession = Depends(get_db)):
                 diffs.append({"repo": repo.git_url, "repo_type": repo.repo_type, "diff": "", "error": str(e)})
 
     return {"diffs": diffs}
-
-
-@router.post("/{task_id}/review/chat")
-async def review_chat(
-    task_id: str, data: ChatMessage, db: AsyncSession = Depends(get_db)
-):
-    task = await db.get(Task, task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-
-    session_id = f"task:{task_id}:review"
-    task_dir = get_task_dir(task_id)
-
-    _, allowed_roots = await _get_task_repos(db, task.project_id)
-    client = await build_cody_client(db, str(task_dir), allowed_roots)
-
-    on_tool_result = make_file_write_detector(None, "code_updated")
-    lang = await get_language_setting(db)
-
-    async def generator():
-        async with client:
-            async for chunk in run_stage_chat(
-                session_id, client, task.review_cody_session_id, data.message, on_tool_result, language=lang
-            ):
-                yield chunk
-
-    return StreamingResponse(generator(), media_type="text/event-stream")
 
 
 class SubmitMR(BaseModel):

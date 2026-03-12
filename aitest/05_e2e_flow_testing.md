@@ -16,7 +16,7 @@ DaiFlow 有两个核心端到端流程：
 两个流程的共同特点：
 - 涉及后台异步任务（BackgroundTasks）
 - 需要等待 AI 模型返回
-- 状态通过 DB + SSE 双通道可观察
+- 状态通过 DB + WebSocket 双通道可观察
 - 需要验证状态机转换正确
 
 ---
@@ -176,13 +176,11 @@ done
 #### F-12: Plan 对话调整
 
 ```bash
-# 对 Plan 进行对话（SSE 返回）
-curl -N -X POST "$BASE_URL/api/tasks/$TASK_ID/plan/chat" \
-  -H "Content-Type: application/json" \
-  -d '{"message": "请把技术方案的第一步改为先设计数据库表结构"}' \
-  --max-time 30
+# 对 Plan 进行对话（通过 WebSocket）
+# 先建立 WS 连接，然后发送 chat action
+wscat -c "ws://localhost:8000/api/ws" -x '{"action":"chat","id":"req_1","chat_path":"plan","entity_id":"'$TASK_ID'","message":"请把技术方案的第一步改为先设计数据库表结构"}'
 
-# 预期：返回 SSE 流（text/event-stream）
+# 预期：通过 WebSocket 返回流式事件
 # 包含 text_delta 事件（AI 回复）
 # 可能包含 plan_updated 事件（AI 修改了 plan.md）
 ```
@@ -240,7 +238,7 @@ curl -N -X POST "$BASE_URL/api/tasks/$TASK_ID/todo/chat" \
   -H "Content-Type: application/json" \
   -d '{"message": "请把第一个 todo 拆得更细一些"}' \
   --max-time 30
-# 预期：SSE 流，可能包含 todo_updated 事件
+# 预期：流式事件，可能包含 todo_updated 事件
 ```
 
 ### 阶段 3: Coding（编码实现）
@@ -313,7 +311,7 @@ curl -N -X POST "$BASE_URL/api/tasks/$TASK_ID/review/chat" \
   -H "Content-Type: application/json" \
   -d '{"message": "请检查这些代码变更是否有安全问题"}' \
   --max-time 30
-# 预期：SSE 流
+# 预期：流式事件
 ```
 
 #### F-22: 提交 MR
@@ -402,5 +400,5 @@ curl -s -X DELETE "$BASE_URL/api/projects/$PROJECT_ID"
 AI 模型的输出不确定，端到端测试主要验证：
 - 状态转换正确
 - 数据写入成功（Plan/Todo 非空）
-- SSE 事件推送正常
+- 实时事件推送正常
 - 不验证 AI 输出的具体内容质量

@@ -359,7 +359,7 @@ curl -s -X DELETE "$BASE_URL/api/projects/$PROJECT_ID"
 |------|------|------|
 | GET | `/api/sessions/:id/status` | 获取 session 状态 |
 | GET | `/api/sessions/:id/logs` | 获取 session 日志 |
-| GET | `/api/sessions/:id/stream` | SSE 实时流 |
+| WS | `/api/ws` | WebSocket 实时推送（见 06_sse_testing.md） |
 
 ### 测试用例
 
@@ -391,7 +391,7 @@ curl -s "$BASE_URL/api/sessions/$ENCODED_ID/logs" | jq .
 
 - Session ID 包含冒号 `:`，在 URL 中需要编码为 `%3A`
 - `curl` 会自动处理 URL 编码，但拼接时要注意
-- Session 的 stream 端点见 `06_sse_testing.md`
+- WebSocket 实时推送见 `06_sse_testing.md`
 
 ---
 

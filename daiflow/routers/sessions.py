@@ -1,13 +1,11 @@
 import json
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from daiflow.config import SESSIONS_DIR, safe_filename
 from daiflow.database import get_db
-from daiflow.models import Session, SessionStatus
-from daiflow.sse_manager import sse_manager
+from daiflow.models import Session
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 
@@ -42,23 +40,3 @@ async def get_session_logs(session_id: str):
             if line:
                 logs.append(json.loads(line))
     return logs
-
-
-@router.get("/{session_id:path}/stream")
-async def session_stream(session_id: str):
-    channel = f"session:{session_id}"
-
-    async def event_generator():
-        queue = sse_manager.subscribe(channel)
-        try:
-            while True:
-                event = await queue.get()
-                yield f"data: {json.dumps(event)}\n\n"
-                if event.get("type") == "status_change":
-                    status = event.get("status")
-                    if status in (SessionStatus.DONE, SessionStatus.FAILED):
-                        break
-        finally:
-            sse_manager.unsubscribe(channel, queue)
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
