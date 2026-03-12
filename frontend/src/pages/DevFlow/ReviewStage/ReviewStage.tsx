@@ -46,7 +46,8 @@ export default function ReviewStage() {
 
   const { messages, sendMessage, streaming } = useStageChat({
     sessionId,
-    chatPath: `/tasks/${taskId}/review/chat`,
+    stage: 'review',
+    entityId: taskId || '',
     onUpdated,
   })
 

@@ -10,7 +10,7 @@ from daiflow.models import ProjectRepo, Session, SessionStatus
 from daiflow.services.cody_service import build_cody_client
 from daiflow.services.skill_service import get_project_dir
 from daiflow.session_runner import SessionRunner
-from daiflow.sse_manager import sse_manager
+from daiflow.ws_manager import ws_manager
 
 logger = logging.getLogger(__name__)
 
@@ -157,7 +157,7 @@ async def run_init(project_id: str):
             )
         )
         await db.commit()
-        await sse_manager.publish(project_bus, {
+        await ws_manager.publish(project_bus, {
             "type": "session_status", "session_id": sid, "status": SessionStatus.DONE, "layer": 1,
         })
 
@@ -228,7 +228,7 @@ async def run_init(project_id: str):
             logger.error("Layer 4 project.md generation failed: %s", e)
 
         # Send final done event on project bus
-        await sse_manager.publish(project_bus, {"type": "done"})
+        await ws_manager.publish(project_bus, {"type": "done"})
 
 
 async def run_init_retry(project_id: str, failed_session_ids: list[str], from_layer: int):
@@ -305,4 +305,4 @@ async def run_init_retry(project_id: str, failed_session_ids: list[str], from_la
                 layer_sessions = layer_results.scalars().all()
                 await run_layer(layer_sessions, layer_num)
 
-        await sse_manager.publish(project_bus, {"type": "done"})
+        await ws_manager.publish(project_bus, {"type": "done"})

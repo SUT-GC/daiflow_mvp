@@ -6,8 +6,8 @@
 
 - **项目管理** — 创建项目、关联多仓库（前端/后端/自定义）、自动生成项目知识库
 - **四阶段 DevFlow** — 技术方案 → 任务拆解 → 编码实现 → 代码审查，每个阶段都支持 AI 对话
-- **实时流式交互** — SSE 推送 AI 执行过程，所见即所得
-- **三层数据持久化** — DB（状态） + JSONL（事件回放） + Queue（实时推送），重启可恢复
+- **实时流式交互** — WebSocket 推送 AI 执行过程，所见即所得
+- **三层数据持久化** — DB（状态） + JSONL（事件回放） + WebSocket（实时推送），重启可恢复
 - **多仓库支持** — 项目可关联多个 Git 仓库，AI 具有跨仓上下文感知能力
 - **主题切换** — 深色/浅色主题
 
@@ -16,7 +16,7 @@
 | 层 | 技术 |
 |---|------|
 | 前端 | React 19 + TypeScript, Vite |
-| 后端 | Python 3.11+, FastAPI (async), SSE |
+| 后端 | Python 3.11+, FastAPI (async), WebSocket |
 | AI 引擎 | Cody SDK（进程内，无外部服务） |
 | 数据库 | SQLite (SQLAlchemy ORM + aiosqlite) |
 | 迁移 | Alembic |
@@ -75,7 +75,7 @@ daiflow/
 │   ├── config.py             # 全局配置（~/.daiflow 路径等）
 │   ├── database.py           # SQLAlchemy 初始化
 │   ├── models.py             # ORM 模型（6 张表）
-│   ├── sse_manager.py        # SSE 发布订阅管理器
+│   ├── ws_manager.py         # WebSocket 发布订阅管理器
 │   ├── session_runner.py     # AI 任务统一执行器
 │   ├── cli.py                # CLI 入口（daiflow start）
 │   ├── routers/              # HTTP 路由层
@@ -83,11 +83,13 @@ daiflow/
 │   │   ├── projects.py       # 项目 CRUD + 初始化
 │   │   ├── tasks.py          # 任务 CRUD + 阶段转换 + 对话
 │   │   ├── todos.py          # Todo 执行 + 对话
-│   │   └── sessions.py       # Session 状态/日志/流
+│   │   ├── sessions.py       # Session 状态/日志/流
+│   │   └── ws.py             # WebSocket 端点
 │   └── services/             # 业务逻辑层
 │       ├── project_service.py  # 项目初始化（四层知识生成）
 │       ├── task_service.py     # 任务生命周期管理
 │       ├── cody_service.py     # Cody SDK 封装
+│       ├── chat_service.py     # 阶段对话公共逻辑
 │       ├── git_service.py      # Git 操作
 │       └── skill_service.py    # Skill 文件管理
 ├── frontend/                 # 前端 React SPA
@@ -103,7 +105,8 @@ daiflow/
 │       │       └── ReviewStage/
 │       ├── components/       # 通用组件
 │       ├── hooks/            # React Hooks
-│       └── api/              # API 客户端
+│       ├── api/              # API 客户端
+│       └── ws/               # WebSocket 客户端
 ├── tests/                    # 后端测试
 ├── alembic/                  # 数据库迁移
 ├── docs/                     # 文档
@@ -117,7 +120,7 @@ daiflow/
 │  React SPA      │
 │  (Vite + TS)    │
 └────────┬────────┘
-         │ HTTP REST + SSE
+         │ HTTP REST + WebSocket
 ┌────────┴────────┐
 │  FastAPI         │
 │  (async Python)  │
@@ -127,15 +130,15 @@ daiflow/
 └─────────┴────────┘
 ```
 
-### 核心模式：SessionRunner + SSEManager
+### 核心模式：SessionRunner + WSManager
 
-所有 AI 交互共享统一模式：
+所有 AI 交互共享统一模式：**SessionRunner** 执行 Cody → 写日志到 `.jsonl` → 更新 DB 状态 → 通过 WSManager 广播；客户端通过 WebSocket 单连接订阅频道接收推送。
 
-1. **SessionRunner** 执行 Cody 任务 → 写日志到 `.jsonl` → 更新 DB 状态 → 通过 SSEManager 推送
-2. 三个统一 API 覆盖所有场景：
-   - `GET /api/sessions/{id}/status` — DB 快照（重启存活）
-   - `GET /api/sessions/{id}/logs` — `.jsonl` 回放（重启存活）
-   - `GET /api/sessions/{id}/stream` — 实时 SSE（内存 Queue）
+三个统一 API 覆盖所有场景：
+
+- `GET /api/sessions/{id}/status` — DB 快照（重启存活）
+- `GET /api/sessions/{id}/logs` — `.jsonl` 回放（重启存活）
+- `WS /api/ws` — WebSocket 单连接多路复用（频道订阅 + 对话）
 
 ### 四阶段 DevFlow
 
@@ -174,10 +177,11 @@ alembic upgrade head
 | 分类 | 端点 |
 |------|------|
 | 设置 | `GET/PUT /api/settings`, `GET /api/settings/check` |
-| 项目 | CRUD `/api/projects`, `POST .../init`, `GET .../init/stream` (SSE) |
+| 项目 | CRUD `/api/projects`, `POST .../init`, `GET .../init/sessions` |
 | 任务 | CRUD `/api/tasks`, `POST .../lock-plan`, `POST .../start-coding`, `POST .../start-review` |
 | DevFlow | `POST /api/tasks/{id}/plan`, `.../plan/chat`, `.../todo`, `.../todo/chat`, `POST /api/todos/{id}/execute`, `.../chat`, `.../review/chat` |
-| Session | `GET /api/sessions/{id}/status`, `.../logs`, `.../stream` (SSE) |
+| Session | `GET /api/sessions/{id}/status`, `.../logs` |
+| WebSocket | `WS /api/ws`（subscribe / chat / ping） |
 | 审查 | `GET /api/tasks/{id}/diff`, `POST /api/tasks/{id}/submit-mr` |
 
 ## 测试

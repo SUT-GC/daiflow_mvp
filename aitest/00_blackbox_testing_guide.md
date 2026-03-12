@@ -14,7 +14,7 @@
 | `03_test_preparation.md` | 环境搭建、服务启动、工具准备 | 开始测试前 |
 | `04_api_crud_testing.md` | REST API 端点的 CRUD 测试方法 | 测试各模块 API |
 | `05_e2e_flow_testing.md` | 端到端全链路测试（四阶段 DevFlow） | 验证业务流程 |
-| `06_sse_testing.md` | SSE 实时推送测试方法 | 验证流式交互 |
+| `06_sse_testing.md` | WebSocket 实时推送测试方法 | 验证实时交互 |
 | `07_error_and_edge_cases.md` | 错误处理、边界条件、安全性测试 | 负向测试 |
 | `01_blackbox_api_test.md` | 测试结果报告（参考） | 查看执行结果格式 |
 | `02_unit_test_report.md` | 单元测试报告（参考） | 对比白盒测试 |
@@ -45,10 +45,10 @@
    │   └── Review 阶段（审查 + 提交 MR）
    └── 状态机转换验证
 
-4. SSE 测试 (06_sse_testing.md)
-   ├── 项目初始化 SSE 流
-   ├── Session 实时流
-   └── 阶段对话 SSE 流
+4. WebSocket 测试 (06_sse_testing.md)
+   ├── 项目初始化 WebSocket 订阅
+   ├── Session 实时推送
+   └── 阶段对话 WebSocket 流
 
 5. 错误与边界测试 (07_error_and_edge_cases.md)
    ├── 404 资源不存在
@@ -70,7 +70,7 @@
 黑盒测试只依赖：
 - `README.md` 中的 API 端点列表
 - 实际的 HTTP 请求/响应
-- 可观察的行为（数据库文件、本地文件、SSE 事件流）
+- 可观察的行为（数据库文件、本地文件、WebSocket 事件）
 
 ### 2. 测试数据自给自足
 
@@ -84,7 +84,7 @@
 DaiFlow 有三层持久化，关键测试需要验证三层数据一致：
 - **DB 层：** API 返回的 JSON 数据
 - **文件层：** `~/.daiflow/` 下的文件（日志、方案、Todo）
-- **SSE 层：** 实时推送的事件与 DB/文件状态一致
+- **WebSocket 层：** 实时推送的事件与 DB/文件状态一致
 
 ### 4. 状态机覆盖
 
@@ -104,7 +104,7 @@ CREATED(0) → INITIALIZING(1) → PLANNING(2) → PLAN_LOCKED(3)
 - `T-xx` — 任务 (Task)
 - `TD-xx` — Todo
 - `SS-xx` — Session
-- `E-xx` — SSE 事件 (Event)
+- `E-xx` — WebSocket 事件 (Event)
 - `ST-xx` — 状态转换 (State Transition)
 - `ERR-xx` — 错误处理 (Error)
 - `F-xx` — 全链路 (Full flow)
@@ -119,7 +119,7 @@ CREATED(0) → INITIALIZING(1) → PLANNING(2) → PLAN_LOCKED(3)
 | `jq` | JSON 解析 | 提取字段、验证结构 |
 | `sqlite3` | 数据库检查 | 直接查询验证 DB 状态 |
 | `ls` / `cat` | 文件检查 | 验证本地文件生成 |
-| `curl -N` | SSE 流 | 加 `-N` 禁用缓冲 |
+| `websocat / Python websockets` | WebSocket 连接 | 用于订阅实时事件 |
 
 ---
 
@@ -157,6 +157,6 @@ CREATED(0) → INITIALIZING(1) → PLANNING(2) → PLAN_LOCKED(3)
 1. 阅读 `03_test_preparation.md`，完成环境准备
 2. 阅读 `04_api_crud_testing.md`，逐个执行 API 测试
 3. 阅读 `05_e2e_flow_testing.md`，执行端到端流程测试
-4. 阅读 `06_sse_testing.md`，验证 SSE 推送
+4. 阅读 `06_sse_testing.md`，验证 WebSocket 推送
 5. 阅读 `07_error_and_edge_cases.md`，执行负向测试
 6. 汇总结果，生成测试报告到 `aitest/` 目录
