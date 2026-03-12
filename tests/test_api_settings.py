@@ -79,3 +79,18 @@ class TestSettingsAPI:
         # Original value should be preserved
         resp = await client.get("/api/settings")
         assert resp.json()["cody_model"] == "model-a"
+
+    async def test_empty_base_url_rejected(self, client):
+        resp = await client.put("/api/settings", json={"cody_base_url": ""})
+        assert resp.status_code == 400
+        assert "cody_base_url" in resp.json()["detail"]
+
+    async def test_empty_api_key_rejected(self, client):
+        resp = await client.put("/api/settings", json={"cody_api_key": "  "})
+        assert resp.status_code == 400
+        assert "cody_api_key" in resp.json()["detail"]
+
+    async def test_empty_theme_allowed(self, client):
+        """Theme and language are optional fields — empty values should be accepted."""
+        resp = await client.put("/api/settings", json={"theme": ""})
+        assert resp.status_code == 200
