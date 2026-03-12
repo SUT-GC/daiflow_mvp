@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh" data-theme="dark">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DaiFlow · 新建项目</title>
+<link rel="stylesheet" href="shared.css">
+<style>
+.content { max-width: 680px; }
+.back { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--t2); cursor: pointer; margin-bottom: 24px; transition: color .15s; text-decoration: none; }
+.back:hover { color: var(--t0); }
+.repo-block { padding: 16px; margin-bottom: 9px; border-radius: var(--r); background: var(--bg-3); border: 1px solid var(--border); }
+.repo-block-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.type-toggle { display: flex; gap: 4px; }
+.type-btn { font-size: 11.5px; font-weight: 500; padding: 4px 11px; border-radius: 20px; cursor: pointer; border: 1px solid var(--border); background: transparent; color: var(--t2); transition: all .15s; }
+.type-btn.fe { border-color: rgba(82,196,247,.3); background: var(--blue-d); color: var(--blue); }
+.type-btn.be { border-color: rgba(45,212,191,.3); background: var(--teal-d); color: var(--teal); }
+.field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.add-repo-btn { width: 100%; padding: 9px; border-radius: var(--r); border: 1px dashed var(--border-md); background: transparent; color: var(--t2); font-size: 13px; cursor: pointer; transition: all .15s; font-family: var(--sans); }
+.add-repo-btn:hover { border-color: var(--blue); color: var(--blue); background: var(--blue-d); }
+.skill-pills { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.skill-pill { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--purple); background: var(--purple-d); border: 1px solid rgba(167,139,250,.2); padding: 2px 9px; border-radius: 20px; }
+.skill-rm { cursor: pointer; opacity: .5; transition: opacity .15s; }
+.skill-rm:hover { opacity: 1; }
+.form-footer { display: flex; justify-content: flex-end; gap: 10px; padding-top: 20px; border-top: 1px solid var(--border); margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="logo"><div class="logo-mark">D</div><div class="logo-text">dai<span>flow</span></div></div>
+    <div class="nav-group">
+      <div class="nav-label">工作区</div>
+      <a class="nav-item active" href="projects.html"><span class="nav-icon">⬡</span>项目<span class="nav-badge">3</span></a>
+      <a class="nav-item" href="tasks.html"><span class="nav-icon">◈</span>任务<span class="nav-badge">4</span></a>
+    </div>
+    <div class="sidebar-bottom">
+      <a class="nav-item" href="settings.html" style="margin-bottom:10px"><span class="nav-icon">⚙</span>设置</a>
+      <div class="sidebar-divider"></div>
+      <div class="model-pill"><div class="model-dot"></div><span class="model-text">glm-4 · 已连接</span></div>
+    </div>
+  </aside>
+  <div class="main">
+    <div class="topbar">
+      <span class="topbar-title">新建项目</span>
+      <div class="topbar-right"><button class="theme-btn" onclick="toggleTheme()">☀</button></div>
+    </div>
+    <div class="content">
+      <a href="projects.html" class="back">← 返回项目列表</a>
+
+      <div class="section-head">基本信息</div>
+      <div class="field">
+        <div class="field-label">项目名称</div>
+        <input class="input" type="text" placeholder="如：ByteWorks Cost 模块">
+      </div>
+      <div class="field">
+        <div class="field-label">项目描述</div>
+        <textarea class="input" rows="3" placeholder="描述项目业务背景和主要功能，供 AI 理解项目定位"></textarea>
+      </div>
+
+      <div class="section-head" style="margin-top:6px">代码仓库</div>
+      <div class="repo-block">
+        <div class="repo-block-head">
+          <div class="type-toggle">
+            <button class="type-btn fe">前端</button>
+            <button class="type-btn">后端</button>
+            <button class="type-btn">自定义</button>
+          </div>
+          <button class="btn btn-danger btn-xs">删除</button>
+        </div>
+        <div class="field-row">
+          <div class="field"><div class="field-label">Git 地址</div><input class="input" type="text" value="git@github.com:mmp/hc_frontend.git"></div>
+          <div class="field"><div class="field-label">本地路径</div><input class="input" type="text" value="/Users/me/code/hc_frontend"></div>
+        </div>
+        <div class="field" style="margin-bottom:0"><div class="field-label">仓库介绍</div><input class="input" type="text" placeholder="描述仓库定位，供 AI 理解"></div>
+      </div>
+      <div class="repo-block">
+        <div class="repo-block-head">
+          <div class="type-toggle">
+            <button class="type-btn">前端</button>
+            <button class="type-btn be">后端</button>
+            <button class="type-btn">自定义</button>
+          </div>
+          <button class="btn btn-danger btn-xs">删除</button>
+        </div>
+        <div class="field-row">
+          <div class="field"><div class="field-label">Git 地址</div><input class="input" type="text" value="git@github.com:mmp/hc_predict.git"></div>
+          <div class="field"><div class="field-label">本地路径</div><input class="input" type="text" value="/Users/me/code/hc_predict"></div>
+        </div>
+        <div class="field" style="margin-bottom:0"><div class="field-label">仓库介绍</div><input class="input" type="text" placeholder="描述仓库定位，供 AI 理解"></div>
+      </div>
+      <button class="add-repo-btn">＋ 添加仓库</button>
+
+      <div class="section-head" style="margin-top:22px">Skill 配置</div>
+      <div class="field">
+        <div class="field-label">从 Skill 中心拉取的 Skill</div>
+        <input class="input" type="text" placeholder="输入 skill 名称后按回车">
+        <div class="skill-pills">
+          <span class="skill-pill">react-conventions <span class="skill-rm">×</span></span>
+          <span class="skill-pill">python-best-practices <span class="skill-rm">×</span></span>
+        </div>
+      </div>
+
+      <div class="form-footer">
+        <a href="projects.html" class="btn btn-ghost">取消</a>
+        <button class="btn btn-primary" onclick="window.location='project-init.html'">保存并初始化</button>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+function toggleTheme() {
+  const current = document.documentElement.getAttribute('data-theme');
+  const next = current === 'dark' ? 'light' : 'dark';
+  localStorage.setItem('daiflow-theme', next);
+  document.documentElement.setAttribute('data-theme', next);
+  document.querySelector('.theme-btn').textContent = next === 'dark' ? '☀' : '🌙';
+}
+(function() { const t = localStorage.getItem('daiflow-theme') || 'dark'; document.documentElement.setAttribute('data-theme', t); document.querySelector('.theme-btn').textContent = t === 'dark' ? '☀' : '🌙'; })();
+</script>
+</body>
+</html>

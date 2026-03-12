@@ -1,0 +1,79 @@
+"""Tests for settings API endpoints."""
+
+
+class TestSettingsAPI:
+    async def test_get_settings_empty(self, client):
+        resp = await client.get("/api/settings")
+        assert resp.status_code == 200
+        assert resp.json() == {}
+
+    async def test_put_settings(self, client):
+        resp = await client.put("/api/settings", json={
+            "cody_model": "claude-opus-4-6",
+            "cody_base_url": "https://api.anthropic.com",
+            "cody_api_key": "sk-ant-12345678901234567890",
+        })
+        assert resp.status_code == 200
+        assert resp.json()["ok"] is True
+
+    async def test_get_settings_masks_api_key(self, client):
+        await client.put("/api/settings", json={
+            "cody_api_key": "sk-ant-12345678901234567890",
+        })
+        resp = await client.get("/api/settings")
+        data = resp.json()
+        key = data["cody_api_key"]
+        # Key should be masked: first 4 + *** + last 4
+        assert key.startswith("sk-a")
+        assert key.endswith("7890")
+        assert "****" in key or "*" in key
+
+    async def test_get_settings_masks_short_api_key(self, client):
+        await client.put("/api/settings", json={"cody_api_key": "short"})
+        resp = await client.get("/api/settings")
+        assert resp.json()["cody_api_key"] == "****"
+
+    async def test_update_theme(self, client):
+        resp = await client.put("/api/settings", json={"theme": "light"})
+        assert resp.status_code == 200
+        resp = await client.get("/api/settings")
+        assert resp.json()["theme"] == "light"
+
+    async def test_update_overwrites(self, client):
+        await client.put("/api/settings", json={"cody_model": "model-a"})
+        await client.put("/api/settings", json={"cody_model": "model-b"})
+        resp = await client.get("/api/settings")
+        assert resp.json()["cody_model"] == "model-b"
+
+    async def test_check_not_configured(self, client):
+        resp = await client.get("/api/settings/check")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["configured"] is False
+        assert data["model"] == ""
+
+    async def test_check_configured(self, client):
+        await client.put("/api/settings", json={
+            "cody_model": "claude-opus-4-6",
+            "cody_base_url": "https://api.anthropic.com",
+            "cody_api_key": "sk-ant-12345678901234567890",
+        })
+        resp = await client.get("/api/settings/check")
+        data = resp.json()
+        assert data["configured"] is True
+        assert data["model"] == "claude-opus-4-6"
+
+    async def test_check_partial_config(self, client):
+        await client.put("/api/settings", json={
+            "cody_model": "claude-opus-4-6",
+            # Missing base_url and api_key
+        })
+        resp = await client.get("/api/settings/check")
+        assert resp.json()["configured"] is False
+
+    async def test_empty_string_value_skipped(self, client):
+        await client.put("/api/settings", json={"cody_model": "model-a"})
+        # Sending empty string should not overwrite
+        await client.put("/api/settings", json={"cody_model": "   "})
+        resp = await client.get("/api/settings")
+        assert resp.json()["cody_model"] == "model-a"

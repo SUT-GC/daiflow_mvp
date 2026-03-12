@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh" data-theme="dark">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DaiFlow · 设置</title>
+<link rel="stylesheet" href="shared.css">
+<style>
+.content { max-width: 540px; }
+.eyebrow { font-family: var(--mono); font-size: 10.5px; color: var(--blue); letter-spacing: .1em; text-transform: uppercase; margin-bottom: 8px; }
+.page-title { font-size: 22px; font-weight: 700; margin-bottom: 5px; }
+.page-desc { font-size: 13px; color: var(--t2); margin-bottom: 32px; line-height: 1.6; }
+.settings-card { padding: 22px; margin-bottom: 12px; }
+.card-title { font-size: 12px; font-weight: 600; color: var(--t1); margin-bottom: 18px; display: flex; align-items: center; gap: 8px; }
+.card-title::before { content: ''; width: 3px; height: 12px; background: linear-gradient(var(--blue), var(--teal)); border-radius: 2px; }
+.actions { display: flex; gap: 10px; margin-top: 24px; }
+.theme-switch { display: flex; gap: 8px; }
+.theme-option { flex: 1; padding: 12px; border-radius: var(--r); background: var(--bg-3); border: 2px solid var(--border); cursor: pointer; text-align: center; transition: all .15s; }
+.theme-option:hover { border-color: var(--border-md); }
+.theme-option.selected { border-color: var(--blue); background: var(--blue-d); }
+.theme-option-icon { font-size: 22px; margin-bottom: 4px; }
+.theme-option-label { font-size: 12px; font-weight: 600; color: var(--t1); }
+</style>
+</head>
+<body data-theme="dark">
+<div class="shell">
+  <aside class="sidebar">
+    <div class="logo"><div class="logo-mark">D</div><div class="logo-text">dai<span>flow</span></div></div>
+    <div class="nav-group">
+      <div class="nav-label">工作区</div>
+      <a class="nav-item" href="projects.html"><span class="nav-icon">⬡</span>项目<span class="nav-badge">3</span></a>
+      <a class="nav-item" href="tasks.html"><span class="nav-icon">◈</span>任务<span class="nav-badge">4</span></a>
+    </div>
+    <div class="sidebar-bottom">
+      <a class="nav-item active" href="settings.html" style="margin-bottom:10px"><span class="nav-icon">⚙</span>设置</a>
+      <div class="sidebar-divider"></div>
+      <div class="model-pill"><div class="model-dot"></div><span class="model-text">glm-4 · 已连接</span></div>
+    </div>
+  </aside>
+  <div class="main">
+    <div class="topbar">
+      <span class="topbar-title">系统设置</span>
+      <div class="topbar-right"><button class="theme-btn" onclick="toggleTheme()">☀</button></div>
+    </div>
+    <div class="content">
+      <div class="eyebrow">Configuration</div>
+      <div class="page-title">AI 模型配置</div>
+      <div class="page-desc">配置你的 AI 模型接入信息，DaiFlow 将使用此配置驱动所有 AI 功能。<br>配置完成后才可进入项目和任务。</div>
+
+      <div class="card settings-card">
+        <div class="card-title">模型接入</div>
+        <div class="field">
+          <div class="field-label">模型名称 <code>cody_model</code></div>
+          <input class="input" type="text" value="glm-4" placeholder="glm-4 / qwen-plus / deepseek-chat">
+          <div class="field-hint">填写 API 支持的具体模型名</div>
+        </div>
+        <div class="field">
+          <div class="field-label">API 地址 <code>cody_base_url</code></div>
+          <input class="input" type="text" value="https://open.bigmodel.cn/api/paas/v4/">
+        </div>
+        <div class="field" style="margin-bottom:0">
+          <div class="field-label">API Key <code>cody_api_key</code></div>
+          <input class="input" type="password" value="sk-placeholder-key">
+          <div class="field-hint">保存后脱敏展示，请妥善保管</div>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="btn btn-primary">保存配置</button>
+        <button class="btn btn-ghost">测试连接</button>
+      </div>
+
+      <div style="margin-top:36px">
+        <div class="eyebrow">Appearance</div>
+        <div class="page-title">外观设置</div>
+        <div class="page-desc">选择界面主题，配置将自动保存并应用到所有页面。</div>
+      </div>
+
+      <div class="card settings-card">
+        <div class="card-title">主题模式</div>
+        <div class="theme-switch">
+          <div class="theme-option" data-theme-value="dark" onclick="selectTheme('dark')">
+            <div class="theme-option-icon">🌙</div>
+            <div class="theme-option-label">深色模式</div>
+          </div>
+          <div class="theme-option" data-theme-value="light" onclick="selectTheme('light')">
+            <div class="theme-option-icon">☀️</div>
+            <div class="theme-option-label">浅色模式</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  document.body.setAttribute('data-theme', theme);
+  document.querySelector('.theme-btn').textContent = theme === 'dark' ? '☀' : '🌙';
+  document.querySelectorAll('.theme-option').forEach(el => {
+    el.classList.toggle('selected', el.dataset.themeValue === theme);
+  });
+}
+
+function selectTheme(theme) {
+  localStorage.setItem('daiflow-theme', theme);
+  applyTheme(theme);
+}
+
+function toggleTheme() {
+  const current = document.documentElement.getAttribute('data-theme');
+  selectTheme(current === 'dark' ? 'light' : 'dark');
+}
+
+// 初始化：从 localStorage 读取主题配置
+(function() {
+  const saved = localStorage.getItem('daiflow-theme') || 'dark';
+  applyTheme(saved);
+})();
+</script>
+</body>
+</html>
