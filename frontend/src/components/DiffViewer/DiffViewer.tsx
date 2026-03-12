@@ -1,4 +1,4 @@
-import { Fragment, memo, useMemo } from 'react'
+import { Fragment, memo, useMemo, useState } from 'react'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import './DiffViewer.css'
@@ -24,10 +24,13 @@ interface DiffLine {
   newNum?: number
 }
 
+type DiffViewMode = 'unified' | 'split'
+
 interface DiffViewerProps {
   diffs: string  // raw git diff
   collapsed?: Record<string, boolean>
   onToggleFile?: (path: string) => void
+  defaultMode?: DiffViewMode
 }
 
 const EXT_TO_LANG: Record<string, string> = {
@@ -127,7 +130,130 @@ const HighlightedCode = memo(function HighlightedCode({ code, language }: { code
   )
 })
 
-export default function DiffViewer({ diffs, collapsed = {}, onToggleFile }: DiffViewerProps) {
+interface SplitRow {
+  left: DiffLine | null
+  right: DiffLine | null
+}
+
+function buildSplitRows(hunk: DiffHunk): SplitRow[] {
+  const rows: SplitRow[] = []
+  const lines = hunk.lines
+  let i = 0
+
+  while (i < lines.length) {
+    const line = lines[i]
+    if (line.type === 'context') {
+      rows.push({ left: line, right: line })
+      i++
+    } else if (line.type === 'remove') {
+      // Collect consecutive removes
+      const removes: DiffLine[] = []
+      while (i < lines.length && lines[i].type === 'remove') {
+        removes.push(lines[i])
+        i++
+      }
+      // Collect consecutive adds that follow
+      const adds: DiffLine[] = []
+      while (i < lines.length && lines[i].type === 'add') {
+        adds.push(lines[i])
+        i++
+      }
+      // Pair them up
+      const max = Math.max(removes.length, adds.length)
+      for (let j = 0; j < max; j++) {
+        rows.push({
+          left: j < removes.length ? removes[j] : null,
+          right: j < adds.length ? adds[j] : null,
+        })
+      }
+    } else if (line.type === 'add') {
+      rows.push({ left: null, right: line })
+      i++
+    } else {
+      i++
+    }
+  }
+  return rows
+}
+
+function UnifiedDiffBody({ file }: { file: DiffFile }) {
+  return (
+    <table className="diff-table">
+      <tbody>
+        {file.hunks.map((hunk, hi) => (
+          <Fragment key={hi}>
+            <tr className="hunk">
+              <td className="ln" />
+              <td className="ln2" />
+              <td className="code">{hunk.header}</td>
+            </tr>
+            {hunk.lines.map((line, li) => (
+              <tr key={li} className={line.type === 'add' ? 'add' : line.type === 'remove' ? 'rm' : 'ctx'}>
+                <td className="ln">{line.type !== 'add' ? line.oldNum : ''}</td>
+                <td className="ln2">{line.type !== 'remove' ? line.newNum : ''}</td>
+                <td className="code">
+                  {line.type === 'add' ? '+' : line.type === 'remove' ? '-' : ' '}
+                  <HighlightedCode code={line.content} language={file.language} />
+                </td>
+              </tr>
+            ))}
+          </Fragment>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+function SplitDiffBody({ file }: { file: DiffFile }) {
+  return (
+    <table className="diff-table diff-table-split">
+      <tbody>
+        {file.hunks.map((hunk, hi) => {
+          const splitRows = buildSplitRows(hunk)
+          return (
+            <Fragment key={hi}>
+              <tr className="hunk">
+                <td className="ln" />
+                <td className="code split-left">{hunk.header}</td>
+                <td className="ln" />
+                <td className="code split-right">{hunk.header}</td>
+              </tr>
+              {splitRows.map((row, ri) => (
+                <tr key={ri}>
+                  <td className={`ln ${row.left?.type === 'remove' ? 'rm' : ''}`}>
+                    {row.left?.oldNum ?? ''}
+                  </td>
+                  <td className={`code split-left ${row.left?.type === 'remove' ? 'rm' : row.left?.type === 'context' ? 'ctx' : 'empty'}`}>
+                    {row.left ? (
+                      <>
+                        {row.left.type === 'remove' ? '-' : ' '}
+                        <HighlightedCode code={row.left.content} language={file.language} />
+                      </>
+                    ) : ''}
+                  </td>
+                  <td className={`ln ${row.right?.type === 'add' ? 'add' : ''}`}>
+                    {row.right?.newNum ?? ''}
+                  </td>
+                  <td className={`code split-right ${row.right?.type === 'add' ? 'add' : row.right?.type === 'context' ? 'ctx' : 'empty'}`}>
+                    {row.right ? (
+                      <>
+                        {row.right.type === 'add' ? '+' : ' '}
+                        <HighlightedCode code={row.right.content} language={file.language} />
+                      </>
+                    ) : ''}
+                  </td>
+                </tr>
+              ))}
+            </Fragment>
+          )
+        })}
+      </tbody>
+    </table>
+  )
+}
+
+export default function DiffViewer({ diffs, collapsed = {}, onToggleFile, defaultMode = 'unified' }: DiffViewerProps) {
+  const [viewMode, setViewMode] = useState<DiffViewMode>(defaultMode)
   const files = useMemo(() => parseDiff(diffs), [diffs])
 
   if (files.length === 0) {
@@ -136,6 +262,20 @@ export default function DiffViewer({ diffs, collapsed = {}, onToggleFile }: Diff
 
   return (
     <div className="diff-viewer">
+      <div className="diff-mode-toggle">
+        <button
+          className={`diff-mode-btn ${viewMode === 'unified' ? 'active' : ''}`}
+          onClick={() => setViewMode('unified')}
+        >
+          Unified
+        </button>
+        <button
+          className={`diff-mode-btn ${viewMode === 'split' ? 'active' : ''}`}
+          onClick={() => setViewMode('split')}
+        >
+          Split
+        </button>
+      </div>
       {files.map(file => {
         const isCollapsed = collapsed[file.path] ?? false
         return (
@@ -158,29 +298,10 @@ export default function DiffViewer({ diffs, collapsed = {}, onToggleFile }: Diff
               </div>
             ) : !isCollapsed && (
               <div className="diff-body">
-                <table className="diff-table">
-                  <tbody>
-                    {file.hunks.map((hunk, hi) => (
-                      <Fragment key={hi}>
-                        <tr className="hunk">
-                          <td className="ln" />
-                          <td className="ln2" />
-                          <td className="code">{hunk.header}</td>
-                        </tr>
-                        {hunk.lines.map((line, li) => (
-                          <tr key={li} className={line.type === 'add' ? 'add' : line.type === 'remove' ? 'rm' : 'ctx'}>
-                            <td className="ln">{line.type !== 'add' ? line.oldNum : ''}</td>
-                            <td className="ln2">{line.type !== 'remove' ? line.newNum : ''}</td>
-                            <td className="code">
-                              {line.type === 'add' ? '+' : line.type === 'remove' ? '-' : ' '}
-                              <HighlightedCode code={line.content} language={file.language} />
-                            </td>
-                          </tr>
-                        ))}
-                      </Fragment>
-                    ))}
-                  </tbody>
-                </table>
+                {viewMode === 'split'
+                  ? <SplitDiffBody file={file} />
+                  : <UnifiedDiffBody file={file} />
+                }
               </div>
             )}
           </div>

@@ -296,7 +296,7 @@ def make_file_write_detector(target_file: str | None, event_type: str, on_match=
             return {"type": event_type, "content": content}
 
         file_path = _extract_file_path(event)
-        if file_path and (target_file in file_path):
+        if file_path and file_path.endswith(target_file):
             content = await on_match(file_path) if on_match else None
             return {"type": event_type, "content": content}
 

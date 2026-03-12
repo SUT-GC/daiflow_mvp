@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { getInitSessions } from '../api'
+import { SessionStatus } from '../types/enums'
 import { wsClient } from '../ws'
 
 export interface InitSession {
@@ -27,7 +28,7 @@ export function useInitProgress(projectId: string | null) {
 
         // Compute done from loaded data (covers page opened after init finished)
         const allSessions = (Object.values(data) as InitSession[][]).flat()
-        if (allSessions.length > 0 && allSessions.every(s => s.status >= 2)) {
+        if (allSessions.length > 0 && allSessions.every(s => s.status >= SessionStatus.DONE)) {
           setDone(true)
           return // No need for WS — already finished
         }

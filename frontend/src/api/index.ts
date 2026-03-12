@@ -20,6 +20,8 @@ export interface TaskData {
   prd: string
   tech_plan: string
   status: number
+  plan_cody_session_id?: string
+  review_cody_session_id?: string
   mr_info: Record<string, any>
   created_at: string | null
   updated_at: string | null
@@ -101,6 +103,8 @@ export const getTodos = (taskId: string) =>
   request(`/tasks/${taskId}/todos`)
 export const getTaskDiff = (taskId: string) =>
   request(`/tasks/${taskId}/diff`)
+export const generateCommitMessage = (taskId: string) =>
+  request<{ commit_message: string }>(`/tasks/${taskId}/generate-commit-message`, { method: 'POST' })
 export const submitMR = (taskId: string, commitMessage: string) =>
   request(`/tasks/${taskId}/submit-mr`, {
     method: 'POST',
