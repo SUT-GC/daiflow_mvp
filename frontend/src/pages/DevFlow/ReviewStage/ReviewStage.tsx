@@ -6,6 +6,7 @@ import ChatPanel from '../../../components/ChatPanel/ChatPanel'
 import DiffViewer, { parseDiff } from '../../../components/DiffViewer/DiffViewer'
 import Modal from '../../../components/Modal/Modal'
 import { useStageChat } from '../../../hooks/useStageChat'
+import Loading from '../../../components/Loading/Loading'
 import { getTask, getTaskDiff, generateCommitMessage, submitMR, TaskData } from '../../../api'
 import { useLocale } from '../../../hooks/useLocale'
 import '../DevFlow.css'
@@ -75,7 +76,7 @@ export default function ReviewStage() {
     }
   }, [diff])
 
-  if (!task) return null
+  if (!task) return <Loading />
 
   return (
     <div id="page" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>

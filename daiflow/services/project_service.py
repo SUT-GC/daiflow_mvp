@@ -1,10 +1,11 @@
 import asyncio
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 
 from sqlalchemy import select, update
 
-from daiflow.config import get_language_setting
+from daiflow.services.settings_service import get_language_setting
 from daiflow.database import get_background_db
 from daiflow.models import ProjectRepo, Session, SessionStatus
 from daiflow.services.cody_service import build_cody_client
@@ -90,8 +91,12 @@ PROJECT_MD_PROMPT = (
 
 
 def compute_init_sessions(project_id: str, repos: list) -> list[dict]:
-    """Compute all session records needed for project init."""
+    """Compute all session records needed for project init.
+
+    Deduplicates Layer 2 sessions when multiple repos share a knowledge type.
+    """
     sessions = []
+    seen_session_ids: set[str] = set()
 
     # Layer 1: skill_fetch (placeholder for now)
     sessions.append({
@@ -101,17 +106,20 @@ def compute_init_sessions(project_id: str, repos: list) -> list[dict]:
         "layer": 1,
     })
 
-    # Layer 2: per-repo knowledge
+    # Layer 2: per-repo knowledge (deduplicated by knowledge type)
     for repo in repos:
         repo_type = repo.repo_type
         types = LAYER_2_TYPES.get(repo_type, [])
         for kt in types:
-            sessions.append({
-                "session_id": f"init:{project_id}:{kt}",
-                "type": "init",
-                "ref_id": project_id,
-                "layer": 2,
-            })
+            sid = f"init:{project_id}:{kt}"
+            if sid not in seen_session_ids:
+                seen_session_ids.add(sid)
+                sessions.append({
+                    "session_id": sid,
+                    "type": "init",
+                    "ref_id": project_id,
+                    "layer": 2,
+                })
 
     # Layer 3: cross-repo knowledge
     for kt in LAYER_3_TYPES:
@@ -131,6 +139,72 @@ def compute_init_sessions(project_id: str, repos: list) -> list[dict]:
     })
 
     return sessions
+
+
+async def _run_knowledge_task(
+    project_dir: Path,
+    allowed_roots: list[str],
+    session_id: str,
+    knowledge_type: str,
+    project_bus: str,
+    lang: str | None,
+):
+    """Run a single knowledge generation task with its own DB session."""
+    async with get_background_db() as task_db:
+        skills_dir = project_dir / "skills" / knowledge_type
+        skills_dir.mkdir(parents=True, exist_ok=True)
+        prompt = KNOWLEDGE_PROMPTS[knowledge_type].format(output_path=str(skills_dir))
+        client = await build_cody_client(task_db, str(project_dir), allowed_roots)
+        runner = SessionRunner(client)
+        async with client:
+            await runner.run(task_db, session_id, prompt, extra_channels=[project_bus], language=lang)
+
+
+async def _run_layer(
+    layer_sessions: list,
+    layer_num: int,
+    project_dir: Path,
+    allowed_roots: list[str],
+    project_bus: str,
+    lang: str | None,
+) -> bool:
+    """Run all knowledge tasks in a layer concurrently. Returns True if all succeeded."""
+    layer_tasks = []
+    session_ids = []
+    for s in layer_sessions:
+        kt = s.session_id.split(":")[-1]
+        if kt in KNOWLEDGE_PROMPTS:
+            layer_tasks.append(_run_knowledge_task(
+                project_dir, allowed_roots, s.session_id, kt, project_bus, lang,
+            ))
+            session_ids.append(s.session_id)
+    if not layer_tasks:
+        return True
+
+    results = await asyncio.gather(*layer_tasks, return_exceptions=True)
+    has_failure = False
+    for s_id, r in zip(session_ids, results):
+        if isinstance(r, Exception):
+            has_failure = True
+            logger.error("Layer %d task %s failed: %s", layer_num, s_id, r)
+    return not has_failure
+
+
+async def _run_layer4(
+    project_id: str,
+    project_dir: Path,
+    allowed_roots: list[str],
+    project_bus: str,
+    lang: str | None,
+):
+    """Run Layer 4: generate project.md index."""
+    sid = f"init:{project_id}:project_md"
+    async with get_background_db() as layer4_db:
+        prompt = PROJECT_MD_PROMPT.format(output_path=str(project_dir))
+        client = await build_cody_client(layer4_db, str(project_dir), allowed_roots)
+        runner = SessionRunner(client)
+        async with client:
+            await runner.run(layer4_db, sid, prompt, extra_channels=[project_bus], language=lang)
 
 
 async def run_init(project_id: str):
@@ -169,37 +243,7 @@ async def run_init(project_id: str):
 
         lang = await get_language_setting(db)
 
-        async def run_knowledge(session_record: Session, knowledge_type: str):
-            async with get_background_db() as task_db:
-                skills_dir = project_dir / "skills" / knowledge_type
-                skills_dir.mkdir(parents=True, exist_ok=True)
-                prompt = KNOWLEDGE_PROMPTS[knowledge_type].format(output_path=str(skills_dir))
-                client = await build_cody_client(task_db, str(project_dir), allowed_roots)
-                runner = SessionRunner(client)
-                async with client:
-                    await runner.run(task_db, session_record.session_id, prompt, extra_channels=[project_bus], language=lang)
-
-        async def run_layer(layer_sessions, layer_num: int) -> bool:
-            """Run all tasks in a layer concurrently. Returns True if all succeeded."""
-            layer_tasks = []
-            session_ids = []
-            for s in layer_sessions:
-                kt = s.session_id.split(":")[-1]
-                if kt in KNOWLEDGE_PROMPTS:
-                    layer_tasks.append(run_knowledge(s, kt))
-                    session_ids.append(s.session_id)
-            if not layer_tasks:
-                return True
-
-            results = await asyncio.gather(*layer_tasks, return_exceptions=True)
-            has_failure = False
-            for s_id, r in zip(session_ids, results):
-                if isinstance(r, Exception):
-                    has_failure = True
-                    logger.error("Layer %d task %s failed: %s", layer_num, s_id, r)
-            return not has_failure
-
-        layer2_ok = await run_layer(layer2, 2)
+        layer2_ok = await _run_layer(layer2, 2, project_dir, allowed_roots, project_bus, lang)
 
         if not layer2_ok:
             logger.warning("Layer 2 had failures, continuing to Layer 3...")
@@ -210,20 +254,14 @@ async def run_init(project_id: str):
         )
         layer3 = layer3_sessions.scalars().all()
 
-        layer3_ok = await run_layer(layer3, 3)
+        layer3_ok = await _run_layer(layer3, 3, project_dir, allowed_roots, project_bus, lang)
 
         if not layer3_ok:
             logger.warning("Layer 3 had failures, continuing to Layer 4...")
 
-        # Layer 4: Generate project.md (uses independent DB session to avoid stale connection)
-        sid = f"init:{project_id}:project_md"
+        # Layer 4: Generate project.md
         try:
-            async with get_background_db() as layer4_db:
-                prompt = PROJECT_MD_PROMPT.format(output_path=str(project_dir))
-                client = await build_cody_client(layer4_db, str(project_dir), allowed_roots)
-                runner = SessionRunner(client)
-                async with client:
-                    await runner.run(layer4_db, sid, prompt, extra_channels=[project_bus], language=lang)
+            await _run_layer4(project_id, project_dir, allowed_roots, project_bus, lang)
         except Exception as e:
             logger.error("Layer 4 project.md generation failed: %s", e)
 
@@ -246,54 +284,19 @@ async def run_init_retry(project_id: str, failed_session_ids: list[str], from_la
 
         lang = await get_language_setting(db)
 
-        async def run_knowledge(session_record: Session, knowledge_type: str):
-            async with get_background_db() as task_db:
-                skills_dir = project_dir / "skills" / knowledge_type
-                skills_dir.mkdir(parents=True, exist_ok=True)
-                prompt = KNOWLEDGE_PROMPTS[knowledge_type].format(output_path=str(skills_dir))
-                client = await build_cody_client(task_db, str(project_dir), allowed_roots)
-                runner = SessionRunner(client)
-                async with client:
-                    await runner.run(task_db, session_record.session_id, prompt, extra_channels=[project_bus], language=lang)
-
-        async def run_layer(layer_sessions, layer_num: int) -> bool:
-            layer_tasks = []
-            session_ids = []
-            for s in layer_sessions:
-                kt = s.session_id.split(":")[-1]
-                if kt in KNOWLEDGE_PROMPTS:
-                    layer_tasks.append(run_knowledge(s, kt))
-                    session_ids.append(s.session_id)
-            if not layer_tasks:
-                return True
-            results = await asyncio.gather(*layer_tasks, return_exceptions=True)
-            has_failure = False
-            for s_id, r in zip(session_ids, results):
-                if isinstance(r, Exception):
-                    has_failure = True
-                    logger.error("Retry layer %d task %s failed: %s", layer_num, s_id, r)
-            return not has_failure
-
         # Run failed sessions in from_layer
         failed_results = await db.execute(
             select(Session).where(Session.session_id.in_(failed_session_ids))
         )
         failed_sessions = failed_results.scalars().all()
         if failed_sessions:
-            await run_layer(failed_sessions, from_layer)
+            await _run_layer(failed_sessions, from_layer, project_dir, allowed_roots, project_bus, lang)
 
         # Run all sessions in subsequent layers
         for layer_num in range(from_layer + 1, 5):  # layers go up to 4
             if layer_num == 4:
-                # Layer 4: project.md
-                sid = f"init:{project_id}:project_md"
                 try:
-                    async with get_background_db() as layer4_db:
-                        prompt = PROJECT_MD_PROMPT.format(output_path=str(project_dir))
-                        client = await build_cody_client(layer4_db, str(project_dir), allowed_roots)
-                        runner = SessionRunner(client)
-                        async with client:
-                            await runner.run(layer4_db, sid, prompt, extra_channels=[project_bus], language=lang)
+                    await _run_layer4(project_id, project_dir, allowed_roots, project_bus, lang)
                 except Exception as e:
                     logger.error("Retry layer 4 project.md failed: %s", e)
             else:
@@ -303,6 +306,6 @@ async def run_init_retry(project_id: str, failed_session_ids: list[str], from_la
                     )
                 )
                 layer_sessions = layer_results.scalars().all()
-                await run_layer(layer_sessions, layer_num)
+                await _run_layer(layer_sessions, layer_num, project_dir, allowed_roots, project_bus, lang)
 
         await ws_manager.publish(project_bus, {"type": "done"})

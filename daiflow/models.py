@@ -6,6 +6,7 @@ from sqlalchemy import (
     Column,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -68,7 +69,7 @@ class ProjectRepo(Base):
     __tablename__ = "project_repos"
 
     id = Column(String, primary_key=True, default=_uuid)
-    project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
     git_url = Column(String, default="")
     local_path = Column(String, default="")
     repo_type = Column(String, default="custom")  # frontend / backend / custom
@@ -84,7 +85,7 @@ class Task(Base):
 
     id = Column(String, primary_key=True, default=_uuid)
     name = Column(String, nullable=False)
-    project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
     description = Column(Text, default="")
     branch = Column(String, default="")
     prd = Column(Text, default="")
@@ -104,7 +105,7 @@ class Todo(Base):
     __tablename__ = "todos"
 
     id = Column(String, primary_key=True, default=_uuid)
-    task_id = Column(String, ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False)
+    task_id = Column(String, ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False, index=True)
     seq = Column(Integer, nullable=False)
     title = Column(String, default="")
     description = Column(Text, default="")
@@ -123,7 +124,7 @@ class Session(Base):
     session_id = Column(String, primary_key=True)  # business ID like task:42:plan
     cody_session_id = Column(String, nullable=True)
     type = Column(String, nullable=False)  # init/plan/todo_split/todo_exec/review
-    ref_id = Column(String, default="")
+    ref_id = Column(String, default="", index=True)
     layer = Column(Integer, nullable=True)  # 1-4 for init, NULL otherwise
     status = Column(Integer, default=0)  # 0=waiting,1=running,2=done,3=failed
     error = Column(Text, nullable=True)

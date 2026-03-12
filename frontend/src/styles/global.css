@@ -190,6 +190,9 @@ textarea.input { resize: none; font-family: var(--sans); font-size: 13px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--bg-5); border-radius: 2px; }
 
+/* ── Shared ── */
+.spinner { width: 18px; height: 18px; border: 2px solid var(--bg-5); border-top-color: var(--blue); border-radius: 50%; animation: spin 0.8s linear infinite; }
+
 /* ── Animations ── */
 @keyframes pulse { 0%,100%{opacity:.6} 50%{opacity:1} }
 @keyframes spin { to{transform:rotate(360deg)} }

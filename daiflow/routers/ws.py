@@ -29,6 +29,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+MAX_CONCURRENT_CHATS = 5
+
 
 async def _handle_chat(ws: WebSocket, data: dict):
     """Handle a chat request in a background task."""
@@ -113,8 +115,16 @@ async def websocket_endpoint(ws: WebSocket):
             elif action == "chat":
                 # Clean up finished tasks first to prevent accumulation
                 chat_tasks = [t for t in chat_tasks if not t.done()]
-                task = asyncio.create_task(_handle_chat(ws, data))
-                chat_tasks.append(task)
+                if len(chat_tasks) >= MAX_CONCURRENT_CHATS:
+                    await ws.send_json({
+                        "type": "error",
+                        "id": data.get("id", ""),
+                        "code": "rate_limited",
+                        "message": f"Too many concurrent chats (max {MAX_CONCURRENT_CHATS})",
+                    })
+                else:
+                    task = asyncio.create_task(_handle_chat(ws, data))
+                    chat_tasks.append(task)
 
             else:
                 await ws.send_json({

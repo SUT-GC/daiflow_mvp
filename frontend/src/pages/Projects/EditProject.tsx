@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import Topbar from '../../components/Shell/Topbar'
+import Loading from '../../components/Loading/Loading'
 import ProjectForm from './ProjectForm'
 import type { RepoEntry } from './ProjectForm'
 import { getProject, updateProject } from '../../api'
@@ -27,7 +28,7 @@ export default function EditProject() {
     }).catch(() => {}).finally(() => setLoading(false))
   }, [projectId])
 
-  if (loading || !initialData) return null
+  if (loading || !initialData) return <Loading />
 
   const handleSave = async (data: { name: string; description: string; repos: any[]; skill_names: string[] }) => {
     if (!projectId) return
