@@ -28,3 +28,6 @@ async def get_background_db():
     """
     async with async_session() as session:
         yield session
+
+# Alias for non-Depends contexts (WebSocket handlers, background tasks)
+get_db_session = get_background_db

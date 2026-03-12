@@ -16,7 +16,7 @@ DaiFlow 是一个本地软件，整体分为三层：
 │            前端 React SPA               │
 │   项目管理 / 任务管理 / 开发流程界面       │
 └─────────────────┬───────────────────────┘
-                  │ HTTP REST + SSE
+                  │ HTTP REST + WebSocket
 ┌─────────────────▼───────────────────────┐
 │           后端 FastAPI                   │
 │   业务逻辑 / git 操作 / 文件管理           │
@@ -33,7 +33,7 @@ DaiFlow 是一个本地软件，整体分为三层：
 | 层 | 技术 | 说明 |
 |----|------|------|
 | 前端 | React + TypeScript | SPA，构建后由 FastAPI 静态托管 |
-| 后端 | Python 3.11+ + FastAPI | 异步框架，原生支持 SSE |
+| 后端 | Python 3.11+ + FastAPI | 异步框架，原生支持 WebSocket |
 | AI 引擎 | Cody SDK（AsyncCodyClient） | `pip install cody-ai`，in-process 调用，无需额外进程 |
 | 数据库 | SQLite + SQLAlchemy | 本地存储结构化数据 |
 | 本地存储 | 文件系统 | `.daiflow/` 目录管理文件数据 |
@@ -66,7 +66,7 @@ daiflow start
 ```
 ~/.daiflow/
 ├── daiflow.db                        # SQLite 数据库
-├── sessions/                         # SSE 过程日志（按 session_id 存储）
+├── sessions/                         # 过程日志（按 session_id 存储）
 │   └── {session_id}.jsonl            # 每行一个 JSON 事件（text_delta / tool_call 等）
 ├── projects/
 │   └── {project_id}/
@@ -245,14 +245,15 @@ daiflow/
 ├── database.py              # SQLAlchemy 初始化
 ├── models.py                # ORM 模型
 ├── config.py                # 全局配置（daiflow 根目录路径等）
-├── sse_manager.py           # SSEManager 进程内 pub/sub 消息总线
+├── ws_manager.py            # WSManager 进程内 pub/sub 消息总线（WebSocket）
 ├── session_runner.py        # SessionRunner 统一 AI 任务执行器
 ├── routers/
 │   ├── settings.py          # 配置相关 API
 │   ├── projects.py          # 项目相关 API
 │   ├── tasks.py             # 任务相关 API
 │   ├── todos.py             # Todo 相关 API
-│   └── sessions.py          # 统一 Session API（status / logs / stream）
+│   ├── sessions.py          # 统一 Session API（status / logs）
+│   └── ws.py                # WebSocket 端点（单连接多路复用）
 ├── services/
 │   ├── project_service.py   # 项目业务逻辑（含初始化 4 层编排）
 │   ├── task_service.py      # 任务业务逻辑
@@ -292,54 +293,74 @@ def build_cody_client(workdir: str, extra_roots: list[str] = []):
 - 项目知识生成：`workdir` 设为项目目录，`allowed_roots` 包含所有关联仓库的本地路径
 - 任务开发阶段：`workdir` 设为 task 目录，`allowed_roots` 包含所有关联仓库的本地路径
 
-### 3.3 SSEManager — 进程内消息总线
+### 3.3 WSManager — 进程内 WebSocket 消息总线
 
-所有 AI 任务都通过后台协程执行（`BackgroundTasks`），前端通过 SSE 端点实时接收进度。两者之间需要一个进程内的 pub/sub 机制桥接。
+所有 AI 任务都通过后台协程执行（`BackgroundTasks`），前端通过 WebSocket 连接实时接收进度。两者之间需要一个进程内的 pub/sub 机制桥接。
 
 ```python
-import asyncio
-from collections import defaultdict
+from starlette.websockets import WebSocket, WebSocketState
 
-class SSEManager:
-    """进程内 pub/sub —— 后台任务发消息，SSE 端点订阅消息"""
+class WSManager:
+    """进程内 pub/sub —— 后台任务发消息，WebSocket 连接订阅消息"""
 
     def __init__(self):
-        self._channels: dict[str, list[asyncio.Queue]] = defaultdict(list)
+        self._channels: dict[str, set[WebSocket]] = {}       # channel → connections
+        self._conn_channels: dict[int, set[str]] = {}        # id(ws) → subscribed channels
 
-    def subscribe(self, session_id: str) -> asyncio.Queue:
-        """SSE 端点调用：创建一个 queue 加入该 session 的频道"""
-        queue = asyncio.Queue()
-        self._channels[session_id].append(queue)
-        return queue
+    def subscribe(self, ws: WebSocket, channel: str):
+        """WebSocket handler 调用：将连接加入频道"""
+        self._channels.setdefault(channel, set()).add(ws)
+        self._conn_channels.setdefault(id(ws), set()).add(channel)
 
-    async def publish(self, session_id: str, event: dict):
-        """后台任务调用：向该 session 的所有 subscriber 广播"""
-        for queue in self._channels[session_id]:
-            await queue.put(event)
+    def unsubscribe(self, ws: WebSocket, channel: str):
+        """取消单个频道订阅"""
+        if channel in self._channels:
+            self._channels[channel].discard(ws)
+            if not self._channels[channel]:
+                del self._channels[channel]
 
-    def unsubscribe(self, session_id: str, queue: asyncio.Queue):
-        """SSE 断开时清理"""
-        self._channels[session_id].remove(queue)
-        if not self._channels[session_id]:
-            del self._channels[session_id]
+    async def publish(self, channel: str, event: dict):
+        """后台任务调用：向该频道的所有 WebSocket 连接广播"""
+        subscribers = list(self._channels.get(channel, []))
+        for ws in subscribers:
+            try:
+                if ws.client_state == WebSocketState.CONNECTED:
+                    await ws.send_json({"channel": channel, "event": event})
+            except Exception:
+                self._remove_dead(ws)
+
+    async def send_to(self, ws: WebSocket, channel: str, event: dict):
+        """直接向单个连接发送（用于 chat 响应流）"""
+        try:
+            await ws.send_json({"channel": channel, "event": event})
+        except Exception:
+            pass
+
+    def disconnect(self, ws: WebSocket):
+        """连接断开时清理所有订阅"""
+        for channel in self._conn_channels.pop(id(ws), set()):
+            if channel in self._channels:
+                self._channels[channel].discard(ws)
+                if not self._channels[channel]:
+                    del self._channels[channel]
 
 # 全局单例 —— FastAPI 进程内共享
-sse_manager = SSEManager()
+ws_manager = WSManager()
 ```
 
-**原理：** `sse_manager` 是 Python 进程内的全局单例，BackgroundTask 和 SSE handler 都跑在同一个 asyncio event loop 里，共享同一块内存。`publish` 往 Queue 里 put，`subscribe` 端的 `queue.get()` 就会被唤醒 — 纯内存、零延迟，不需要 Redis。
+**原理：** `ws_manager` 是 Python 进程内的全局单例，BackgroundTask 和 WebSocket handler 都跑在同一个 asyncio event loop 里，共享同一块内存。`publish` 直接通过 `ws.send_json()` 推送给所有订阅者 — 纯内存、零延迟，不需要 Redis。
 
 ### 3.4 SessionRunner — 统一的 AI 任务执行器
 
-DaiFlow 中所有 AI 交互场景（项目初始化、技术方案、Todo 拆解、Todo 编码、Code Review）本质相同：**后台跑 Cody → 过程写日志 → SSE 推前端 → 状态存 DB**。统一抽象为 `SessionRunner`。
+DaiFlow 中所有 AI 交互场景（项目初始化、技术方案、Todo 拆解、Todo 编码、Code Review）本质相同：**后台跑 Cody → 过程写日志 → WebSocket 推前端 → 状态存 DB**。统一抽象为 `SessionRunner`。
 
 ```python
 class SessionRunner:
     """统一的 '跑一个 AI 任务并推流' 抽象"""
 
-    def __init__(self, session_id: str, sse_manager: SSEManager, db: AsyncSession):
+    def __init__(self, session_id: str, ws_manager: WSManager, db: AsyncSession):
         self.session_id = session_id
-        self.sse = sse_manager
+        self.ws = ws_manager
         self.db = db
         self.log_path = Path.home() / f".daiflow/sessions/{session_id}.jsonl"
         self.cody_session_id: str | None = None
@@ -347,7 +368,7 @@ class SessionRunner:
     async def run(self, cody_client: AsyncCodyClient = None,
                   cody_config: dict = None, prompt: str = ""):
         """
-        执行一次 Cody 对话，统一处理流式输出 + 持久化 + SSE。
+        执行一次 Cody 对话，统一处理流式输出 + 持久化 + WebSocket 推送。
         - 传入 cody_client：复用已有 Cody session（如技术方案 + Todo 拆解共享）
         - 传入 cody_config：创建新的 Cody client
         """
@@ -377,8 +398,8 @@ class SessionRunner:
                 # 其他事件（text_delta / thinking / tool_call / tool_result）
                 # 1. 追加写日志文件（持久化，关了再开能回放）
                 self._append_log(event)
-                # 2. 推 SSE（实时增量）
-                await self.sse.publish(f"session:{self.session_id}", event)
+                # 2. 推 WebSocket（实时增量）
+                await self.ws.publish(f"session:{self.session_id}", event)
 
         except Exception as e:
             await self._set_status(3, error=str(e))  # failed
@@ -409,7 +430,7 @@ class SessionRunner:
         """状态写 DB + 推一条状态事件（status: 0=waiting,1=running,2=done,3=failed）"""
         await update_session(self.db, self.session_id,
                              status=status, cody_session_id=self.cody_session_id, error=error)
-        await self.sse.publish(self.session_id, {
+        await self.ws.publish(f"session:{self.session_id}", {
             "type": "status_change", "status": status, "error": error
         })
 
@@ -423,22 +444,22 @@ class SessionRunner:
 
 ```python
 # ---- 技术方案生成 ----
-runner = SessionRunner(session_id=f"task:{task_id}:plan", sse_manager=sse, db=db)
+runner = SessionRunner(session_id=f"task:{task_id}:plan", ws_manager=ws, db=db)
 await runner.run(cody_config={...}, prompt=plan_prompt)
 
 # ---- 技术方案 + Todo 拆解共享 Cody session ----
 async with AsyncCodyClient(**config) as cody:
-    plan_runner = SessionRunner(f"task:{task_id}:plan", sse, db)
+    plan_runner = SessionRunner(f"task:{task_id}:plan", ws, db)
     await plan_runner.run(cody_client=cody, prompt=plan_prompt)
     # cody_session_id = "cody-xxx"
 
-    todo_runner = SessionRunner(f"task:{task_id}:todo_split", sse, db)
+    todo_runner = SessionRunner(f"task:{task_id}:todo_split", ws, db)
     await todo_runner.run(cody_client=cody, prompt=split_prompt)
     # cody_session_id = "cody-xxx" ← 同一个 Cody session
 
 # ---- 项目初始化（多个 runner 并发） ----
 runners = [
-    SessionRunner(f"init:{project_id}:{kt}", sse, db)
+    SessionRunner(f"init:{project_id}:{kt}", ws, db)
     for kt in ["frontend_structure", "backend_structure", "business_flow"]
 ]
 await asyncio.gather(*[
@@ -447,15 +468,15 @@ await asyncio.gather(*[
 ])
 ```
 
-### 3.5 SSE 流式推送设计
+### 3.5 WebSocket 流式推送设计
 
-基于 SSEManager + SessionRunner，所有 AI 交互场景共享统一的 3 个 API 端点。
+基于 WSManager + SessionRunner，所有 AI 交互场景共享统一的 WebSocket 连接。
 
-#### 3.5.1 Cody SDK 事件 → DaiFlow SSE 事件映射
+#### 3.5.1 Cody SDK 事件 → DaiFlow 事件映射
 
 Cody SDK 的 `run_stream()` 返回 `StreamChunk`，DaiFlow 进行透传或转换：
 
-| Cody SDK StreamChunk.type | DaiFlow SSE event | 前端处理 | 说明 |
+| Cody SDK StreamChunk.type | DaiFlow event | 前端处理 | 说明 |
 |---------------------------|-------------------|---------|------|
 | `text_delta` | `text_delta` | 聊天框/日志逐字追加 | 直接透传，含 `content` |
 | `thinking` | `thinking` | 思考过程（可折叠展示） | 直接透传，含 `content` |
@@ -465,33 +486,37 @@ Cody SDK 的 `run_stream()` 返回 `StreamChunk`，DaiFlow 进行透传或转换
 | `compact` | （不推送） | — | 上下文压缩事件，仅后端记录日志 |
 | — | `user_message` | — | **DaiFlow 注入**：仅写入 .jsonl（重进页面还原用户消息） |
 | — | `plan_updated` | 左面刷新 plan 内容 | **DaiFlow 注入**：检测到文件写入后推送 |
-| — | `session_status` | 初始化进度面板 | **DaiFlow 注入**：项目级 SSE 总线专用 |
+| — | `session_status` | 初始化进度面板 | **DaiFlow 注入**：项目级 WebSocket 总线专用 |
 
 > `plan_updated` 和 `session_status` 不是 Cody SDK 事件，是 DaiFlow 根据业务逻辑注入的自定义事件。
 
-**SSE 事件格式：**
+**WebSocket 事件格式：**
 
+所有事件通过统一的 JSON 信封推送：`{"channel": "session:{session_id}", "event": {...}}`
+
+```json
+{"channel": "session:task:42:plan", "event": {"type": "text_delta", "content": "正在分析项目结构..."}}
+
+{"channel": "session:task:42:plan", "event": {"type": "thinking", "content": "让我先看看项目结构..."}}
+
+{"channel": "session:task:42:plan", "event": {"type": "tool_call", "tool_name": "read_file", "args": {"path": "src/index.ts"}, "tool_call_id": "tc_1"}}
+
+{"channel": "session:task:42:plan", "event": {"type": "tool_result", "tool_name": "read_file", "content": "...文件内容...", "tool_call_id": "tc_1"}}
+
+{"channel": "session:task:42:plan", "event": {"type": "plan_updated", "content": "# 技术方案\n\n## 背景\n..."}}
+
+// user_message 仅写入 .jsonl，不推 WebSocket
+
+{"channel": "session:task:42:plan", "event": {"type": "status_change", "status": 2, "usage": {"total_tokens": 1234}}}
+
+{"channel": "session:task:42:plan", "event": {"type": "status_change", "status": 3, "error": "执行失败"}}
 ```
-data: {"type": "text_delta", "content": "正在分析项目结构..."}
 
-data: {"type": "thinking", "content": "让我先看看项目结构..."}
-
-data: {"type": "tool_call", "tool_name": "read_file", "args": {"path": "src/index.ts"}, "tool_call_id": "tc_1"}
-
-data: {"type": "tool_result", "tool_name": "read_file", "content": "...文件内容...", "tool_call_id": "tc_1"}
-
-data: {"type": "plan_updated", "content": "# 技术方案\n\n## 背景\n..."}
-
-data: {"type": "user_message", "content": "token 刷新不用单独处理"}  ← 仅写入 .jsonl，不推 SSE
-
-data: {"type": "status_change", "status": 2, "usage": {"total_tokens": 1234}}
-
-data: {"type": "status_change", "status": 3, "error": "执行失败"}
-```
-
-**统一的 3 个 Session API：**
+**统一的 Session API + WebSocket 端点：**
 
 ```python
+# --- REST API（状态查询 + 日志回放）---
+
 @router.get("/api/sessions/{session_id}/status")
 async def get_session_status(session_id: str, db=Depends(get_db)):
     """查 DB —— 任何时候都能拿到状态（支持页面刷新、重新打开）"""
@@ -507,20 +532,29 @@ async def get_session_logs(session_id: str):
         return []
     return [json.loads(line) for line in log_path.read_text().splitlines()]
 
-@router.get("/api/sessions/{session_id}/stream")
-async def session_stream(session_id: str):
-    """SSE —— 实时增量推送"""
-    queue = sse_manager.subscribe(session_id)
-    async def event_generator():
-        try:
-            while True:
-                event = await queue.get()
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-                if event.get("type") == "status_change" and event["status"] in (2, 3):  # done / failed
-                    break
-        finally:
-            sse_manager.unsubscribe(session_id, queue)
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+# --- WebSocket 端点（实时推送 + 双向通信）---
+
+@router.websocket("/api/ws")
+async def websocket_endpoint(ws: WebSocket):
+    """单一 WebSocket 连接，多路复用所有实时通信"""
+    await ws.accept()
+    try:
+        while True:
+            data = await ws.receive_json()
+            action = data.get("action")
+            if action == "ping":
+                await ws.send_json({"type": "pong"})
+            elif action == "subscribe":
+                ws_manager.subscribe(ws, data["channel"])
+                await ws.send_json({"type": "subscribed", "channel": data["channel"]})
+            elif action == "unsubscribe":
+                ws_manager.unsubscribe(ws, data["channel"])
+            elif action == "chat":
+                asyncio.create_task(_handle_chat(ws, data))
+            else:
+                await ws.send_json({"type": "error", "code": "unknown_action"})
+    except WebSocketDisconnect:
+        ws_manager.disconnect(ws)
 ```
 
 **数据持久化三层保障：**
@@ -528,8 +562,8 @@ async def session_stream(session_id: str):
 | 数据 | 存储位置 | 用途 |
 | ---- | ---- | ---- |
 | Session 状态（0=waiting/1=running/2=done/3=failed） | SQLite `sessions` 表 | 页面刷新时通过 REST 查询恢复 |
-| SSE 过程日志（text_delta / tool_call 等） | `~/.daiflow/sessions/{session_id}.jsonl` | 关闭再打开时读文件回放 |
-| 实时推送 | 内存 `asyncio.Queue` | EventSource 实时接收增量 |
+| 过程日志（text_delta / tool_call 等） | `~/.daiflow/sessions/{session_id}.jsonl` | 关闭再打开时读文件回放 |
+| 实时推送 | WebSocket 连接（`ws_manager`） | 前端通过 subscribe 频道实时接收增量 |
 
 **前端重连策略（通用）：**
 
@@ -538,7 +572,7 @@ async def session_stream(session_id: str):
   ├─ 1. GET /api/sessions/{id}/status   → 拿 DB 快照，渲染当前状态
   ├─ 2. GET /api/sessions/{id}/logs     → 按需加载历史日志（已完成项）
   └─ 3. 如果 status == 1（running）：
-         → EventSource(/api/sessions/{id}/stream) 接续实时推送
+         → wsClient.subscribe(`session:${sessionId}`) 接续实时推送
 ```
 
 **Plan 页面重进策略（含对话恢复）：**
@@ -559,7 +593,7 @@ async def session_stream(session_id: str):
   │     → 右面渲染完整聊天历史
   └─ 4. 判断 session status：
        ├─ 2（done）    → 静态展示，等用户输入新消息
-       ├─ 1（running） → 接 SSE stream 续接实时更新
+       ├─ 1（running） → 通过 WebSocket subscribe 续接实时更新
        └─ 3（failed）  → 显示错误 + 重试按钮
 ```
 
@@ -596,7 +630,6 @@ git_service.push(local_path, branch)               # git push
 | DELETE | `/api/projects/{id}` | 删除项目 |
 | POST | `/api/projects/{id}/init` | 触发项目初始化（批量创建 sessions + 后台任务，立即返回 sessions 列表） |
 | GET | `/api/projects/{id}/init/sessions` | 查询该项目所有初始化 sessions（按 layer 分组） |
-| GET | `/api/projects/{id}/init/stream` | 项目级 SSE 总线，推送所有初始化 session 的状态变更事件 |
 
 #### 任务相关
 
@@ -615,23 +648,19 @@ git_service.push(local_path, branch)               # git push
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | POST | `/api/tasks/{id}/plan` | 触发生成技术方案（后台任务） |
-| POST | `/api/tasks/{id}/plan/chat` | 技术方案阶段对话（SSE 流式返回，含 plan_updated 事件） |
 | POST | `/api/tasks/{id}/todo` | 触发生成 todo 列表（后台任务） |
-| POST | `/api/tasks/{id}/todo/chat` | 任务拆解阶段对话（SSE 流式返回，含 todo_updated 事件） |
 | GET | `/api/tasks/{id}/todos` | 获取 todo 列表 |
 | POST | `/api/todos/{id}/execute` | 触发执行单个 todo（后台任务） |
-| POST | `/api/todos/{id}/chat` | todo 执行后对话（SSE 流式返回，含 code_updated 事件） |
 | GET | `/api/tasks/{id}/diff` | 获取整体 git diff |
-| POST | `/api/tasks/{id}/review/chat` | 代码审查阶段对话（SSE 流式返回，含 code_updated 事件） |
 | POST | `/api/tasks/{id}/submit-mr` | 生成 commit message 并提交 MR |
 
-#### 统一 Session API（所有 AI 任务通用）
+#### 统一 Session API + WebSocket（所有 AI 任务通用）
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/api/sessions/{session_id}/status` | 查询 session 状态（从 DB 读，支持刷新恢复） |
 | GET | `/api/sessions/{session_id}/logs` | 获取历史日志（从 .jsonl 文件读，支持回放） |
-| GET | `/api/sessions/{session_id}/stream` | SSE 实时推送（从内存 Queue 读，增量接收） |
+| WS | `/api/ws` | WebSocket 单连接多路复用（subscribe 频道实时接收 + chat 双向通信） |
 
 ---
 
@@ -656,16 +685,19 @@ src/
 │   ├── MarkdownViewer/      # Markdown 渲染
 │   ├── DiffViewer/          # 代码 diff 展示（react-diff-viewer）
 │   ├── TodoList/            # Todo 列表
-│   └── StreamLog/           # SSE 执行过程展示
+│   └── StreamLog/           # 执行过程展示
 ├── hooks/
-│   ├── useSession.ts        # 统一 Session 封装（状态恢复 + 日志回放 + SSE 续接）
+│   ├── useSession.ts        # 统一 Session 封装（状态恢复 + 日志回放 + WebSocket 续接）
 │   ├── useStageChat.ts      # 通用阶段对话 Hook（各阶段 chat 的公共逻辑）
-│   ├── useInitProgress.ts   # 初始化进度 Hook（项目级 SSE 总线）
+│   ├── useInitProgress.ts   # 初始化进度 Hook（项目级 WebSocket 总线）
 │   ├── usePlanStage.ts      # 技术方案 Hook（plan 内容 + 对话 + plan_updated）
 │   ├── useTodoStage.ts      # 任务拆解 Hook（todo 列表 + 对话 + todo_updated）
 │   ├── useCodingStage.ts    # 编码 Hook（todo 执行 + diff + 对话 + code_updated）
-│   ├── useSSE.ts            # 底层 SSE 连接封装
 │   └── useChat.ts           # 对话逻辑封装
+├── ws/
+│   ├── WebSocketClient.ts   # 单例 WebSocket 客户端（连接管理 + 频道订阅 + chat）
+│   ├── useWebSocket.ts      # App 级 WebSocket 连接生命周期 Hook
+│   └── index.ts             # barrel export
 └── api/
     └── index.ts             # API 请求封装
 ```
@@ -734,7 +766,7 @@ async def check_settings(db: Session = Depends(get_db)):
 
 ### 4.3 useSession — 统一 Session 前端封装
 
-所有 AI 交互页面复用同一个 hook，自动处理状态恢复、日志回放和 SSE 续接：
+所有 AI 交互页面复用同一个 hook，自动处理状态恢复、日志回放和 WebSocket 续接：
 
 ```typescript
 // hooks/useSession.ts
@@ -755,19 +787,17 @@ function useSession(sessionId: string) {
   }, [sessionId]);
 
   useEffect(() => {
-    // 3. 如果还在跑，接 SSE 实时推送
+    // 3. 如果还在跑，通过 WebSocket 订阅实时推送
     if (status !== 1) return;  // not running
-    const es = new EventSource(`/api/sessions/${sessionId}/stream`);
-    es.onmessage = (e) => {
-      const event = JSON.parse(e.data);
+    const channel = `session:${sessionId}`;
+    const unsub = wsClient.subscribe(channel, (event) => {
       if (event.type === 'status_change') {
         setStatus(event.status);
-        if (event.status === 2 || event.status === 3) es.close();  // done or failed
       } else {
         setLogs(prev => [...prev, event]);
       }
-    };
-    return () => es.close();
+    });
+    return () => unsub();
   }, [sessionId, status]);
 
   return { status, logs };
@@ -792,7 +822,7 @@ function CodingStage({ taskId, todoId }: { taskId: string; todoId: string }) {
 
 ### 4.3.1 useInitProgress — 初始化进度 Hook
 
-初始化页面不适合为每个 session 单独创建 useSession（session 数量动态、需要感知 0→1 状态变更），使用项目级 SSE 总线：
+初始化页面不适合为每个 session 单独创建 useSession（session 数量动态、需要感知 0→1 状态变更），使用项目级 WebSocket 总线：
 
 ```typescript
 // hooks/useInitProgress.ts
@@ -808,29 +838,25 @@ function useInitProgress(projectId: string) {
   }, [projectId]);
 
   useEffect(() => {
-    // 2. 连接项目级 SSE 总线，监听状态变更
-    const es = new EventSource(`/api/projects/${projectId}/init/stream`);
-
-    es.addEventListener("session_status", (e) => {
-      const { session_id, status, layer, error } = JSON.parse(e.data);
-      setSessions(prev => {
-        const updated = { ...prev };
-        const layerSessions = [...(updated[layer] || [])];
-        const idx = layerSessions.findIndex(s => s.session_id === session_id);
-        if (idx >= 0) {
-          layerSessions[idx] = { ...layerSessions[idx], status, error };
-          updated[layer] = layerSessions;
-        }
-        return updated;
-      });
+    // 2. 通过 WebSocket 订阅项目级总线，监听状态变更
+    const channel = `project:init:${projectId}`;
+    const unsub = wsClient.subscribe(channel, (event) => {
+      if (event.type === "session_status") {
+        const { session_id, status, layer, error } = event;
+        setSessions(prev => {
+          const updated = { ...prev };
+          const layerSessions = [...(updated[layer] || [])];
+          const idx = layerSessions.findIndex(s => s.session_id === session_id);
+          if (idx >= 0) {
+            layerSessions[idx] = { ...layerSessions[idx], status, error };
+            updated[layer] = layerSessions;
+          }
+          return updated;
+        });
+      }
     });
 
-    es.addEventListener("done", () => {
-      setAllDone(true);
-      es.close();
-    });
-
-    return () => es.close();
+    return () => unsub();
   }, [projectId]);
 
   return { sessions, allDone };
@@ -862,7 +888,7 @@ function SessionDetail({ sessionId }: { sessionId: string }) {
 
 ### 4.3.2 usePlanStage — 技术方案阶段 Hook
 
-技术方案页面是"左面 plan 内容 + 右面 AI 对话"的双面板模式。初次生成通过 `useSession` 接 SSE，后续对话通过 `POST /plan/chat` 的 SSE 流式返回，检测到文件写入时自动刷新左面 plan 内容。
+技术方案页面是"左面 plan 内容 + 右面 AI 对话"的双面板模式。初次生成通过 `useSession` 接 WebSocket 推送，后续对话通过 WebSocket `sendChat` 流式返回，检测到文件写入时自动刷新左面 plan 内容。
 
 ```typescript
 // hooks/usePlanStage.ts
@@ -883,7 +909,7 @@ function usePlanStage(taskId: string) {
   // 流式状态
   const [streaming, setStreaming] = useState(false);
 
-  // 初次生成的 session 状态（useSession 处理 SSE）
+  // 初次生成的 session 状态（useSession 处理 WebSocket 推送）
   const generation = useSession(sessionId);
 
   // 初始加载：拿 plan 内容 + 历史对话日志
@@ -905,22 +931,16 @@ function usePlanStage(taskId: string) {
     }
   }, [generation.status]);
 
-  // 发送聊天消息
-  async function sendMessage(text: string) {
+  // 发送聊天消息（通过 WebSocket）
+  function sendMessage(text: string) {
     setMessages(prev => [...prev, { role: "user", content: text }]);
     setStreaming(true);
 
     const aiMsg: Message = { role: "ai", content: "", tools: [] };
     setMessages(prev => [...prev, aiMsg]);
 
-    // POST 返回 SSE 流（使用 fetch + ReadableStream 解析）
-    const resp = await fetch(`/api/tasks/${taskId}/plan/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: text }),
-    });
-
-    for await (const event of parseSSEStream(resp.body!)) {
+    // 通过 WebSocket 发送 chat，回调接收流式事件
+    cancelRef.current = wsClient.sendChat("plan", taskId, text, (event) => {
       switch (event.type) {
         case "text_delta":
           aiMsg.content += event.content;
@@ -942,10 +962,10 @@ function usePlanStage(taskId: string) {
           setPlanContent(event.content);
           break;
         case "done":
+          setStreaming(false);
           break;
       }
-    }
-    setStreaming(false);
+    });
   }
 
   return { planContent, messages, sendMessage, streaming, generation };
@@ -993,7 +1013,7 @@ function PlanStage({ taskId }: { taskId: string }) {
 ├──────────────────────────────────────────────────────┤
 │                           │                          │
 │   左侧：plan.md 内容       │   右侧：AI 对话框         │
-│   （Markdown 渲染）        │   + SSE 执行日志          │
+│   （Markdown 渲染）        │   + 执行日志              │
 │                           │                          │
 └───────────────────────────┴──────────────────────────┘
 ```
@@ -1006,7 +1026,7 @@ function PlanStage({ taskId }: { taskId: string }) {
 │             │                  │                    │
 │  左侧        │  中间             │  右侧              │
 │  Todo 列表   │  执行日志 + diff  │  AI 对话框          │
-│  （可点击执行）│  （SSE 实时推送） │                    │
+│  （可点击执行）│  （实时推送）     │                    │
 │             │                  │                    │
 └─────────────┴──────────────────┴────────────────────┘
 ```
@@ -1057,7 +1077,7 @@ async def init_project(project_id: str, repos: list[Repo]):
 
     # ---- Layer 1: 资源准备 ----
     await asyncio.gather(
-        SessionRunner(f"init:{project_id}:skill_fetch", sse, db)
+        SessionRunner(f"init:{project_id}:skill_fetch", ws, db)
             .run(cody_config=..., prompt=...),
         *[prepare_repo(repo) for repo in repos]
     )
@@ -1067,7 +1087,7 @@ async def init_project(project_id: str, repos: list[Repo]):
     for repo in repos:
         for kt in get_knowledge_types(repo.repo_type):
             layer2_tasks.append(
-                SessionRunner(f"init:{project_id}:{kt}", sse, db)
+                SessionRunner(f"init:{project_id}:{kt}", ws, db)
                     .run(cody_config=..., prompt=build_prompt(kt, repo))
             )
     await asyncio.gather(*layer2_tasks, return_exceptions=True)
@@ -1075,13 +1095,13 @@ async def init_project(project_id: str, repos: list[Repo]):
     # ---- Layer 3: 跨仓整合 ----
     layer3_types = ["module_overview", "api_interaction", "data_entity", "dependencies"]
     await asyncio.gather(*[
-        SessionRunner(f"init:{project_id}:{kt}", sse, db)
+        SessionRunner(f"init:{project_id}:{kt}", ws, db)
             .run(cody_config=..., prompt=build_prompt(kt))
         for kt in layer3_types
     ], return_exceptions=True)
 
     # ---- Layer 4: 生成 project.md ----
-    await SessionRunner(f"init:{project_id}:project_md", sse, db) \
+    await SessionRunner(f"init:{project_id}:project_md", ws, db) \
         .run(cody_config=..., prompt=build_project_md_prompt())
 ```
 
@@ -1112,18 +1132,18 @@ async def init_project(project_id: str, repos: list[Repo]):
    c. 立即返回所有 sessions 列表（前端据此渲染初始化面板）
 3. 前端收到 sessions 列表后：
    a. 按 layer 分组渲染进度面板
-   b. 连接 GET /api/projects/{id}/init/stream（项目级 SSE 总线）
+   b. 通过 WebSocket 订阅 `project:init:{project_id}` 频道
    c. 监听所有 session 的状态变更事件
 4. Layer 1: 并发执行资源准备（Skill 拉取 + 仓库 clone/pull）
 5. Layer 2: 并发执行各仓库独立分析，每个知识点通过 SessionRunner 执行：
    a. 状态写入 sessions 表（1=running → 2=done/3=failed）
    b. 过程日志追加写入 ~/.daiflow/sessions/{session_id}.jsonl
-   c. 通过项目级 SSE 总线推送状态变更给前端
+   c. 通过项目级 WebSocket 总线推送状态变更给前端
    d. 生成内容写入 projects/{project_id}/skills/{knowledge_type}/SKILL.md
 6. Layer 3: 第二层全部完成后，并发执行跨仓库整合分析
 7. Layer 4: 第三层全部完成后，生成 project.md 知识库索引文件
 8. 前端交互：
-   - 项目级 SSE 总线推送 session 状态变更（0→1→2/3）
+   - 项目级 WebSocket 总线推送 session 状态变更（0→1→2/3）
    - 用户点击某个 session 查看详情时，通过统一 Session API 获取日志
    - 浏览器关闭再打开时，GET /api/projects/{id}/init/sessions 恢复全局进度
 ```
@@ -1161,11 +1181,11 @@ async def start_init(project_id: str, bg: BackgroundTasks, db=Depends(get_db)):
     return {"sessions": [s.to_dict() for s in sessions]}
 ```
 
-### 5.3.2 项目级 SSE 总线
+### 5.3.2 项目级 WebSocket 总线
 
 初始化涉及多个 session 并发执行，前端需要一个统一入口感知所有 session 的状态变更（尤其是 0→1 即 waiting→running 的转换）。
 
-**设计：** 使用 SSEManager 的 channel 机制，以 `project:init:{project_id}` 为 channel。SessionRunner 在状态变更时同时向两个 channel 推送：
+**设计：** 使用 WSManager 的 channel 机制，以 `project:init:{project_id}` 为 channel。SessionRunner 在状态变更时同时向两个 channel 推送：
 - `session:{session_id}` — 单 session 详细事件（text_delta / tool_call 等）
 - `project:init:{project_id}` — 项目级状态摘要事件
 
@@ -1176,7 +1196,7 @@ async def _set_status(self, status: int, error: str = None, usage: dict = None):
 
     # 如果是 init 类型，额外推送到项目级 channel
     if self.session.type == "init":
-        await self.sse.publish(
+        await self.ws.publish(
             f"project:init:{self.session.ref_id}",
             {
                 "event": "session_status",
@@ -1188,24 +1208,17 @@ async def _set_status(self, status: int, error: str = None, usage: dict = None):
         )
 ```
 
-```python
-@router.get("/projects/{project_id}/init/stream")
-async def init_stream(project_id: str):
-    """项目级 SSE 总线：推送所有初始化 session 的状态变更"""
-    channel = f"project:init:{project_id}"
-    queue = sse_manager.subscribe(channel)
-    try:
-        async def event_generator():
-            while True:
-                data = await queue.get()
-                if data is None:  # 所有层完成，发送终止信号
-                    yield {"event": "done", "data": "{}"}
-                    break
-                yield {"event": "session_status", "data": json.dumps(data)}
-        return EventSourceResponse(event_generator())
-    finally:
-        sse_manager.unsubscribe(channel, queue)
+前端通过 WebSocket 订阅 `project:init:{project_id}` 频道即可接收所有初始化 session 的状态变更：
+
+```typescript
+// 前端订阅
+const unsub = wsClient.subscribe(`project:init:${projectId}`, (event) => {
+  // event: { type: "session_status", session_id, status, layer, error }
+  updateSessionProgress(event);
+});
 ```
+
+后端 `ws_manager.publish()` 自动将事件推送到所有订阅该频道的 WebSocket 连接。
 
 ### 5.3.3 查询初始化 Sessions
 
@@ -1724,10 +1737,10 @@ DaiFlow 的四个开发阶段（Plan / Todo / Coding / Review）共享同一套 
 ├───────────────────────────────────────────────────────────┤
 │                                                           │
 │  1. AI 初始生成                                            │
-│     SessionRunner 后台执行 → useSession 接 SSE 看日志       │
+│     SessionRunner 后台执行 → useSession 接 WebSocket 看日志  │
 │                                                           │
 │  2. 人机对话                                               │
-│     POST /xxx/chat → SSE 流式返回 → 右面板逐字显示          │
+│     WS chat action → WebSocket 流式返回 → 右面板逐字显示     │
 │                                                           │
 │  3. 左面板联动                                              │
 │     检测 write_file/edit_file 的 tool_result               │
@@ -1757,46 +1770,49 @@ DaiFlow 的四个开发阶段（Plan / Todo / Coding / Review）共享同一套 
 **通用 chat 后端模板（伪代码）：**
 
 ```python
-async def stage_chat(session_id: str, cody_session_id: str, message: str,
-                     cody_config: dict, on_file_write: Callable):
-    """所有阶段 chat 共用的核心逻辑"""
+async def run_stage_chat(ws: WebSocket, session_id: str, cody_session_id: str,
+                         message: str, cody_config: dict, on_file_write: Callable):
+    """所有阶段 chat 共用的核心逻辑，通过 WebSocket 推送"""
     log_path = Path.home() / f".daiflow/sessions/{session_id}.jsonl"
 
-    async def event_generator():
-        # 1. 记录用户消息到 .jsonl
-        user_event = {"type": "user_message", "content": message}
-        append_jsonl(log_path, user_event)
+    # 1. 记录用户消息到 .jsonl
+    user_event = {"type": "user_message", "content": message}
+    append_jsonl(log_path, user_event)
 
-        # 2. 调用 Cody SDK 流式对话
-        async with AsyncCodyClient(**cody_config) as cody:
-            async for chunk in cody.run_stream(message, session_id=cody_session_id):
-                if chunk.type == "compact":
-                    continue
-                if chunk.type == "done":
-                    yield sse_event({"type": "done", "usage": chunk.usage})
-                    break
+    # 2. 调用 Cody SDK 流式对话
+    async with AsyncCodyClient(**cody_config) as cody:
+        async for chunk in cody.run_stream(message, session_id=cody_session_id):
+            if chunk.type == "compact":
+                continue
+            if chunk.type == "done":
+                await ws.send_json({"type": "done", "usage": chunk.usage})
+                break
 
-                event = SessionRunner._chunk_to_event(chunk)
-                append_jsonl(log_path, event)
-                yield sse_event(event)
+            event = SessionRunner._chunk_to_event(chunk)
+            append_jsonl(log_path, event)
+            await ws.send_json(event)
 
-                # 3. 检测文件写入 → 调用阶段特定的回调
-                if chunk.type == "tool_result" and chunk.tool_name in ("write_file", "edit_file"):
-                    updated_event = on_file_write(chunk)
-                    if updated_event:
-                        append_jsonl(log_path, updated_event)
-                        yield sse_event(updated_event)
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+            # 3. 检测文件写入 → 调用阶段特定的回调
+            if chunk.type == "tool_result" and chunk.tool_name in ("write_file", "edit_file"):
+                updated_event = on_file_write(chunk)
+                if updated_event:
+                    append_jsonl(log_path, updated_event)
+                    await ws.send_json(updated_event)
 ```
 
 **通用前端 Hook 模板：**
 
 ```typescript
 // hooks/useStageChat.ts — 各阶段 chat 的通用逻辑
-function useStageChat(chatUrl: string, sessionId: string, onUpdated?: (event: any) => void) {
+function useStageChat({ sessionId, stage, entityId, onUpdated }: {
+  sessionId: string;
+  stage: "plan" | "todo" | "todo_exec" | "review";
+  entityId: string;
+  onUpdated?: (event: any) => void;
+}) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [streaming, setStreaming] = useState(false);
+  const cancelRef = useRef<(() => void) | null>(null);
 
   // 从 .jsonl 日志恢复历史对话
   useEffect(() => {
@@ -1805,19 +1821,14 @@ function useStageChat(chatUrl: string, sessionId: string, onUpdated?: (event: an
       .then(logs => setMessages(rebuildMessages(logs)));
   }, [sessionId]);
 
-  async function sendMessage(text: string) {
+  function sendMessage(text: string) {
     setMessages(prev => [...prev, { role: "user", content: text }]);
     setStreaming(true);
     const aiMsg: Message = { role: "ai", content: "", tools: [] };
     setMessages(prev => [...prev, aiMsg]);
 
-    const resp = await fetch(chatUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: text }),
-    });
-
-    for await (const event of parseSSEStream(resp.body!)) {
+    // 通过 WebSocket 发送 chat，回调接收流式事件
+    cancelRef.current = wsClient.sendChat(stage, entityId, text, (event) => {
       switch (event.type) {
         case "text_delta":
           aiMsg.content += event.content;
@@ -1840,10 +1851,10 @@ function useStageChat(chatUrl: string, sessionId: string, onUpdated?: (event: an
           onUpdated?.(event);
           break;
         case "done":
+          setStreaming(false);
           break;
       }
-    }
-    setStreaming(false);
+    });
   }
 
   return { messages, sendMessage, streaming };
@@ -1858,10 +1869,10 @@ function usePlanStage(taskId: string) {
   const [planContent, setPlanContent] = useState("");
   const sessionId = `task:${taskId}:plan`;
   const generation = useSession(sessionId);
-  const chat = useStageChat(
-    `/api/tasks/${taskId}/plan/chat`, sessionId,
-    (event) => setPlanContent(event.content)  // plan_updated 直接推全文
-  );
+  const chat = useStageChat({
+    sessionId, stage: "plan", entityId: taskId,
+    onUpdated: (event) => setPlanContent(event.content)  // plan_updated 直接推全文
+  });
   // ...加载初始 planContent
   return { planContent, ...chat, generation };
 }
@@ -1871,10 +1882,10 @@ function useTodoStage(taskId: string) {
   const [todos, setTodos] = useState<Todo[]>([]);
   const sessionId = `task:${taskId}:todo_split`;
   const generation = useSession(sessionId);
-  const chat = useStageChat(
-    `/api/tasks/${taskId}/todo/chat`, sessionId,
-    (event) => setTodos(JSON.parse(event.content))  // todo_updated 推 JSON
-  );
+  const chat = useStageChat({
+    sessionId, stage: "todo", entityId: taskId,
+    onUpdated: (event) => setTodos(JSON.parse(event.content))  // todo_updated 推 JSON
+  });
   return { todos, ...chat, generation };
 }
 
@@ -1883,10 +1894,10 @@ function useCodingStage(taskId: string, todoId: string) {
   const [diff, setDiff] = useState("");
   const sessionId = `task:${taskId}:todo:${todoId}`;
   const generation = useSession(sessionId);
-  const chat = useStageChat(
-    `/api/todos/${todoId}/chat`, sessionId,
-    () => refreshDiff(taskId)  // code_updated 触发重新拉 diff
-  );
+  const chat = useStageChat({
+    sessionId, stage: "todo_exec", entityId: todoId,
+    onUpdated: () => refreshDiff(taskId)  // code_updated 触发重新拉 diff
+  });
   async function refreshDiff(tid: string) {
     const resp = await fetch(`/api/tasks/${tid}/diff`);
     setDiff(await resp.text());
@@ -1954,7 +1965,7 @@ async def initialize_task(task_id: str):
 
 ```python
 async def generate_plan(task_id: str):
-    """通过 SessionRunner 执行，自动处理 SSE 推送 + 日志持久化 + 状态写 DB"""
+    """通过 SessionRunner 执行，自动处理 WebSocket 推送 + 日志持久化 + 状态写 DB"""
     task = get_task(task_id)
     project = get_project(task.project_id)
 
@@ -1972,7 +1983,7 @@ async def generate_plan(task_id: str):
 
     runner = SessionRunner(
         session_id=f"task:{task_id}:plan",
-        sse_manager=sse_manager, db=db
+        ws_manager=ws_manager, db=db
     )
     await runner.run(cody_config=cody_config, prompt=prompt)
 
@@ -1985,66 +1996,11 @@ async def generate_plan(task_id: str):
 Plan 生成后，用户可以在右侧聊天框与 AI 讨论修改方案。**对话复用同一个 Cody session**，上下文连续。
 
 **关键设计：**
-- `POST /api/tasks/{id}/plan/chat` **返回 SSE 流**（不是普通 JSON），支持 AI 回复逐字显示
+- 通过 WebSocket `action: "chat"` 发起对话，支持 AI 回复逐字显示
 - 检测到文件写入时（`tool_result` 且 `tool_name` 为 `write_file` / `edit_file`），注入 `plan_updated` 事件，直接把最新 plan 内容推给前端
 - 左面 plan 内容实时刷新，无需前端额外请求
 
-**后端实现：**
-
-```python
-@router.post("/tasks/{task_id}/plan/chat")
-async def plan_chat(task_id: str, body: ChatRequest, db=Depends(get_db)):
-    """技术方案阶段对话 —— SSE 流式返回，复用 Cody session"""
-    task = get_task(db, task_id)
-    session_id = f"task:{task_id}:plan"
-    log_path = Path.home() / f".daiflow/sessions/{session_id}.jsonl"
-
-    extra_roots = [repo.local_path for repo in get_project(task.project_id).repos]
-    cody_config = build_cody_config(
-        workdir=f"~/.daiflow/tasks/{task_id}",
-        extra_roots=extra_roots
-    )
-
-    current_plan = task.tech_plan or ""
-
-    async def event_generator():
-        # 先记录用户消息到日志（重进页面时能还原完整对话链）
-        user_event = {"type": "user_message", "content": body.message}
-        with open(log_path, "a") as f:
-            f.write(json.dumps(user_event, ensure_ascii=False) + "\n")
-
-        async with AsyncCodyClient(**cody_config) as cody:
-            async for chunk in cody.run_stream(
-                body.message,
-                session_id=task.plan_cody_session_id  # 复用已有 Cody session
-            ):
-                if chunk.type in ("compact",):
-                    continue
-                if chunk.type == "done":
-                    yield f"data: {json.dumps({'type': 'done', 'usage': chunk.usage})}\n\n"
-                    break
-
-                event = SessionRunner._chunk_to_event(chunk)
-
-                # AI 事件写日志文件（支持关闭后回放）
-                with open(log_path, "a") as f:
-                    f.write(json.dumps(event, ensure_ascii=False) + "\n")
-
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-
-                # 检测文件写入 → 注入 plan_updated 事件
-                nonlocal current_plan
-                if chunk.type == "tool_result" and chunk.tool_name in ("write_file", "edit_file"):
-                    new_plan = read_plan_file(task_id)
-                    if new_plan != current_plan:
-                        current_plan = new_plan
-                        task.tech_plan = new_plan
-                        db.commit()
-                        plan_event = {"type": "plan_updated", "content": new_plan}
-                        yield f"data: {json.dumps(plan_event, ensure_ascii=False)}\n\n"
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
-```
+> **对话通过 WebSocket 进行：** 前端通过 `WS /api/ws` 发送 `{"action": "chat", "chat_path": "plan", "entity_id": task_id, "message": "..."}`, 后端调用 `prepare_stage_chat()` + `run_stage_chat()` 处理，事件通过 `ws.send_json()` 推送。
 
 **事件流示例：**
 
@@ -2053,7 +2009,7 @@ async def plan_chat(task_id: str, body: ChatRequest, db=Depends(get_db)):
 
 .jsonl 写入: {"type": "user_message", "content": "token 刷新在 utils/auth.ts 已有，不用单独处理"}
 
-SSE 推送:
+WebSocket 推送:
 → data: {"type": "thinking", "content": "用户说 token 刷新已有..."}
 → data: {"type": "text_delta", "content": "好的，"}
 → data: {"type": "text_delta", "content": "已移除 token 刷新的注意事项。"}
@@ -2063,7 +2019,7 @@ SSE 推送:
 → data: {"type": "done", "usage": {"total_tokens": 856}}
 ```
 
-> `user_message` 仅写入 `.jsonl` 文件，不通过 SSE 推给前端（前端已经知道用户说了什么）。重进页面时 `rebuildMessages()` 从 `.jsonl` 读到 `user_message` 事件，还原出完整的对话链。
+> `user_message` 仅写入 `.jsonl` 文件，不通过 WebSocket 推给前端（前端已经知道用户说了什么）。重进页面时 `rebuildMessages()` 从 `.jsonl` 读到 `user_message` 事件，还原出完整的对话链。
 
 ### 6.3 任务拆解生成
 
@@ -2110,7 +2066,7 @@ async def generate_todo(task_id: str):
     # 复用技术方案阶段的 Cody session（通过 plan_cody_session_id）
     runner = SessionRunner(
         session_id=f"task:{task_id}:todo_split",
-        sse_manager=sse_manager, db=db
+        ws_manager=ws_manager, db=db
     )
     await runner.run(cody_config=cody_config, prompt=prompt)
     # runner.cody_session_id == task.plan_cody_session_id（同一个 Cody 对话）
@@ -2125,55 +2081,7 @@ Todo 生成后，用户可以与 AI 讨论调整拆解结果。**对话复用 `p
 - 检测到文件写入时读取 `todo.json` 而非 `plan.md`
 - 不更新 DB 字段（todos 尚未写入 DB，仍是文件形态）
 
-**后端实现：**
-
-```python
-@router.post("/tasks/{task_id}/todo/chat")
-async def todo_chat(task_id: str, body: ChatRequest, db=Depends(get_db)):
-    """任务拆解阶段对话 —— SSE 流式返回，复用 Cody session"""
-    task = get_task(db, task_id)
-    session_id = f"task:{task_id}:todo_split"
-    log_path = Path.home() / f".daiflow/sessions/{session_id}.jsonl"
-
-    extra_roots = [repo.local_path for repo in get_project(task.project_id).repos]
-    cody_config = build_cody_config(
-        workdir=f"~/.daiflow/tasks/{task_id}",
-        extra_roots=extra_roots
-    )
-
-    current_todos = read_todo_file(task_id)  # 读取当前 todo.json 内容
-
-    async def event_generator():
-        user_event = {"type": "user_message", "content": body.message}
-        append_jsonl(log_path, user_event)
-
-        async with AsyncCodyClient(**cody_config) as cody:
-            async for chunk in cody.run_stream(
-                body.message,
-                session_id=task.plan_cody_session_id  # 复用 Plan 阶段的 Cody session
-            ):
-                if chunk.type == "compact":
-                    continue
-                if chunk.type == "done":
-                    yield sse_event({"type": "done", "usage": chunk.usage})
-                    break
-
-                event = SessionRunner._chunk_to_event(chunk)
-                append_jsonl(log_path, event)
-                yield sse_event(event)
-
-                # 检测文件写入 → 注入 todo_updated 事件
-                nonlocal current_todos
-                if chunk.type == "tool_result" and chunk.tool_name in ("write_file", "edit_file"):
-                    new_todos = read_todo_file(task_id)
-                    if new_todos != current_todos:
-                        current_todos = new_todos
-                        todo_event = {"type": "todo_updated", "content": new_todos}
-                        append_jsonl(log_path, todo_event)
-                        yield sse_event(todo_event)
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
-```
+> **对话通过 WebSocket 进行：** 前端通过 `WS /api/ws` 发送 `{"action": "chat", "chat_path": "todo", "entity_id": task_id, "message": "..."}`, 后端调用 `prepare_stage_chat()` + `run_stage_chat()` 处理，事件通过 `ws.send_json()` 推送。
 
 ### 6.4 Todo 写入数据库
 
@@ -2244,7 +2152,7 @@ async def execute_todo(todo_id: str):
 
     runner = SessionRunner(
         session_id=f"task:{task.id}:todo:{todo_id}",
-        sse_manager=sse_manager, db=db
+        ws_manager=ws_manager, db=db
     )
     await runner.run(cody_config=cody_config, prompt=prompt)
 
@@ -2261,98 +2169,13 @@ Todo 执行完成后，用户可以与 AI 对话补充修改。**每个 todo 独
 - 前端收到 `code_updated` 后主动调用 `GET /api/tasks/{id}/diff` 重新拉取 diff
 - Cody session ID 来自 `todo.cody_session_id`（非 task 级别）
 
-**后端实现：**
-
-```python
-@router.post("/todos/{todo_id}/chat")
-async def todo_execute_chat(todo_id: str, body: ChatRequest, db=Depends(get_db)):
-    """Todo 执行后对话 —— SSE 流式返回，复用该 todo 的 Cody session"""
-    todo = get_todo(db, todo_id)
-    task = get_task(db, todo.task_id)
-    session_id = f"task:{task.id}:todo:{todo_id}"
-    log_path = Path.home() / f".daiflow/sessions/{session_id}.jsonl"
-
-    extra_roots = [repo.local_path for repo in get_project(task.project_id).repos]
-    cody_config = build_cody_config(
-        workdir=f"~/.daiflow/tasks/{task.id}",
-        extra_roots=extra_roots
-    )
-
-    async def event_generator():
-        user_event = {"type": "user_message", "content": body.message}
-        append_jsonl(log_path, user_event)
-
-        async with AsyncCodyClient(**cody_config) as cody:
-            async for chunk in cody.run_stream(
-                body.message,
-                session_id=todo.cody_session_id  # 复用该 todo 的 Cody session
-            ):
-                if chunk.type == "compact":
-                    continue
-                if chunk.type == "done":
-                    yield sse_event({"type": "done", "usage": chunk.usage})
-                    break
-
-                event = SessionRunner._chunk_to_event(chunk)
-                append_jsonl(log_path, event)
-                yield sse_event(event)
-
-                # 检测文件写入 → 注入 code_updated 事件（不推内容，前端自行拉 diff）
-                if chunk.type == "tool_result" and chunk.tool_name in ("write_file", "edit_file"):
-                    code_event = {"type": "code_updated", "content": None}
-                    append_jsonl(log_path, code_event)
-                    yield sse_event(code_event)
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
-```
+> **对话通过 WebSocket 进行：** 前端通过 `WS /api/ws` 发送 `{"action": "chat", "chat_path": "todo_exec", "entity_id": todo_id, "message": "..."}`, 后端调用 `prepare_stage_chat()` + `run_stage_chat()` 处理，事件通过 `ws.send_json()` 推送。
 
 ### 6.6 代码审查与提交
 
 用户进入 Review 阶段后，左侧展示整体 git diff，右侧可与 AI 对话讨论代码改动。
 
-**后端实现：**
-
-```python
-@router.post("/tasks/{task_id}/review/chat")
-async def review_chat(task_id: str, body: ChatRequest, db=Depends(get_db)):
-    """代码审查阶段对话 —— SSE 流式返回，独立 Cody session"""
-    task = get_task(db, task_id)
-    session_id = f"task:{task_id}:review"
-    log_path = Path.home() / f".daiflow/sessions/{session_id}.jsonl"
-
-    extra_roots = [repo.local_path for repo in get_project(task.project_id).repos]
-    cody_config = build_cody_config(
-        workdir=f"~/.daiflow/tasks/{task_id}",
-        extra_roots=extra_roots
-    )
-
-    async def event_generator():
-        user_event = {"type": "user_message", "content": body.message}
-        append_jsonl(log_path, user_event)
-
-        async with AsyncCodyClient(**cody_config) as cody:
-            async for chunk in cody.run_stream(
-                body.message,
-                session_id=task.review_cody_session_id
-            ):
-                if chunk.type == "compact":
-                    continue
-                if chunk.type == "done":
-                    yield sse_event({"type": "done", "usage": chunk.usage})
-                    break
-
-                event = SessionRunner._chunk_to_event(chunk)
-                append_jsonl(log_path, event)
-                yield sse_event(event)
-
-                # 检测文件写入 → 注入 code_updated（前端刷新 diff）
-                if chunk.type == "tool_result" and chunk.tool_name in ("write_file", "edit_file"):
-                    code_event = {"type": "code_updated", "content": None}
-                    append_jsonl(log_path, code_event)
-                    yield sse_event(code_event)
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
-```
+> **对话通过 WebSocket 进行：** 前端通过 `WS /api/ws` 发送 `{"action": "chat", "chat_path": "review", "entity_id": task_id, "message": "..."}`, 后端调用 `prepare_stage_chat()` + `run_stage_chat()` 处理，事件通过 `ws.send_json()` 推送。
 
 > Review 阶段使用独立的 `review_cody_session_id`（需在 tasks 表新增字段），因为 review 阶段关注点不同于 plan/todo，独立 session 更清晰。
 
@@ -2438,13 +2261,13 @@ if __name__ == "__main__":
 
 ---
 
-### 阶段四：基础设施 — SSEManager + SessionRunner
+### 阶段四：基础设施 — WSManager + SessionRunner
 
-- [ ] 后端：实现 `SSEManager`（进程内 asyncio.Queue pub/sub 消息总线）
-- [ ] 后端：实现 `SessionRunner`（统一 AI 任务执行器：Cody 调用 + 日志写文件 + 状态写 DB + SSE 推送）
-- [ ] 后端：实现统一 Session API（`GET /api/sessions/{id}/status`、`/logs`、`/stream`）
-- [ ] 前端：实现 `useSession` hook（状态恢复 + 日志回放 + SSE 续接）
-- [ ] 验证：SessionRunner 执行后 DB 状态正确、.jsonl 日志可回放、SSE 实时推送正常
+- [ ] 后端：实现 `WSManager`（进程内 WebSocket pub/sub 消息总线）
+- [ ] 后端：实现 `SessionRunner`（统一 AI 任务执行器：Cody 调用 + 日志写文件 + 状态写 DB + WebSocket 推送）
+- [ ] 后端：实现统一 Session API（`GET /api/sessions/{id}/status`、`/logs`、`WS /api/ws` 订阅）
+- [ ] 前端：实现 `useSession` hook（状态恢复 + 日志回放 + WebSocket 续接）
+- [ ] 验证：SessionRunner 执行后 DB 状态正确、.jsonl 日志可回放、WebSocket 实时推送正常
 
 ---
 
@@ -2491,7 +2314,7 @@ if __name__ == "__main__":
 
 - [ ] 后端：实现任务拆解 prompt 模板 `TODO_PROMPT_TEMPLATE`
 - [ ] 后端：实现 `POST /api/tasks/{id}/todo` 触发后台生成 todo.json（通过 SessionRunner，复用 Cody session）
-- [ ] 后端：实现 `POST /api/tasks/{id}/todo/chat` 对话接口（SSE 流式返回，含 todo_updated 事件）
+- [ ] 后端：实现 `POST /api/tasks/{id}/todo/chat` 对话接口（流式返回，含 todo_updated 事件）
 - [ ] 后端：实现 `POST /api/tasks/{id}/start-coding`：将 `todo.json` 批量写入 todos 表，task status = 4（todo_ready）；用户点击「执行编码」按钮后 task status 变为 5（coding）
 - [ ] 前端：实现 `useTodoStage` Hook（复用 `useStageChat`，处理 todo_updated）
 - [ ] 前端：实现任务拆解阶段页面（左侧 todo 列表，右侧 AI 对话）
@@ -2503,7 +2326,7 @@ if __name__ == "__main__":
 
 - [ ] 后端：实现 todo 执行 prompt 模板 `TODO_EXECUTE_PROMPT_TEMPLATE`
 - [ ] 后端：实现 `POST /api/todos/{id}/execute` 触发后台执行单个 todo（通过 SessionRunner）
-- [ ] 后端：实现 `POST /api/todos/{id}/chat` 对话接口（SSE 流式返回，含 code_updated 事件）
+- [ ] 后端：实现 `POST /api/todos/{id}/chat` 对话接口（流式返回，含 code_updated 事件）
 - [ ] 后端：实现 `GET /api/tasks/{id}/todos` 获取 todo 列表及状态
 - [ ] 前端：实现 `useCodingStage` Hook（复用 `useStageChat`，处理 code_updated → 刷新 diff）
 - [ ] 前端：实现编写代码阶段页面（左侧 todo 列表含执行按钮，中间执行日志 + diff，右侧对话）
@@ -2517,7 +2340,7 @@ if __name__ == "__main__":
 
 - [ ] 后端：实现 `POST /api/tasks/{id}/start-review`：task status = 6（reviewing），创建独立 review Cody session
 - [ ] 后端：实现 `GET /api/tasks/{id}/diff`，调用 `git diff` 返回所有仓库的变更内容
-- [ ] 后端：实现 `POST /api/tasks/{id}/review/chat` 对话接口（SSE 流式返回，含 code_updated 事件）
+- [ ] 后端：实现 `POST /api/tasks/{id}/review/chat` 对话接口（流式返回，含 code_updated 事件）
 - [ ] 后端：实现 `POST /api/tasks/{id}/submit-mr`：AI 生成 commit message，执行 git commit + push，task status = 7（done）
 - [ ] 前端：实现代码审查阶段页面（左侧整体 diff 视图，右侧对话框，生成 MR 按钮）
 - [ ] 验证：diff 展示正确，对话可让 AI 修改代码并刷新 diff，commit message 合理，push 成功

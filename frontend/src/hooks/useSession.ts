@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { getSessionStatus, getSessionLogs, connectSSE } from '../api'
+import { getSessionStatus, getSessionLogs } from '../api'
+import { wsClient } from '../ws'
 
 export interface SessionEvent {
   type: string
@@ -29,7 +30,7 @@ export function useSession(sessionId: string | null) {
   useEffect(() => {
     if (!sessionId) return
 
-    let eventSource: { close: () => void } | null = null
+    let unsub: (() => void) | null = null
 
     async function load() {
       try {
@@ -44,10 +45,10 @@ export function useSession(sessionId: string | null) {
           setLogs(logsData)
         }
 
-        // 3. If running, connect SSE
+        // 3. If running, subscribe via WebSocket
         if (statusData.status === 1) {
-          eventSource = connectSSE(
-            `/sessions/${sessionId}/stream`,
+          unsub = wsClient.subscribe(
+            `session:${sessionId}`,
             (event) => {
               logsRef.current = [...logsRef.current, event]
               // Batch log updates via rAF
@@ -59,15 +60,6 @@ export function useSession(sessionId: string | null) {
                 if (event.error) setError(event.error)
               }
             },
-            () => {
-              eventSource = null
-              // Final flush on completion
-              if (rafRef.current !== null) {
-                cancelAnimationFrame(rafRef.current)
-                rafRef.current = null
-              }
-              flushLogs()
-            }
           )
         }
       } catch (err: any) {
@@ -77,7 +69,7 @@ export function useSession(sessionId: string | null) {
 
     load()
     return () => {
-      eventSource?.close()
+      unsub?.()
       if (rafRef.current !== null) {
         cancelAnimationFrame(rafRef.current)
         rafRef.current = null

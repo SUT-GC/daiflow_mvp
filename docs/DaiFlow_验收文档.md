@@ -67,7 +67,7 @@
 | P-09 | 知识库生成 - 第二层 | 第一层全部完成后 | 并发生成 4 个第二层知识点：<br>- `module_overview`<br>- `data_entity`<br>- `api_interaction`<br>- `dependencies`<br>均基于前端+后端跨仓库整合 | ☐ |
 | P-10 | 知识库生成 - 索引 | 两层全部完成后 | 生成 `projects/{id}/project.md` 索引文件，包含项目信息和所有知识文件路径 | ☐ |
 | P-11 | SKILL.md 格式 | 检查生成的 SKILL.md 文件 | 每个文件包含 YAML frontmatter（name、description、`user-invocable: false`）+ Markdown 正文 | ☐ |
-| P-12 | 初始化进度展示 | 初始化过程中观察页面 | SSE 实时推送每个知识点的生成进度和 Cody 执行日志 | ☐ |
+| P-12 | 初始化进度展示 | 初始化过程中观察页面 | WebSocket 实时推送每个知识点的生成进度和 Cody 执行日志 | ☐ |
 | P-13 | 初始化 session 记录 | 检查数据库 | `project_init_sessions` 表记录每个知识点的 session_id 和 status | ☐ |
 | P-14 | 编辑项目 | 在项目列表点击已有项目编辑 | 可修改项目名称、描述、仓库列表、Skill 名称 | ☐ |
 | P-15 | 删除项目 | 删除一个项目 | 1. 数据库中删除 project 和关联的 project_repos 记录<br>2. 本地 `projects/{id}/` 目录清理 | ☐ |
@@ -91,8 +91,8 @@
 
 | 编号 | 用例 | 操作步骤 | 预期结果 | 通过 |
 |------|------|---------|---------|------|
-| F1-01 | 页面布局 | 进入任务开发流程 | 1. 顶部显示四阶段进度条，当前高亮「技术方案」<br>2. 左侧展示 plan.md 内容区<br>3. 右侧展示 AI 对话框 + SSE 执行日志 | ☐ |
-| F1-02 | 自动生成方案 | 进入技术方案阶段 | AI 自动开始生成技术方案：<br>1. SSE 实时推送生成进度（text_delta、tool_call、tool_result 事件）<br>2. 左侧实时更新 plan.md 内容<br>3. 完成后收到 done 事件，包含 session_id | ☐ |
+| F1-01 | 页面布局 | 进入任务开发流程 | 1. 顶部显示四阶段进度条，当前高亮「技术方案」<br>2. 左侧展示 plan.md 内容区<br>3. 右侧展示 AI 对话框 + 执行日志 | ☐ |
+| F1-02 | 自动生成方案 | 进入技术方案阶段 | AI 自动开始生成技术方案：<br>1. WebSocket 实时推送生成进度（text_delta、tool_call、tool_result 事件）<br>2. 左侧实时更新 plan.md 内容<br>3. 完成后收到 done 事件，包含 session_id | ☐ |
 | F1-03 | 方案内容质量 | 查看生成的 plan.md | 包含：前端改动、后端改动、数据变更、影响范围、实施顺序 | ☐ |
 | F1-04 | AI 对话调整 | 在右侧对话框输入修改建议 | 1. AI 理解用户反馈<br>2. 修改反映到 plan.md<br>3. 使用相同的 session_id 保持上下文 | ☐ |
 | F1-05 | 多轮对话 | 连续发送多条修改意见 | 对话历史正常保留，AI 基于完整上下文回复 | ☐ |
@@ -105,7 +105,7 @@
 | 编号 | 用例 | 操作步骤 | 预期结果 | 通过 |
 |------|------|---------|---------|------|
 | F2-01 | 页面布局 | 进入任务拆解阶段 | 1. 顶部进度条高亮「任务拆解」<br>2. 左侧展示 todo 列表<br>3. 右侧展示 AI 对话框 | ☐ |
-| F2-02 | 自动生成 Todo | 锁定方案后 | AI 基于 plan.md 自动拆解，SSE 实时推送生成过程，使用与技术方案阶段相同的 session_id | ☐ |
+| F2-02 | 自动生成 Todo | 锁定方案后 | AI 基于 plan.md 自动拆解，WebSocket 实时推送生成过程，使用与技术方案阶段相同的 session_id | ☐ |
 | F2-03 | Todo 列表展示 | 生成完毕后 | 左侧展示有序的 todo 列表，每条包含序号、标题、详细描述 | ☐ |
 | F2-04 | Todo 数据持久化 | 检查文件和数据库 | 1. `tasks/{task_id}/todo.json` 写入 JSON 格式 todo 列表<br>2. todos 数据库表中写入对应记录（seq、title、description、status=pending） | ☐ |
 | F2-05 | AI 对话调整 | 在对话框中要求调整 todo | AI 修改同步到 todo.json 和数据库 todos 表 | ☐ |
@@ -118,10 +118,10 @@
 | 编号 | 用例 | 操作步骤 | 预期结果 | 通过 |
 |------|------|---------|---------|------|
 | F3-01 | 页面布局 | 进入编写代码阶段 | 三栏布局：<br>1. 左侧：todo 列表，显示各 todo 状态<br>2. 中间：执行日志 + diff 展示区<br>3. 右侧：AI 对话框 | ☐ |
-| F3-02 | 执行单个 Todo | 点击某个 todo 的执行按钮 | 1. todo 状态变为 running(1)<br>2. 任务状态变为 coding(5)<br>3. 中间区域 SSE 实时展示执行进度 | ☐ |
+| F3-02 | 执行单个 Todo | 点击某个 todo 的执行按钮 | 1. todo 状态变为 running(1)<br>2. 任务状态变为 coding(5)<br>3. 中间区域实时展示执行进度 | ☐ |
 | F3-03 | Todo 独立 Session | 执行 todo | 每个 todo 有独立的 session_id，存储在 todos.session_id 字段 | ☐ |
-| F3-04 | 执行结果展示 | todo 执行完成 | 1. 中间区域展示该 todo 产生的代码改动（diff 视图）<br>2. todo 状态变为 done(2)<br>3. 收到 SSE done 事件 | ☐ |
-| F3-05 | 执行失败处理 | todo 执行出错 | 1. todo 状态变为 failed(3)<br>2. 中间区域展示错误信息<br>3. 收到 SSE error 事件 | ☐ |
+| F3-04 | 执行结果展示 | todo 执行完成 | 1. 中间区域展示该 todo 产生的代码改动（diff 视图）<br>2. todo 状态变为 done(2)<br>3. 收到 done 事件 | ☐ |
+| F3-05 | 执行失败处理 | todo 执行出错 | 1. todo 状态变为 failed(3)<br>2. 中间区域展示错误信息<br>3. 收到 error 事件 | ☐ |
 | F3-06 | Todo 后对话 | todo 执行完成后在右侧对话框发消息 | 可与 AI 沟通补充或调整该 todo 的改动结果，使用该 todo 的 session_id | ☐ |
 | F3-07 | 顺序执行 | 依次执行多个 todo | 每个 todo 独立执行，前一个完成后再执行下一个，todo 间通过 plan.md 共享上下文 | ☐ |
 | F3-08 | 全部完成 | 所有 todo 执行完毕 | 出现「下一步」按钮，可进入代码审查阶段 | ☐ |
@@ -140,13 +140,13 @@
 
 ---
 
-### 3.9 SSE 流式推送
+### 3.9 WebSocket 实时推送
 
 | 编号 | 用例 | 操作步骤 | 预期结果 | 通过 |
 |------|------|---------|---------|------|
-| E-01 | SSE 事件格式 | 在任意 SSE 流式阶段观察 | 事件格式为 `data: {JSON}\n\n`，包含以下类型：<br>- `text_delta`：文本增量，含 content 字段<br>- `tool_call`：工具调用，含 tool_name 和 args<br>- `tool_result`：工具结果，含 tool_name 和 content<br>- `done`：完成，含 session_id<br>- `error`：错误，含 message | ☐ |
-| E-02 | SSE 连接建立 | 触发流式操作 | 前端通过 EventSource 建立连接，实时接收事件 | ☐ |
-| E-03 | SSE 连接关闭 | 收到 done 事件 | 前端主动关闭 EventSource 连接 | ☐ |
+| E-01 | WebSocket 事件格式 | 在任意流式阶段观察 | 事件通过 WebSocket 以 JSON 传输，使用 `{channel, event}` 信封格式，包含以下类型：<br>- `text_delta`：文本增量，含 content 字段<br>- `tool_call`：工具调用，含 tool_name 和 args<br>- `tool_result`：工具结果，含 tool_name 和 content<br>- `done`：完成，含 session_id<br>- `error`：错误，含 message | ☐ |
+| E-02 | WebSocket 连接建立 | 触发流式操作 | 前端通过 WebSocket 建立连接并 subscribe 频道，实时接收事件 | ☐ |
+| E-03 | 频道完成清理 | 收到 done 事件 | 收到 done 事件后前端 unsubscribe 频道 | ☐ |
 
 ---
 
@@ -163,7 +163,7 @@
 | A-07 | `PUT /api/projects/{id}` | 更新项目信息 | ☐ |
 | A-08 | `DELETE /api/projects/{id}` | 删除项目及关联数据 | ☐ |
 | A-09 | `POST /api/projects/{id}/init` | 触发项目初始化 | ☐ |
-| A-10 | `GET /api/projects/{id}/init/stream` | SSE 推送初始化进度 | ☐ |
+| A-10 | `WS /api/ws (subscribe)` | WebSocket 订阅初始化进度频道 | ☐ |
 | A-11 | `GET /api/tasks` | 返回任务列表 | ☐ |
 | A-12 | `POST /api/tasks` | 创建任务并执行初始化 | ☐ |
 | A-13 | `GET /api/tasks/{id}` | 返回任务详情 | ☐ |
@@ -171,12 +171,12 @@
 | A-15 | `POST /api/tasks/{id}/lock-plan` | 锁定方案，status → 3 | ☐ |
 | A-16 | `POST /api/tasks/{id}/start-coding` | 确认 todo，status → 4 | ☐ |
 | A-17 | `POST /api/tasks/{id}/start-review` | 进入审查，status → 6 | ☐ |
-| A-18 | `GET /api/tasks/{id}/plan/stream` | SSE 生成技术方案 | ☐ |
+| A-18 | `GET /api/tasks/{id}/plan/stream` | WebSocket 推送生成技术方案 | ☐ |
 | A-19 | `POST /api/tasks/{id}/plan/chat` | 方案阶段对话，返回 JSON | ☐ |
-| A-20 | `GET /api/tasks/{id}/todo/stream` | SSE 生成 todo 列表 | ☐ |
+| A-20 | `GET /api/tasks/{id}/todo/stream` | WebSocket 推送生成 todo 列表 | ☐ |
 | A-21 | `POST /api/tasks/{id}/todo/chat` | 拆解阶段对话 | ☐ |
 | A-22 | `GET /api/tasks/{id}/todos` | 返回 todo 列表 | ☐ |
-| A-23 | `POST /api/todos/{id}/execute/stream` | SSE 执行单个 todo | ☐ |
+| A-23 | `POST /api/todos/{id}/execute/stream` | WebSocket 推送执行单个 todo | ☐ |
 | A-24 | `POST /api/todos/{id}/chat` | todo 执行后对话 | ☐ |
 | A-25 | `GET /api/tasks/{id}/diff` | 返回整体 git diff | ☐ |
 | A-26 | `POST /api/tasks/{id}/submit-mr` | 生成 commit message 并提交 MR | ☐ |
@@ -233,7 +233,7 @@
        ↓
 3. 创建项目 → 填写名称、描述、添加前端+后端仓库、填写 Skill 名称
        ↓
-4. 等待项目初始化 → 观察 SSE 进度，确认 8 个知识点 + project.md 生成
+4. 等待项目初始化 → 观察 WebSocket 实时进度，确认 8 个知识点 + project.md 生成
        ↓
 5. 创建任务 → 填写名称、选择项目、填写分支名、粘贴 PRD
        ↓
@@ -241,7 +241,7 @@
        ↓
 7. 任务拆解阶段 → 观察 AI 自动生成 todo 列表，通过对话调整，点击「执行编码」
        ↓
-8. 编写代码阶段 → 逐个点击 todo 执行，观察 SSE 日志和 diff，与 AI 对话调整
+8. 编写代码阶段 → 逐个点击 todo 执行，观察执行日志和 diff，与 AI 对话调整
        ↓
 9. 代码审查阶段 → 查看整体 diff，确认无误后点击「生成 MR」
        ↓
@@ -262,7 +262,7 @@
 | 任务拆解 | 6 | | | |
 | 编写代码 | 8 | | | |
 | 代码审查 | 5 | | | |
-| SSE 推送 | 3 | | | |
+| WebSocket 推送 | 3 | | | |
 | API 接口 | 26 | | | |
 | 数据库 | 3 | | | |
 | 文件系统 | 8 | | | |

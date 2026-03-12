@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
-import { getSessionLogs, streamChat } from '../api'
+import { getSessionLogs } from '../api'
+import { wsClient, WSEvent } from '../ws'
 
 let _msgIdCounter = 0
 function nextMsgId() { return `msg_${++_msgIdCounter}_${Date.now()}` }
@@ -13,7 +14,10 @@ export interface ChatMessage {
 
 interface UseStageChatOptions {
   sessionId: string | null
-  chatPath: string
+  /** Chat stage: "plan" | "todo" | "todo_exec" | "review" */
+  stage: string
+  /** Entity ID: task_id for plan/todo/review, todo_id for todo_exec */
+  entityId: string
   onUpdated?: (event: any) => void
 }
 
@@ -50,12 +54,12 @@ function rebuildMessages(logs: any[]): ChatMessage[] {
   return messages
 }
 
-export function useStageChat({ sessionId, chatPath, onUpdated }: UseStageChatOptions) {
+export function useStageChat({ sessionId, stage, entityId, onUpdated }: UseStageChatOptions) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [streaming, setStreaming] = useState(false)
-  const abortRef = useRef<AbortController | null>(null)
+  const cancelRef = useRef<(() => void) | null>(null)
 
-  // Refs for rAF-throttled streaming updates (fixes #1 + #2)
+  // Refs for rAF-throttled streaming updates
   const aiContentRef = useRef('')
   const aiEventsRef = useRef<any[]>([])
   const aiIdRef = useRef('')
@@ -90,13 +94,11 @@ export function useStageChat({ sessionId, chatPath, onUpdated }: UseStageChatOpt
       .catch(err => console.error('Failed to load chat logs:', err))
   }, [sessionId])
 
-  const sendMessage = useCallback(async (text: string) => {
-    if (!text.trim() || streaming) return
+  const sendMessage = useCallback((text: string) => {
+    if (!text.trim() || streaming || !stage || !entityId) return
 
     // Cancel any previous stream
-    abortRef.current?.abort()
-    const controller = new AbortController()
-    abortRef.current = controller
+    cancelRef.current?.()
 
     // Add user message
     const userMsg: ChatMessage = { id: nextMsgId(), role: 'user', content: text }
@@ -112,32 +114,40 @@ export function useStageChat({ sessionId, chatPath, onUpdated }: UseStageChatOpt
     ])
     setStreaming(true)
 
-    try {
-      for await (const event of streamChat(chatPath, text, controller.signal)) {
-        if (event.type === 'text_delta') {
-          aiContentRef.current += event.content || ''
-          scheduleFlush()
-        } else if (event.type === 'thinking' || event.type === 'tool_call' || event.type === 'tool_result') {
-          aiEventsRef.current = [...aiEventsRef.current, event]
-          scheduleFlush()
-        } else if (event.type === 'plan_updated' || event.type === 'todo_updated' || event.type === 'code_updated') {
-          onUpdated?.(event)
-        } else if (event.type === 'done') {
-          break
+    cancelRef.current = wsClient.sendChat(stage, entityId, text, (event: WSEvent) => {
+      if (event.type === 'text_delta') {
+        aiContentRef.current += event.content || ''
+        scheduleFlush()
+      } else if (event.type === 'thinking' || event.type === 'tool_call' || event.type === 'tool_result') {
+        aiEventsRef.current = [...aiEventsRef.current, event]
+        scheduleFlush()
+      } else if (event.type === 'plan_updated' || event.type === 'todo_updated' || event.type === 'code_updated') {
+        onUpdated?.(event)
+      } else if (event.type === 'error') {
+        aiContentRef.current += `\n\n[Error: ${event.content || 'Unknown error'}]`
+        scheduleFlush()
+      } else if (event.type === 'done') {
+        // Final flush to ensure last state is rendered
+        if (rafRef.current !== null) {
+          cancelAnimationFrame(rafRef.current)
+          rafRef.current = null
         }
+        flushAIMessage()
+        setStreaming(false)
+        cancelRef.current = null
       }
-    } catch (err: any) {
-      aiContentRef.current += `\n\n[Error: ${err.message}]`
-    } finally {
-      // Final flush to ensure last state is rendered
+    })
+  }, [stage, entityId, streaming, onUpdated, scheduleFlush, flushAIMessage])
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      cancelRef.current?.()
       if (rafRef.current !== null) {
         cancelAnimationFrame(rafRef.current)
-        rafRef.current = null
       }
-      flushAIMessage()
-      setStreaming(false)
     }
-  }, [chatPath, streaming, onUpdated, scheduleFlush, flushAIMessage])
+  }, [])
 
   return { messages, sendMessage, streaming }
 }
