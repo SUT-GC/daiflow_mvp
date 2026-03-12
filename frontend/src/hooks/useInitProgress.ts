@@ -15,6 +15,7 @@ export interface InitSession {
 export function useInitProgress(projectId: string | null) {
   const [layers, setLayers] = useState<Record<number, InitSession[]>>({})
   const [done, setDone] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!projectId) return
@@ -54,8 +55,8 @@ export function useInitProgress(projectId: string | null) {
             }
           },
         )
-      } catch (err) {
-        console.error('Init progress error:', err)
+      } catch (err: any) {
+        setError(err.message || 'Failed to load init progress')
       }
     }
 
@@ -63,5 +64,5 @@ export function useInitProgress(projectId: string | null) {
     return () => { unsub?.() }
   }, [projectId])
 
-  return { layers, done }
+  return { layers, done, error }
 }

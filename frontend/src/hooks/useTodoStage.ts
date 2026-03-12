@@ -8,22 +8,23 @@ import { useStageChat } from './useStageChat'
 export function useTodoStage(taskId: string | undefined) {
   const [task, setTask] = useState<TaskData | null>(null)
   const [todos, setTodos] = useState<TodoData[]>([])
+  const [error, setError] = useState<string | null>(null)
 
   const refreshTodos = useCallback(() => {
     if (taskId) {
-      getTodos(taskId).then(setTodos).catch(err => console.error('Failed to load todos:', err))
+      getTodos(taskId).then(setTodos).catch(err => setError(err.message || 'Failed to load todos'))
     }
   }, [taskId])
 
   useEffect(() => {
     if (taskId) {
-      getTask(taskId).then(setTask).catch(err => console.error('Failed to load task:', err))
+      getTask(taskId).then(setTask).catch(err => setError(err.message || 'Failed to load task'))
       refreshTodos()
     }
   }, [taskId, refreshTodos])
 
   const sessionId = taskId ? `task:${taskId}:todo_split` : null
-  const { status, logs } = useSession(sessionId)
+  const { status, logs, error: sessionError } = useSession(sessionId)
 
   // Refresh todos when session completes (DB is synced at that point)
   useEffect(() => {
@@ -52,6 +53,7 @@ export function useTodoStage(taskId: string | undefined) {
     setTodos,
     status,
     logs,
+    error: error || sessionError,
     ...chat,
   }
 }

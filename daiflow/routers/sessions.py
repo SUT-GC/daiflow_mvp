@@ -29,14 +29,25 @@ async def get_session_status(session_id: str, db: AsyncSession = Depends(get_db)
 
 
 @router.get("/{session_id:path}/logs")
-async def get_session_logs(session_id: str):
+async def get_session_logs(session_id: str, limit: int = 5000, offset: int = 0):
     log_path = SESSIONS_DIR / f"{safe_filename(session_id)}.jsonl"
     if not log_path.exists():
         return []
     logs = []
+    line_num = 0
     with open(log_path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
-            if line:
+            if not line:
+                continue
+            if line_num < offset:
+                line_num += 1
+                continue
+            if len(logs) >= limit:
+                break
+            try:
                 logs.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass
+            line_num += 1
     return logs

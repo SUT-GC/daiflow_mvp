@@ -1,5 +1,6 @@
 """Tests for service layer logic."""
 
+import pytest
 import json
 import shutil
 import tempfile
@@ -154,8 +155,9 @@ class TestSyncTodosFromFile:
         db_session.add(t)
         await db_session.commit()
 
-        # Should not raise
-        await sync_todos_from_file(db_session, t.id, "not json")
+        # C1 fix: invalid JSON now raises ValueError instead of silently returning
+        with pytest.raises(ValueError):
+            await sync_todos_from_file(db_session, t.id, "not json")
 
 
 class TestStartCoding:

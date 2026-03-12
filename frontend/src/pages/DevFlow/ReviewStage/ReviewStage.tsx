@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import Topbar from '../../../components/Shell/Topbar'
 import StageProgress from '../../../components/StageProgress/StageProgress'
 import ChatPanel from '../../../components/ChatPanel/ChatPanel'
-import DiffViewer from '../../../components/DiffViewer/DiffViewer'
+import DiffViewer, { parseDiff } from '../../../components/DiffViewer/DiffViewer'
 import Modal from '../../../components/Modal/Modal'
 import { useStageChat } from '../../../hooks/useStageChat'
 import { getTask, getTaskDiff, generateCommitMessage, submitMR, TaskData } from '../../../api'
@@ -65,12 +65,15 @@ export default function ReviewStage() {
     }
   }
 
-  // Count additions/deletions
-  const { additions, deletions, files } = useMemo(() => ({
-    additions: (diff.match(/^\+[^+]/gm) || []).length,
-    deletions: (diff.match(/^-[^-]/gm) || []).length,
-    files: (diff.match(/^diff --git/gm) || []).length,
-  }), [diff])
+  // Count additions/deletions from parsed diff data (accurate)
+  const { additions, deletions, files } = useMemo(() => {
+    const parsed = parseDiff(diff)
+    return {
+      additions: parsed.reduce((sum, f) => sum + f.additions, 0),
+      deletions: parsed.reduce((sum, f) => sum + f.deletions, 0),
+      files: parsed.length,
+    }
+  }, [diff])
 
   if (!task) return null
 

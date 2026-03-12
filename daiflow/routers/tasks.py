@@ -354,17 +354,32 @@ async def submit_mr(
 
     commit_msg = data.commit_message or f"feat: {task.name}"
 
-    results = []
-    for repo in repos:
-        if repo.local_path:
-            try:
-                await commit(repo.local_path, commit_msg)
-                await push(repo.local_path, task.branch)
-                results.append({"repo": repo.git_url, "status": "success"})
-            except Exception as e:
-                results.append({"repo": repo.git_url, "status": "error", "error": str(e)})
+    # Phase 1: commit all repos first (safer — all-or-nothing per phase)
+    commit_results = []
+    active_repos = [r for r in repos if r.local_path]
+    for repo in active_repos:
+        try:
+            await commit(repo.local_path, commit_msg)
+            commit_results.append({"repo": repo.git_url, "committed": True})
+        except Exception as e:
+            commit_results.append({"repo": repo.git_url, "committed": False, "error": str(e)})
 
-    task.status = TaskStatus.DONE
+    # Phase 2: push only successfully committed repos
+    results = []
+    for repo, cr in zip(active_repos, commit_results):
+        if not cr.get("committed"):
+            results.append({"repo": repo.git_url, "status": "error", "error": cr.get("error", "commit failed")})
+            continue
+        try:
+            await push(repo.local_path, task.branch)
+            results.append({"repo": repo.git_url, "status": "success"})
+        except Exception as e:
+            results.append({"repo": repo.git_url, "status": "error", "error": str(e)})
+
+    # Only mark as DONE if at least one repo succeeded
+    has_success = any(r["status"] == "success" for r in results)
+    if has_success:
+        task.status = TaskStatus.DONE
     task.mr_info = json.dumps(results)
     await db.commit()
 

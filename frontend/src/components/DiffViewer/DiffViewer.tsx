@@ -1,6 +1,7 @@
 import { Fragment, memo, useMemo, useState } from 'react'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
+import { oneDark, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism'
+import { useTheme } from '../../hooks/useTheme'
 import './DiffViewer.css'
 
 interface DiffFile {
@@ -48,7 +49,7 @@ function detectLanguage(path: string): string | undefined {
   return ext ? EXT_TO_LANG[ext] : undefined
 }
 
-function parseDiff(raw: string): DiffFile[] {
+export function parseDiff(raw: string): DiffFile[] {
   const files: DiffFile[] = []
   const fileChunks = raw.split(/^diff --git /m).filter(Boolean)
 
@@ -104,14 +105,14 @@ function parseDiff(raw: string): DiffFile[] {
   return files
 }
 
-const HighlightedCode = memo(function HighlightedCode({ code, language }: { code: string; language?: string }) {
+const HighlightedCode = memo(function HighlightedCode({ code, language, highlightStyle }: { code: string; language?: string; highlightStyle: any }) {
   if (!language) {
     return <>{code}</>
   }
   return (
     <SyntaxHighlighter
       language={language}
-      style={oneDark}
+      style={highlightStyle}
       customStyle={{
         display: 'inline',
         background: 'transparent',
@@ -176,7 +177,7 @@ function buildSplitRows(hunk: DiffHunk): SplitRow[] {
   return rows
 }
 
-function UnifiedDiffBody({ file }: { file: DiffFile }) {
+function UnifiedDiffBody({ file, highlightStyle }: { file: DiffFile; highlightStyle: any }) {
   return (
     <table className="diff-table">
       <tbody>
@@ -193,7 +194,7 @@ function UnifiedDiffBody({ file }: { file: DiffFile }) {
                 <td className="ln2">{line.type !== 'remove' ? line.newNum : ''}</td>
                 <td className="code">
                   {line.type === 'add' ? '+' : line.type === 'remove' ? '-' : ' '}
-                  <HighlightedCode code={line.content} language={file.language} />
+                  <HighlightedCode code={line.content} language={file.language} highlightStyle={highlightStyle} />
                 </td>
               </tr>
             ))}
@@ -204,7 +205,7 @@ function UnifiedDiffBody({ file }: { file: DiffFile }) {
   )
 }
 
-function SplitDiffBody({ file }: { file: DiffFile }) {
+function SplitDiffBody({ file, highlightStyle }: { file: DiffFile; highlightStyle: any }) {
   return (
     <table className="diff-table diff-table-split">
       <tbody>
@@ -227,7 +228,7 @@ function SplitDiffBody({ file }: { file: DiffFile }) {
                     {row.left ? (
                       <>
                         {row.left.type === 'remove' ? '-' : ' '}
-                        <HighlightedCode code={row.left.content} language={file.language} />
+                        <HighlightedCode code={row.left.content} language={file.language} highlightStyle={highlightStyle} />
                       </>
                     ) : ''}
                   </td>
@@ -238,7 +239,7 @@ function SplitDiffBody({ file }: { file: DiffFile }) {
                     {row.right ? (
                       <>
                         {row.right.type === 'add' ? '+' : ' '}
-                        <HighlightedCode code={row.right.content} language={file.language} />
+                        <HighlightedCode code={row.right.content} language={file.language} highlightStyle={highlightStyle} />
                       </>
                     ) : ''}
                   </td>
@@ -254,6 +255,8 @@ function SplitDiffBody({ file }: { file: DiffFile }) {
 
 export default function DiffViewer({ diffs, collapsed = {}, onToggleFile, defaultMode = 'unified' }: DiffViewerProps) {
   const [viewMode, setViewMode] = useState<DiffViewMode>(defaultMode)
+  const { theme } = useTheme()
+  const highlightStyle = theme === 'dark' ? oneDark : oneLight
   const files = useMemo(() => parseDiff(diffs), [diffs])
 
   if (files.length === 0) {
@@ -299,8 +302,8 @@ export default function DiffViewer({ diffs, collapsed = {}, onToggleFile, defaul
             ) : !isCollapsed && (
               <div className="diff-body">
                 {viewMode === 'split'
-                  ? <SplitDiffBody file={file} />
-                  : <UnifiedDiffBody file={file} />
+                  ? <SplitDiffBody file={file} highlightStyle={highlightStyle} />
+                  : <UnifiedDiffBody file={file} highlightStyle={highlightStyle} />
                 }
               </div>
             )}
