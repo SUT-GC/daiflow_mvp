@@ -1,0 +1,56 @@
+.todo-wrap {
+  padding: 22px;
+}
+
+.todo-card-title {
+  font-size: 14px;
+  font-weight: 700;
+  margin-bottom: 18px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.count-badge {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 20px;
+  background: var(--blue-d);
+  color: var(--blue);
+}
+
+.todo-items {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.todo-item {
+  display: flex;
+  gap: 14px;
+  padding: 14px;
+  align-items: flex-start;
+}
+
+.todo-seq {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  background: var(--bg-4);
+  color: var(--t1);
+  flex-shrink: 0;
+}
+
+.todo-body { flex: 1; }
+.todo-title { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+.todo-desc { font-size: 12px; color: var(--t2); line-height: 1.5; }

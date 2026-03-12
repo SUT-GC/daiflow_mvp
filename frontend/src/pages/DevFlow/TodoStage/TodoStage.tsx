@@ -1,0 +1,80 @@
+import { useParams, useNavigate } from 'react-router-dom'
+import Topbar from '../../../components/Shell/Topbar'
+import StageProgress from '../../../components/StageProgress/StageProgress'
+import ChatPanel from '../../../components/ChatPanel/ChatPanel'
+import { useTodoStage } from '../../../hooks/useTodoStage'
+import { startCoding, triggerTodo } from '../../../api'
+import { useLocale } from '../../../hooks/useLocale'
+import '../DevFlow.css'
+import './TodoStage.css'
+
+export default function TodoStage() {
+  const { taskId } = useParams()
+  const navigate = useNavigate()
+  const { t } = useLocale()
+  const { task, todos, status, messages, sendMessage, streaming } = useTodoStage(taskId)
+
+  const handleRedecompose = async () => {
+    if (!taskId) return
+    await triggerTodo(taskId)
+  }
+
+  const handleStartCoding = async () => {
+    if (!taskId) return
+    try {
+      await startCoding(taskId)
+      navigate(`/devflow/${taskId}/coding`)
+    } catch (err: any) {
+      console.error('Failed to start coding:', err)
+    }
+  }
+
+  if (!task) return null
+
+  return (
+    <div id="page" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      <Topbar title={task.name} branch={task.branch} backTo="/tasks" backLabel={t('nav.tasks')} />
+      <StageProgress taskId={taskId!} currentStage={2} taskStatus={task.status} />
+      <div className="devflow-body">
+        <div className="devflow-main">
+          <div className="card todo-wrap">
+            <div className="todo-card-title">
+              {t('todo.title')}
+              <span className="file-badge">todo.json</span>
+              {todos.length > 0 && <span className="count-badge">{todos.length}</span>}
+            </div>
+            {todos.length > 0 ? (
+              <div className="todo-items">
+                {todos.map((todo, i) => (
+                  <div key={i} className="card todo-item">
+                    <div className="todo-seq">{String(todo.seq || i + 1).padStart(2, '0')}</div>
+                    <div className="todo-body">
+                      <div className="todo-title">{todo.title}</div>
+                      <div className="todo-desc">{todo.description}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{ color: 'var(--t3)', textAlign: 'center', padding: '40px' }}>
+                {status === 1 ? t('todo.decomposing') : t('todo.no_todos')}
+              </div>
+            )}
+          </div>
+          <div className="actions-row">
+            <button className="btn btn-primary" onClick={handleStartCoding} disabled={todos.length === 0}>
+              {t('todo.start_coding')}
+            </button>
+            <button className="btn btn-ghost" onClick={handleRedecompose} disabled={status === 1}>{t('todo.redecompose')}</button>
+          </div>
+        </div>
+        <ChatPanel
+          messages={messages}
+          onSend={sendMessage}
+          streaming={streaming}
+          title={t('todo.chat_title')}
+        />
+      </div>
+    </div>
+  )
+}
