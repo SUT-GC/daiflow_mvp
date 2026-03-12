@@ -1,4 +1,7 @@
 import asyncio
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 async def _run(cmd: list[str], cwd: str, timeout: int = 120) -> str:
@@ -12,9 +15,14 @@ async def _run(cmd: list[str], cwd: str, timeout: int = 120) -> str:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except asyncio.TimeoutError:
         proc.kill()
-        raise RuntimeError(f"Git command timed out after {timeout}s: {' '.join(cmd)}")
+        raise RuntimeError(f"Git operation timed out after {timeout}s")
     if proc.returncode != 0:
-        raise RuntimeError(f"Git command failed ({' '.join(cmd)}): {stderr.decode().strip()}")
+        stderr_text = stderr.decode().strip()
+        # Log full details for debugging, return sanitized message to caller
+        logger.error("Git command failed: %s | stderr: %s", " ".join(cmd), stderr_text)
+        # Provide a user-friendly error without exposing full paths
+        short_cmd = cmd[1] if len(cmd) > 1 else cmd[0]
+        raise RuntimeError(f"Git {short_cmd} failed: {stderr_text[:200]}")
     return stdout.decode().strip()
 
 

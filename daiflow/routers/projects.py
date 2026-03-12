@@ -1,3 +1,4 @@
+import asyncio
 import json
 import shutil
 
@@ -320,25 +321,29 @@ async def get_project_knowledge(project_id: str, db: AsyncSession = Depends(get_
     project_dir = PROJECTS_DIR / project_id
     files: list[dict] = []
 
-    # project.md
-    project_md = project_dir / "project.md"
-    if project_md.exists():
-        files.append({
-            "name": "project.md",
-            "type": "index",
-            "content": project_md.read_text(encoding="utf-8"),
-        })
+    def _read_knowledge():
+        result = []
+        # project.md
+        project_md = project_dir / "project.md"
+        if project_md.exists():
+            result.append({
+                "name": "project.md",
+                "type": "index",
+                "content": project_md.read_text(encoding="utf-8"),
+            })
 
-    # skills
-    skills_dir = project_dir / "skills"
-    if skills_dir.exists():
-        for skill_dir in sorted(skills_dir.iterdir()):
-            if skill_dir.is_dir():
-                skill_file = skill_dir / "SKILL.md"
-                files.append({
-                    "name": skill_dir.name,
-                    "type": "skill",
-                    "content": skill_file.read_text(encoding="utf-8") if skill_file.exists() else "",
-                })
+        # skills
+        skills_dir = project_dir / "skills"
+        if skills_dir.exists():
+            for skill_dir in sorted(skills_dir.iterdir()):
+                if skill_dir.is_dir():
+                    skill_file = skill_dir / "SKILL.md"
+                    result.append({
+                        "name": skill_dir.name,
+                        "type": "skill",
+                        "content": skill_file.read_text(encoding="utf-8") if skill_file.exists() else "",
+                    })
+        return result
 
+    files = await asyncio.to_thread(_read_knowledge)
     return {"project_id": project_id, "files": files}

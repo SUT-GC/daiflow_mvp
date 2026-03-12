@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { getTask, getTodos, getTaskDiff, TaskData, TodoData } from '../api'
 import { SessionStatus, TodoStatus } from '../types/enums'
 import { useSession } from './useSession'
@@ -9,6 +9,10 @@ export function useCodingStage(taskId: string | undefined) {
   const [todos, setTodos] = useState<TodoData[]>([])
   const [selectedTodo, setSelectedTodo] = useState<string | null>(null)
   const [diff, setDiff] = useState('')
+  const [error, setError] = useState<string | null>(null)
+
+  // Debounce timer for code_updated events
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const loadData = useCallback(async () => {
     if (!taskId) return
@@ -17,8 +21,8 @@ export function useCodingStage(taskId: string | undefined) {
       setTask(t)
       const td = await getTodos(taskId)
       setTodos(td)
-    } catch (err) {
-      console.error('Failed to load coding stage data:', err)
+    } catch (err: any) {
+      setError(err.message || 'Failed to load coding stage data')
     }
   }, [taskId])
 
@@ -27,18 +31,32 @@ export function useCodingStage(taskId: string | undefined) {
   const currentTodo = todos.find(t => t.id === selectedTodo)
   const sessionId = currentTodo ? `task:${taskId}:todo:${currentTodo.id}` : null
 
-  const { status: todoSessionStatus, logs } = useSession(sessionId)
+  const { status: todoSessionStatus, logs, error: sessionError } = useSession(sessionId)
 
   const onUpdated = useCallback(async (event: any) => {
     if (event.type === 'code_updated' && taskId) {
-      const diffData = await getTaskDiff(taskId)
-      const allDiffs = diffData.diffs?.map((d: any) => d.diff).join('\n') || ''
-      setDiff(allDiffs)
-      // Refresh todo list
-      const td = await getTodos(taskId)
-      setTodos(td)
+      // Debounce: wait 500ms before fetching to avoid N+1 rapid-fire requests
+      if (debounceRef.current) clearTimeout(debounceRef.current)
+      debounceRef.current = setTimeout(async () => {
+        try {
+          const diffData = await getTaskDiff(taskId)
+          const allDiffs = diffData.diffs?.map((d: any) => d.diff).join('\n') || ''
+          setDiff(allDiffs)
+          const td = await getTodos(taskId)
+          setTodos(td)
+        } catch (err: any) {
+          setError(err.message || 'Failed to refresh diff')
+        }
+      }, 500)
     }
   }, [taskId])
+
+  // Cleanup debounce timer on unmount
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current)
+    }
+  }, [])
 
   const chat = useStageChat({
     sessionId,
@@ -67,6 +85,7 @@ export function useCodingStage(taskId: string | undefined) {
     logs,
     loadData,
     allDone,
+    error: error || sessionError,
     ...chat,
   }
 }

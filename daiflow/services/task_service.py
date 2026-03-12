@@ -188,9 +188,6 @@ async def generate_todos(task_id: str):
         if not existing_session:
             session = Session(session_id=session_id, type="todo_split", ref_id=task_id)
             db.add(session)
-
-        # Update status to show todo generation is happening
-        task.status = TaskStatus.PLAN_LOCKED
         await db.commit()
 
         prompt = TODO_PROMPT_TEMPLATE.format(todo_path=str(todo_path))
@@ -220,6 +217,9 @@ async def generate_todos(task_id: str):
                     db.add(todo)
             except (json.JSONDecodeError, KeyError, TypeError) as e:
                 logger.error("Failed to parse todo.json for task %s: %s", task_id, e)
+                # Still transition to TODO_READY so user can retry via chat
+        else:
+            logger.warning("todo.json not found for task %s after generation", task_id)
 
         task.status = TaskStatus.TODO_READY
         await db.commit()
@@ -235,7 +235,7 @@ async def sync_todos_from_file(db: AsyncSession, task_id: str, content: str):
         todos_data = json.loads(content)
     except (json.JSONDecodeError, TypeError) as e:
         logger.error("Failed to parse todo.json content for task %s: %s", task_id, e)
-        return
+        raise ValueError(f"Invalid todo.json format: {e}") from e
 
     # Delete only pending todos — preserve running/done
     result = await db.execute(

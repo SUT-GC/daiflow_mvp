@@ -1,4 +1,6 @@
+import asyncio
 import json
+import logging
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
@@ -9,6 +11,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from daiflow.config import FILE_WRITE_TOOLS, LANGUAGE_INSTRUCTIONS, SESSIONS_DIR, safe_filename
 from daiflow.models import Session, SessionStatus
 from daiflow.ws_manager import ws_manager
+
+logger = logging.getLogger(__name__)
+
+# Default timeout for streaming operations (5 minutes)
+STREAM_TIMEOUT_SECONDS = 300
+# Max cached tool call args to prevent unbounded memory growth
+MAX_TOOL_CALL_ARGS = 200
 
 
 def _now():
@@ -118,49 +127,53 @@ class SessionRunner:
             if cody_session_id:
                 stream_kwargs["session_id"] = cody_session_id
 
-            async for chunk in self.client.stream(prompt, **stream_kwargs):
-                event = _chunk_to_event(chunk)
-                if event is None:
-                    _append_log(session_id, {"type": "compact", "ts": _now().isoformat()})
-                    continue
+            async with asyncio.timeout(STREAM_TIMEOUT_SECONDS):
+                async for chunk in self.client.stream(prompt, **stream_kwargs):
+                    event = _chunk_to_event(chunk)
+                    if event is None:
+                        _append_log(session_id, {"type": "compact", "ts": _now().isoformat()})
+                        continue
 
-                event["ts"] = _now().isoformat()
-                _append_log(session_id, event)
+                    event["ts"] = _now().isoformat()
+                    _append_log(session_id, event)
 
-                if event["type"] == "done":
-                    if hasattr(chunk, "session_id"):
-                        result_cody_session_id = chunk.session_id
+                    if event["type"] == "done":
+                        if hasattr(chunk, "session_id"):
+                            result_cody_session_id = chunk.session_id
 
-                    status_event = {"type": "status_change", "status": SessionStatus.DONE, "ts": event["ts"]}
-                    await ws_manager.publish(channel, status_event)
-                    _append_log(session_id, status_event)
+                        status_event = {"type": "status_change", "status": SessionStatus.DONE, "ts": event["ts"]}
+                        await ws_manager.publish(channel, status_event)
+                        _append_log(session_id, status_event)
 
-                    if extra_channels:
-                        for ch in extra_channels:
-                            await ws_manager.publish(ch, {
-                                "type": "session_status",
-                                "session_id": session_id,
-                                "status": SessionStatus.DONE,
-                                "ts": event["ts"],
-                            })
-                else:
-                    await ws_manager.publish(channel, event)
+                        if extra_channels:
+                            for ch in extra_channels:
+                                await ws_manager.publish(ch, {
+                                    "type": "session_status",
+                                    "session_id": session_id,
+                                    "status": SessionStatus.DONE,
+                                    "ts": event["ts"],
+                                })
+                    else:
+                        await ws_manager.publish(channel, event)
 
-                    # Cache tool_call args for later association with tool_result
-                    if event["type"] == "tool_call":
-                        call_id = event.get("tool_call_id", "")
-                        if call_id:
-                            self._tool_call_args[call_id] = event.get("args", {})
+                        # Cache tool_call args for later association with tool_result
+                        if event["type"] == "tool_call":
+                            call_id = event.get("tool_call_id", "")
+                            if call_id:
+                                self._tool_call_args[call_id] = event.get("args", {})
+                                # Prevent unbounded growth
+                                if len(self._tool_call_args) > MAX_TOOL_CALL_ARGS:
+                                    self._tool_call_args.clear()
 
-                    if event["type"] == "tool_result" and on_tool_result:
-                        # Enrich tool_result with cached args from tool_call
-                        call_id = event.get("tool_call_id", "")
-                        if call_id and call_id in self._tool_call_args:
-                            event["args"] = self._tool_call_args.pop(call_id)
-                        extra_event = await on_tool_result(event)
-                        if extra_event:
-                            _append_log(session_id, extra_event)
-                            await ws_manager.publish(channel, extra_event)
+                        if event["type"] == "tool_result" and on_tool_result:
+                            # Enrich tool_result with cached args from tool_call
+                            call_id = event.get("tool_call_id", "")
+                            if call_id and call_id in self._tool_call_args:
+                                event["args"] = self._tool_call_args.pop(call_id)
+                            extra_event = await on_tool_result(event)
+                            if extra_event:
+                                _append_log(session_id, extra_event)
+                                await ws_manager.publish(channel, extra_event)
 
             self._last_cody_session_id = result_cody_session_id
 
@@ -230,36 +243,37 @@ async def run_stage_chat(
         if cody_session_id:
             stream_kwargs["session_id"] = cody_session_id
 
-        async for chunk in cody_client.stream(message, **stream_kwargs):
-            event = _chunk_to_event(chunk)
-            if event is None:
-                continue
+        async with asyncio.timeout(STREAM_TIMEOUT_SECONDS):
+            async for chunk in cody_client.stream(message, **stream_kwargs):
+                event = _chunk_to_event(chunk)
+                if event is None:
+                    continue
 
-            event["ts"] = _now().isoformat()
-            _append_log(session_id, event)
+                event["ts"] = _now().isoformat()
+                _append_log(session_id, event)
 
-            if event["type"] == "done":
-                yield {"type": "done"}
-                return
+                if event["type"] == "done":
+                    yield {"type": "done"}
+                    return
 
-            yield event
+                yield event
 
-            # Cache tool_call args for later association with tool_result
-            if event["type"] == "tool_call":
-                call_id = event.get("tool_call_id", "")
-                if call_id:
-                    tool_call_args[call_id] = event.get("args", {})
+                # Cache tool_call args for later association with tool_result
+                if event["type"] == "tool_call":
+                    call_id = event.get("tool_call_id", "")
+                    if call_id:
+                        tool_call_args[call_id] = event.get("args", {})
 
-            # Detect file writes for *_updated events
-            if event["type"] == "tool_result" and on_tool_result:
-                # Enrich tool_result with cached args from tool_call
-                call_id = event.get("tool_call_id", "")
-                if call_id and call_id in tool_call_args:
-                    event["args"] = tool_call_args.pop(call_id)
-                updated_event = await on_tool_result(event)
-                if updated_event:
-                    _append_log(session_id, updated_event)
-                    yield updated_event
+                # Detect file writes for *_updated events
+                if event["type"] == "tool_result" and on_tool_result:
+                    # Enrich tool_result with cached args from tool_call
+                    call_id = event.get("tool_call_id", "")
+                    if call_id and call_id in tool_call_args:
+                        event["args"] = tool_call_args.pop(call_id)
+                    updated_event = await on_tool_result(event)
+                    if updated_event:
+                        _append_log(session_id, updated_event)
+                        yield updated_event
 
     except Exception as e:
         error_event = {"type": "error", "content": str(e), "ts": _now().isoformat()}

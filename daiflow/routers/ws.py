@@ -111,10 +111,10 @@ async def websocket_endpoint(ws: WebSocket):
                     ws_manager.unsubscribe(ws, channel)
 
             elif action == "chat":
+                # Clean up finished tasks first to prevent accumulation
+                chat_tasks = [t for t in chat_tasks if not t.done()]
                 task = asyncio.create_task(_handle_chat(ws, data))
                 chat_tasks.append(task)
-                # Clean up finished tasks
-                chat_tasks = [t for t in chat_tasks if not t.done()]
 
             else:
                 await ws.send_json({

@@ -21,10 +21,14 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="DaiFlow", version="0.1.0", lifespan=lifespan)
 
-# CORS for dev mode
+# CORS — restrict to local dev origins
+_allowed_origins = os.environ.get(
+    "DAIFLOW_CORS_ORIGINS",
+    "http://localhost:3000,http://localhost:8000,http://127.0.0.1:3000,http://127.0.0.1:8000",
+).split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
