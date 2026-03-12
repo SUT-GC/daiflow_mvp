@@ -51,7 +51,7 @@ export function useSession(sessionId: string | null) {
           unsub = wsClient.subscribe(
             `session:${sessionId}`,
             (event) => {
-              logsRef.current = [...logsRef.current, event]
+              logsRef.current.push(event)
               // Batch log updates via rAF
               if (rafRef.current === null) {
                 rafRef.current = requestAnimationFrame(flushLogs)

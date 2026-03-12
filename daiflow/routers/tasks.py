@@ -1,4 +1,5 @@
 import json
+import logging
 import shutil
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
@@ -9,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from daiflow.config import TASKS_DIR
 from daiflow.database import get_db
 from daiflow.models import ProjectRepo, Session, SessionStatus, Task, TaskStatus, Todo
+from daiflow.schemas import TaskResponse, TodoResponse
 from daiflow.services.git_service import commit, get_diff, push
 from daiflow.services.task_service import (
     execute_todo,
@@ -17,6 +19,8 @@ from daiflow.services.task_service import (
     init_task,
     start_coding,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
@@ -59,19 +63,7 @@ class TaskUpdate(BaseModel):
 
 
 def _task_to_dict(t: Task) -> dict:
-    return {
-        "id": t.id,
-        "name": t.name,
-        "project_id": t.project_id,
-        "description": t.description,
-        "branch": t.branch,
-        "prd": t.prd,
-        "tech_plan": t.tech_plan,
-        "status": t.status,
-        "mr_info": json.loads(t.mr_info) if t.mr_info else {},
-        "created_at": t.created_at.isoformat() if t.created_at else None,
-        "updated_at": t.updated_at.isoformat() if t.updated_at else None,
-    }
+    return TaskResponse.model_validate(t).model_dump()
 
 
 async def _get_task_repos(db: AsyncSession, project_id: str):
@@ -248,17 +240,7 @@ async def get_todos(task_id: str, db: AsyncSession = Depends(get_db)):
         select(Todo).where(Todo.task_id == task_id).order_by(Todo.seq)
     )
     todos = result.scalars().all()
-    return [
-        {
-            "id": t.id,
-            "seq": t.seq,
-            "title": t.title,
-            "description": t.description,
-            "status": t.status,
-            "cody_session_id": t.cody_session_id,
-        }
-        for t in todos
-    ]
+    return [TodoResponse.model_validate(t).model_dump() for t in todos]
 
 
 # ── Review Stage ──
@@ -334,7 +316,8 @@ async def generate_commit_message(task_id: str, db: AsyncSession = Depends(get_d
                 elif chunk.type == "done":
                     break
         return {"commit_message": result_text.strip() or f"feat: {task.name}"}
-    except Exception as e:
+    except Exception:
+        logger.warning("AI commit message generation failed for task %s", task_id, exc_info=True)
         return {"commit_message": f"feat: {task.name}\n\n{task.description or ''}"}
 
 

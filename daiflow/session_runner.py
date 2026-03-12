@@ -62,11 +62,17 @@ def _log_path(session_id: str) -> Path:
     return SESSIONS_DIR / f"{safe_filename(session_id)}.jsonl"
 
 
-def _append_log(session_id: str, event: dict):
-    path = _log_path(session_id)
+def _append_log_sync(path: Path, data: str):
+    """Sync file append (runs in thread pool)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(event, ensure_ascii=False) + "\n")
+        f.write(data)
+
+
+async def _append_log(session_id: str, event: dict):
+    path = _log_path(session_id)
+    data = json.dumps(event, ensure_ascii=False) + "\n"
+    await asyncio.to_thread(_append_log_sync, path, data)
 
 
 class SessionRunner:
@@ -119,7 +125,7 @@ class SessionRunner:
 
         # Log user message
         user_event = {"type": "user_message", "content": prompt, "ts": _now().isoformat()}
-        _append_log(session_id, user_event)
+        await _append_log(session_id, user_event)
 
         try:
             result_cody_session_id = None
@@ -131,11 +137,11 @@ class SessionRunner:
                 async for chunk in self.client.stream(prompt, **stream_kwargs):
                     event = _chunk_to_event(chunk)
                     if event is None:
-                        _append_log(session_id, {"type": "compact", "ts": _now().isoformat()})
+                        await _append_log(session_id, {"type": "compact", "ts": _now().isoformat()})
                         continue
 
                     event["ts"] = _now().isoformat()
-                    _append_log(session_id, event)
+                    await _append_log(session_id, event)
 
                     if event["type"] == "done":
                         if hasattr(chunk, "session_id"):
@@ -143,7 +149,7 @@ class SessionRunner:
 
                         status_event = {"type": "status_change", "status": SessionStatus.DONE, "ts": event["ts"]}
                         await ws_manager.publish(channel, status_event)
-                        _append_log(session_id, status_event)
+                        await _append_log(session_id, status_event)
 
                         if extra_channels:
                             for ch in extra_channels:
@@ -172,7 +178,7 @@ class SessionRunner:
                                 event["args"] = self._tool_call_args.pop(call_id)
                             extra_event = await on_tool_result(event)
                             if extra_event:
-                                _append_log(session_id, extra_event)
+                                await _append_log(session_id, extra_event)
                                 await ws_manager.publish(channel, extra_event)
 
             self._last_cody_session_id = result_cody_session_id
@@ -192,7 +198,7 @@ class SessionRunner:
         except Exception as e:
             error_msg = traceback.format_exc()
             error_event = {"type": "error", "content": str(e), "ts": _now().isoformat()}
-            _append_log(session_id, error_event)
+            await _append_log(session_id, error_event)
 
             status_event = {"type": "status_change", "status": SessionStatus.FAILED, "error": str(e), "ts": _now().isoformat()}
             await ws_manager.publish(channel, status_event)
@@ -233,7 +239,7 @@ async def run_stage_chat(
 
     # Log user message
     user_event = {"type": "user_message", "content": message, "ts": _now().isoformat()}
-    _append_log(session_id, user_event)
+    await _append_log(session_id, user_event)
 
     # Cache tool_call args for association with tool_result
     tool_call_args: dict[str, dict] = {}
@@ -250,7 +256,7 @@ async def run_stage_chat(
                     continue
 
                 event["ts"] = _now().isoformat()
-                _append_log(session_id, event)
+                await _append_log(session_id, event)
 
                 if event["type"] == "done":
                     yield {"type": "done"}
@@ -272,12 +278,12 @@ async def run_stage_chat(
                         event["args"] = tool_call_args.pop(call_id)
                     updated_event = await on_tool_result(event)
                     if updated_event:
-                        _append_log(session_id, updated_event)
+                        await _append_log(session_id, updated_event)
                         yield updated_event
 
     except Exception as e:
         error_event = {"type": "error", "content": str(e), "ts": _now().isoformat()}
-        _append_log(session_id, error_event)
+        await _append_log(session_id, error_event)
         yield error_event
 
 
