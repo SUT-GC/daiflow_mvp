@@ -131,6 +131,7 @@ async def generate_plan(task_id: str):
     async with get_background_db() as db:
         task = await db.get(Task, task_id)
         if not task:
+            logger.debug("Task %s deleted before plan generation started", task_id)
             return
 
         task_dir = get_task_dir(task_id)
@@ -166,6 +167,12 @@ async def generate_plan(task_id: str):
         async with client:
             await runner.run(db, session_id, prompt, language=lang)
 
+        # Re-check task existence before updating (task may have been deleted)
+        task = await db.get(Task, task_id)
+        if not task:
+            logger.debug("Task %s deleted before plan write", task_id)
+            return
+
         # Store cody_session_id for plan/todo session sharing
         if runner.last_cody_session_id:
             task.plan_cody_session_id = runner.last_cody_session_id
@@ -185,6 +192,7 @@ async def generate_todos(task_id: str):
     async with get_background_db() as db:
         task = await db.get(Task, task_id)
         if not task:
+            logger.debug("Task %s deleted before todo generation started", task_id)
             return
 
         task_dir = get_task_dir(task_id)
@@ -215,6 +223,12 @@ async def generate_todos(task_id: str):
                 cody_session_id=task.plan_cody_session_id,
                 language=lang,
             )
+
+        # Re-check task existence before updating (task may have been deleted)
+        task = await db.get(Task, task_id)
+        if not task:
+            logger.debug("Task %s deleted before todo write", task_id)
+            return
 
         # Parse todo.json and insert todos into DB
         if todo_path.exists():

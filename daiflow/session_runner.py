@@ -85,6 +85,7 @@ class SessionRunner:
         self.client = cody_client
         self._last_cody_session_id: str | None = None
         self._tool_call_args: dict[str, dict] = {}  # tool_call_id -> args cache
+        self._call_id_counter = 0  # For generating tool_call_id when not provided
 
     @property
     def last_cody_session_id(self) -> str | None:
