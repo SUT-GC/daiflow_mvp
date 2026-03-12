@@ -35,7 +35,7 @@ class TestTasksCRUD:
         assert data["name"] == "Task 1"
         assert data["project_id"] == pid
         assert data["branch"] == "feature/test"
-        assert data["status"] == 1  # INITIALIZING
+        assert data["status"] == 0  # CREATED
 
     @_mock_bg
     async def test_get_task(self, mock_init, client):

@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from daiflow.config import TASKS_DIR
 from daiflow.database import get_db
-from daiflow.models import ProjectRepo, Session, Task, TaskStatus, Todo
+from daiflow.models import ProjectRepo, Session, SessionStatus, Task, TaskStatus, Todo
 from daiflow.services.git_service import commit, get_diff, push
 from daiflow.services.task_service import (
     execute_todo,
@@ -21,6 +21,8 @@ from daiflow.services.task_service import (
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
 VALID_TRANSITIONS = {
+    TaskStatus.CREATED: {TaskStatus.INITIALIZING},
+    TaskStatus.INITIALIZING: {TaskStatus.PLANNING},
     TaskStatus.PLANNING: {TaskStatus.PLAN_LOCKED},
     TaskStatus.PLAN_LOCKED: {TaskStatus.TODO_READY},
     TaskStatus.TODO_READY: {TaskStatus.CODING},
@@ -117,7 +119,7 @@ async def create_task(
         branch=data.branch,
         prd=data.prd,
         tech_plan=data.tech_plan,
-        status=TaskStatus.INITIALIZING,
+        status=TaskStatus.CREATED,
     )
     db.add(task)
     await db.commit()
@@ -200,7 +202,7 @@ async def start_review(task_id: str, db: AsyncSession = Depends(get_db)):
     session_id = f"task:{task_id}:review"
     existing = await db.get(Session, session_id)
     if not existing:
-        session = Session(session_id=session_id, type="review", ref_id=task_id, status=0)
+        session = Session(session_id=session_id, type="review", ref_id=task_id, status=SessionStatus.WAITING)
         db.add(session)
 
     task.status = TaskStatus.REVIEWING
@@ -281,6 +283,59 @@ async def get_task_diff(task_id: str, db: AsyncSession = Depends(get_db)):
                 diffs.append({"repo": repo.git_url, "repo_type": repo.repo_type, "diff": "", "error": str(e)})
 
     return {"diffs": diffs}
+
+
+@router.post("/{task_id}/generate-commit-message")
+async def generate_commit_message(task_id: str, db: AsyncSession = Depends(get_db)):
+    """Generate a commit message from the task's diff using AI."""
+    task = await db.get(Task, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    repos, allowed_roots = await _get_task_repos(db, task.project_id)
+
+    # Collect diffs
+    diff_texts = []
+    for repo in repos:
+        if repo.local_path:
+            try:
+                d = await get_diff(repo.local_path, task.branch)
+                if d:
+                    diff_texts.append(d)
+            except Exception:
+                pass
+
+    if not diff_texts:
+        return {"commit_message": f"feat: {task.name}"}
+
+    # Truncate diff if too large (keep first 8000 chars)
+    combined_diff = "\n".join(diff_texts)
+    if len(combined_diff) > 8000:
+        combined_diff = combined_diff[:8000] + "\n... (truncated)"
+
+    prompt = (
+        "Generate a concise git commit message for the following changes.\n"
+        "Use conventional commit format (feat/fix/refactor/docs/chore).\n"
+        "Include a short subject line and a brief body with bullet points.\n\n"
+        f"Task: {task.name}\n"
+        f"Description: {task.description or 'N/A'}\n\n"
+        f"Diff:\n```\n{combined_diff}\n```\n\n"
+        "Output ONLY the commit message, nothing else."
+    )
+
+    try:
+        from daiflow.services.cody_service import build_cody_client
+        client = await build_cody_client(db, allowed_roots[0] if allowed_roots else ".", allowed_roots)
+        result_text = ""
+        async with client:
+            async for chunk in client.stream(prompt):
+                if chunk.type == "text_delta":
+                    result_text += chunk.content
+                elif chunk.type == "done":
+                    break
+        return {"commit_message": result_text.strip() or f"feat: {task.name}"}
+    except Exception as e:
+        return {"commit_message": f"feat: {task.name}\n\n{task.description or ''}"}
 
 
 class SubmitMR(BaseModel):

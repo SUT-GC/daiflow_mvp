@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { getTask, getTodos, TaskData, TodoData } from '../api'
+import { SessionStatus } from '../types/enums'
 import type { WSEvent } from '../ws'
 import { useSession } from './useSession'
 import { useStageChat } from './useStageChat'
@@ -26,7 +27,7 @@ export function useTodoStage(taskId: string | undefined) {
 
   // Refresh todos when session completes (DB is synced at that point)
   useEffect(() => {
-    if (status === 2) {
+    if (status === SessionStatus.DONE) {
       refreshTodos()
     }
   }, [status, refreshTodos])

@@ -71,9 +71,11 @@ class TestSettingsAPI:
         resp = await client.get("/api/settings/check")
         assert resp.json()["configured"] is False
 
-    async def test_empty_string_value_skipped(self, client):
+    async def test_empty_string_value_rejected(self, client):
         await client.put("/api/settings", json={"cody_model": "model-a"})
-        # Sending empty string should not overwrite
-        await client.put("/api/settings", json={"cody_model": "   "})
+        # Sending empty string should return 400 for required AI fields
+        resp = await client.put("/api/settings", json={"cody_model": "   "})
+        assert resp.status_code == 400
+        # Original value should be preserved
         resp = await client.get("/api/settings")
         assert resp.json()["cody_model"] == "model-a"

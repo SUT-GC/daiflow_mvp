@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { getTask, getTodos, getTaskDiff, TaskData, TodoData } from '../api'
+import { SessionStatus, TodoStatus } from '../types/enums'
 import { useSession } from './useSession'
 import { useStageChat } from './useStageChat'
 
@@ -48,12 +49,12 @@ export function useCodingStage(taskId: string | undefined) {
 
   // Reload data when a todo execution completes
   useEffect(() => {
-    if (todoSessionStatus === 2 || todoSessionStatus === 3) {
+    if (todoSessionStatus === SessionStatus.DONE || todoSessionStatus === SessionStatus.FAILED) {
       loadData()
     }
   }, [todoSessionStatus, loadData])
 
-  const allDone = todos.length > 0 && todos.every(t => t.status === 2)
+  const allDone = todos.length > 0 && todos.every(t => t.status === TodoStatus.DONE)
 
   return {
     task,
