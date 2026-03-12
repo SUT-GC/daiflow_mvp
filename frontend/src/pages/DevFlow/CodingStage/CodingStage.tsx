@@ -4,6 +4,7 @@ import Topbar from '../../../components/Shell/Topbar'
 import StageProgress from '../../../components/StageProgress/StageProgress'
 import ChatPanel from '../../../components/ChatPanel/ChatPanel'
 import DiffViewer from '../../../components/DiffViewer/DiffViewer'
+import Loading from '../../../components/Loading/Loading'
 import { useCodingStage } from '../../../hooks/useCodingStage'
 import { executeTodo, startReview } from '../../../api'
 import { useLocale } from '../../../hooks/useLocale'
@@ -41,7 +42,7 @@ export default function CodingStage() {
     }
   }
 
-  if (!task) return null
+  if (!task) return <Loading />
 
   return (
     <div id="page" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>

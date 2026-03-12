@@ -3,6 +3,7 @@ import Topbar from '../../../components/Shell/Topbar'
 import StageProgress from '../../../components/StageProgress/StageProgress'
 import ChatPanel from '../../../components/ChatPanel/ChatPanel'
 import MarkdownViewer from '../../../components/MarkdownViewer/MarkdownViewer'
+import Loading from '../../../components/Loading/Loading'
 import { usePlanStage } from '../../../hooks/usePlanStage'
 import { lockPlan, triggerPlan } from '../../../api'
 import { useLocale } from '../../../hooks/useLocale'
@@ -29,7 +30,7 @@ export default function PlanStage() {
     }
   }
 
-  if (!task) return null
+  if (!task) return <Loading />
 
   return (
     <div id="page" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>

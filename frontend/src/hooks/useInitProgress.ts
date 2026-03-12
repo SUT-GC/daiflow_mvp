@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { getInitSessions } from '../api'
+import { SessionStatus } from '../types/enums'
 import { wsClient } from '../ws'
 
 export interface InitSession {
@@ -14,6 +15,7 @@ export interface InitSession {
 export function useInitProgress(projectId: string | null) {
   const [layers, setLayers] = useState<Record<number, InitSession[]>>({})
   const [done, setDone] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!projectId) return
@@ -27,7 +29,7 @@ export function useInitProgress(projectId: string | null) {
 
         // Compute done from loaded data (covers page opened after init finished)
         const allSessions = (Object.values(data) as InitSession[][]).flat()
-        if (allSessions.length > 0 && allSessions.every(s => s.status >= 2)) {
+        if (allSessions.length > 0 && allSessions.every(s => s.status >= SessionStatus.DONE)) {
           setDone(true)
           return // No need for WS — already finished
         }
@@ -53,8 +55,8 @@ export function useInitProgress(projectId: string | null) {
             }
           },
         )
-      } catch (err) {
-        console.error('Init progress error:', err)
+      } catch (err: any) {
+        setError(err.message || 'Failed to load init progress')
       }
     }
 
@@ -62,5 +64,5 @@ export function useInitProgress(projectId: string | null) {
     return () => { unsub?.() }
   }, [projectId])
 
-  return { layers, done }
+  return { layers, done, error }
 }

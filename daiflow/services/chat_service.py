@@ -10,7 +10,7 @@ from typing import Any, Callable, Coroutine
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from daiflow.config import get_language_setting
+from daiflow.services.settings_service import get_language_setting
 from daiflow.models import ProjectRepo, Task, TaskStatus, Todo, TodoStatus
 from daiflow.services.cody_service import build_cody_client
 from daiflow.services.skill_service import get_task_dir

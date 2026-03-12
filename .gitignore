@@ -23,9 +23,6 @@ frontend/dist/
 *.swp
 *.swo
 
-# Claude Code
-.claude/
-
 # Environment & Secrets
 .env
 .env.*

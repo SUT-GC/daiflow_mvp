@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,9 +36,15 @@ async def get_settings(db: AsyncSession = Depends(get_db)):
 @router.put("")
 async def update_settings(data: SettingsUpdate, db: AsyncSession = Depends(get_db)):
     updates = data.model_dump(exclude_none=True)
+    # Validate required AI fields are not empty
+    required_keys = {"cody_model", "cody_base_url", "cody_api_key"}
+    for key in required_keys:
+        if key in updates and not updates[key].strip():
+            raise HTTPException(
+                status_code=400,
+                detail=f"Field '{key}' cannot be empty",
+            )
     for key, value in updates.items():
-        if key not in ("theme", "language") and not value.strip():
-            continue
         existing = await db.get(Setting, key)
         if existing:
             existing.value = value

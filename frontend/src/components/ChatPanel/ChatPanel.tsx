@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { useLocale } from '../../hooks/useLocale'
 import type { ChatMessage } from '../../hooks/useStageChat'
+import MarkdownViewer from '../MarkdownViewer/MarkdownViewer'
 
 interface ChatPanelProps {
   messages: ChatMessage[]
@@ -54,7 +55,11 @@ export default function ChatPanel({ messages, onSend, streaming = false, title }
               {msg.role === 'ai' ? 'AI' : 'U'}
             </div>
             <div className="bubble">
-              {msg.content && <div style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</div>}
+              {msg.content && (
+                msg.role === 'ai'
+                  ? <MarkdownViewer content={msg.content} />
+                  : <div style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</div>
+              )}
               {msg.events && msg.events.length > 0 && (
                 <div className="log-block">
                   {msg.events.map((ev, j) => (

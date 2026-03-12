@@ -3,10 +3,11 @@ import { useParams, useNavigate } from 'react-router-dom'
 import Topbar from '../../../components/Shell/Topbar'
 import StageProgress from '../../../components/StageProgress/StageProgress'
 import ChatPanel from '../../../components/ChatPanel/ChatPanel'
-import DiffViewer from '../../../components/DiffViewer/DiffViewer'
+import DiffViewer, { parseDiff } from '../../../components/DiffViewer/DiffViewer'
 import Modal from '../../../components/Modal/Modal'
 import { useStageChat } from '../../../hooks/useStageChat'
-import { getTask, getTaskDiff, submitMR, TaskData } from '../../../api'
+import Loading from '../../../components/Loading/Loading'
+import { getTask, getTaskDiff, generateCommitMessage, submitMR, TaskData } from '../../../api'
 import { useLocale } from '../../../hooks/useLocale'
 import '../DevFlow.css'
 import './ReviewStage.css'
@@ -22,6 +23,7 @@ export default function ReviewStage() {
   const [commitMessage, setCommitMessage] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [submitted, setSubmitted] = useState(false)
+  const [generating, setGenerating] = useState(false)
 
   const loadData = useCallback(async () => {
     if (!taskId) return
@@ -64,14 +66,17 @@ export default function ReviewStage() {
     }
   }
 
-  // Count additions/deletions
-  const { additions, deletions, files } = useMemo(() => ({
-    additions: (diff.match(/^\+[^+]/gm) || []).length,
-    deletions: (diff.match(/^-[^-]/gm) || []).length,
-    files: (diff.match(/^diff --git/gm) || []).length,
-  }), [diff])
+  // Count additions/deletions from parsed diff data (accurate)
+  const { additions, deletions, files } = useMemo(() => {
+    const parsed = parseDiff(diff)
+    return {
+      additions: parsed.reduce((sum, f) => sum + f.additions, 0),
+      deletions: parsed.reduce((sum, f) => sum + f.deletions, 0),
+      files: parsed.length,
+    }
+  }, [diff])
 
-  if (!task) return null
+  if (!task) return <Loading />
 
   return (
     <div id="page" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -81,9 +86,18 @@ export default function ReviewStage() {
         backTo="/tasks"
         backLabel={t('nav.tasks')}
         actions={
-          <button className="btn btn-teal btn-sm" onClick={() => {
-            setCommitMessage(`feat: ${task.name}\n\nImplemented via DaiFlow automated workflow.`)
+          <button className="btn btn-teal btn-sm" disabled={generating} onClick={async () => {
             setShowCommitModal(true)
+            setGenerating(true)
+            setCommitMessage('')
+            try {
+              const result = await generateCommitMessage(taskId!)
+              setCommitMessage(result.commit_message)
+            } catch {
+              setCommitMessage(`feat: ${task.name}\n\nImplemented via DaiFlow automated workflow.`)
+            } finally {
+              setGenerating(false)
+            }
           }}>
             {t('review.submit_mr')}
           </button>
@@ -131,8 +145,9 @@ export default function ReviewStage() {
               <textarea
                 className="input"
                 rows={6}
-                value={commitMessage}
+                value={generating ? 'Generating commit message...' : commitMessage}
                 onChange={e => setCommitMessage(e.target.value)}
+                disabled={generating}
                 style={{ fontFamily: 'var(--mono)', fontSize: '12px' }}
               />
             </div>

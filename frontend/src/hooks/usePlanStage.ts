@@ -7,18 +7,19 @@ export function usePlanStage(taskId: string | undefined) {
   const [task, setTask] = useState<TaskData | null>(null)
   const [initialPlan, setInitialPlan] = useState('')
   const [chatPlanContent, setChatPlanContent] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     if (taskId) {
       getTask(taskId).then(t => {
         setTask(t)
         setInitialPlan(t.tech_plan || '')
-      }).catch(err => console.error('Failed to load task:', err))
+      }).catch(err => setError(err.message || 'Failed to load task'))
     }
   }, [taskId])
 
   const sessionId = taskId ? `task:${taskId}:plan` : null
-  const { status, logs } = useSession(sessionId)
+  const { status, logs, error: sessionError } = useSession(sessionId)
 
   // Derive plan content from logs in a single pass
   const logDerivedPlan = useMemo(() => {
@@ -59,6 +60,7 @@ export function usePlanStage(taskId: string | undefined) {
     planContent,
     status,
     logs,
+    error: error || sessionError,
     ...chat,
   }
 }

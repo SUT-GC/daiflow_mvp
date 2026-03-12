@@ -1,3 +1,4 @@
+import asyncio
 import json
 import shutil
 
@@ -10,6 +11,7 @@ from sqlalchemy.orm import selectinload
 from daiflow.config import PROJECTS_DIR
 from daiflow.database import get_db
 from daiflow.models import Project, ProjectRepo, Session
+from daiflow.schemas import ProjectResponse
 from daiflow.services.project_service import compute_init_sessions, run_init, run_init_retry
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
@@ -38,27 +40,16 @@ class ProjectUpdate(BaseModel):
 
 
 def _project_to_dict(p: Project, repos: list[ProjectRepo] | None = None) -> dict:
-    d = {
+    data = {
         "id": p.id,
         "name": p.name,
         "description": p.description,
-        "skill_names": json.loads(p.skill_names) if p.skill_names else [],
-        "created_at": p.created_at.isoformat() if p.created_at else None,
-        "updated_at": p.updated_at.isoformat() if p.updated_at else None,
+        "skill_names": p.skill_names,
+        "created_at": p.created_at,
+        "updated_at": p.updated_at,
+        "repos": repos or [],
     }
-    if repos is not None:
-        d["repos"] = [
-            {
-                "id": r.id,
-                "git_url": r.git_url,
-                "local_path": r.local_path,
-                "repo_type": r.repo_type,
-                "repo_type_label": r.repo_type_label,
-                "description": r.description,
-            }
-            for r in repos
-        ]
-    return d
+    return ProjectResponse.model_validate(data).model_dump()
 
 
 @router.get("")
@@ -320,25 +311,29 @@ async def get_project_knowledge(project_id: str, db: AsyncSession = Depends(get_
     project_dir = PROJECTS_DIR / project_id
     files: list[dict] = []
 
-    # project.md
-    project_md = project_dir / "project.md"
-    if project_md.exists():
-        files.append({
-            "name": "project.md",
-            "type": "index",
-            "content": project_md.read_text(encoding="utf-8"),
-        })
+    def _read_knowledge():
+        result = []
+        # project.md
+        project_md = project_dir / "project.md"
+        if project_md.exists():
+            result.append({
+                "name": "project.md",
+                "type": "index",
+                "content": project_md.read_text(encoding="utf-8"),
+            })
 
-    # skills
-    skills_dir = project_dir / "skills"
-    if skills_dir.exists():
-        for skill_dir in sorted(skills_dir.iterdir()):
-            if skill_dir.is_dir():
-                skill_file = skill_dir / "SKILL.md"
-                files.append({
-                    "name": skill_dir.name,
-                    "type": "skill",
-                    "content": skill_file.read_text(encoding="utf-8") if skill_file.exists() else "",
-                })
+        # skills
+        skills_dir = project_dir / "skills"
+        if skills_dir.exists():
+            for skill_dir in sorted(skills_dir.iterdir()):
+                if skill_dir.is_dir():
+                    skill_file = skill_dir / "SKILL.md"
+                    result.append({
+                        "name": skill_dir.name,
+                        "type": "skill",
+                        "content": skill_file.read_text(encoding="utf-8") if skill_file.exists() else "",
+                    })
+        return result
 
+    files = await asyncio.to_thread(_read_knowledge)
     return {"project_id": project_id, "files": files}

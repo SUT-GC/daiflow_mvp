@@ -2,6 +2,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import Topbar from '../../../components/Shell/Topbar'
 import StageProgress from '../../../components/StageProgress/StageProgress'
 import ChatPanel from '../../../components/ChatPanel/ChatPanel'
+import Loading from '../../../components/Loading/Loading'
 import { useTodoStage } from '../../../hooks/useTodoStage'
 import { startCoding, triggerTodo } from '../../../api'
 import { useLocale } from '../../../hooks/useLocale'
@@ -29,7 +30,7 @@ export default function TodoStage() {
     }
   }
 
-  if (!task) return null
+  if (!task) return <Loading />
 
   return (
     <div id="page" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>

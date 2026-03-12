@@ -5,7 +5,7 @@ from pathlib import Path
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from daiflow.config import get_language_setting
+from daiflow.services.settings_service import get_language_setting
 from daiflow.database import get_background_db
 from daiflow.models import Project, ProjectRepo, Session, SessionStatus, Task, TaskStatus, Todo, TodoStatus
 from daiflow.services.cody_service import build_cody_client
@@ -74,36 +74,53 @@ async def init_task(task_id: str):
 
     Uses an independent DB session for background execution.
     """
-    async with get_background_db() as db:
-        task = await db.get(Task, task_id)
-        if not task:
-            return
+    try:
+        async with get_background_db() as db:
+            task = await db.get(Task, task_id)
+            if not task:
+                return
 
-        project = await db.get(Project, task.project_id)
-        if not project:
-            return
+            project = await db.get(Project, task.project_id)
+            if not project:
+                return
 
-        # Sync skills
-        sync_skills_to_task(task.project_id, task_id)
+            # Mark as initializing
+            task.status = TaskStatus.INITIALIZING
+            await db.commit()
 
-        # Checkout branch on all repos
-        result = await db.execute(
-            select(ProjectRepo).where(ProjectRepo.project_id == task.project_id)
-        )
-        repos = result.scalars().all()
-        for repo in repos:
-            if repo.local_path and task.branch:
-                try:
-                    await checkout_branch(repo.local_path, task.branch)
-                except Exception as e:
-                    logger.warning("Branch checkout for %s on %s: %s", task.branch, repo.local_path, e)
+            # Sync skills
+            sync_skills_to_task(task.project_id, task_id)
 
-        # Update status to planning
-        task.status = TaskStatus.PLANNING
-        await db.commit()
+            # Checkout branch on all repos
+            result = await db.execute(
+                select(ProjectRepo).where(ProjectRepo.project_id == task.project_id)
+            )
+            repos = result.scalars().all()
+            for repo in repos:
+                if repo.local_path and task.branch:
+                    try:
+                        await checkout_branch(repo.local_path, task.branch)
+                    except Exception as e:
+                        logger.warning("Branch checkout for %s on %s: %s", task.branch, repo.local_path, e)
 
-    # Then generate plan
-    await generate_plan(task_id)
+            # Update status to planning
+            task.status = TaskStatus.PLANNING
+            await db.commit()
+
+        # Then generate plan
+        await generate_plan(task_id)
+
+    except Exception:
+        logger.exception("init_task failed for task %s", task_id)
+        # Reset to CREATED so user can retry
+        try:
+            async with get_background_db() as db:
+                task = await db.get(Task, task_id)
+                if task and task.status in (TaskStatus.INITIALIZING, TaskStatus.PLANNING):
+                    task.status = TaskStatus.CREATED
+                    await db.commit()
+        except Exception:
+            logger.exception("Failed to reset task %s status after init failure", task_id)
 
 
 async def generate_plan(task_id: str):
@@ -184,9 +201,6 @@ async def generate_todos(task_id: str):
         if not existing_session:
             session = Session(session_id=session_id, type="todo_split", ref_id=task_id)
             db.add(session)
-
-        # Update status to show todo generation is happening
-        task.status = TaskStatus.PLAN_LOCKED
         await db.commit()
 
         prompt = TODO_PROMPT_TEMPLATE.format(todo_path=str(todo_path))
@@ -216,6 +230,9 @@ async def generate_todos(task_id: str):
                     db.add(todo)
             except (json.JSONDecodeError, KeyError, TypeError) as e:
                 logger.error("Failed to parse todo.json for task %s: %s", task_id, e)
+                # Still transition to TODO_READY so user can retry via chat
+        else:
+            logger.warning("todo.json not found for task %s after generation", task_id)
 
         task.status = TaskStatus.TODO_READY
         await db.commit()
@@ -231,16 +248,17 @@ async def sync_todos_from_file(db: AsyncSession, task_id: str, content: str):
         todos_data = json.loads(content)
     except (json.JSONDecodeError, TypeError) as e:
         logger.error("Failed to parse todo.json content for task %s: %s", task_id, e)
-        return
+        raise ValueError(f"Invalid todo.json format: {e}") from e
 
-    # Delete only pending todos — preserve running/done
+    # Delete only pending todos — preserve running/done/failed
+    _preserve_statuses = (TodoStatus.RUNNING, TodoStatus.DONE, TodoStatus.FAILED)
     result = await db.execute(
         select(Todo).where(Todo.task_id == task_id)
     )
     existing = result.scalars().all()
-    preserved = {t.seq: t for t in existing if t.status in (TodoStatus.RUNNING, TodoStatus.DONE)}
+    preserved = {t.seq: t for t in existing if t.status in _preserve_statuses}
     for t in existing:
-        if t.status not in (TodoStatus.RUNNING, TodoStatus.DONE):
+        if t.status not in _preserve_statuses:
             await db.delete(t)
 
     # Insert new todos, skipping sequences that are preserved (running/done)

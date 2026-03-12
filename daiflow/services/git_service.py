@@ -1,4 +1,23 @@
 import asyncio
+import logging
+import re
+
+logger = logging.getLogger(__name__)
+
+# Valid git branch name: starts with word char, allows word chars, dots, slashes, hyphens
+_BRANCH_RE = re.compile(r'^[\w][\w./-]*$')
+
+
+def validate_branch_name(branch: str):
+    """Validate that a branch name is safe for git commands.
+
+    Rejects names that could be interpreted as git flags (starting with -)
+    or contain characters invalid for filenames/git refs.
+    """
+    if not branch or not _BRANCH_RE.match(branch):
+        raise ValueError(f"Invalid branch name: {branch!r}")
+    if '..' in branch or branch.endswith('.lock') or branch.endswith('/'):
+        raise ValueError(f"Invalid branch name: {branch!r}")
 
 
 async def _run(cmd: list[str], cwd: str, timeout: int = 120) -> str:
@@ -12,23 +31,34 @@ async def _run(cmd: list[str], cwd: str, timeout: int = 120) -> str:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except asyncio.TimeoutError:
         proc.kill()
-        raise RuntimeError(f"Git command timed out after {timeout}s: {' '.join(cmd)}")
+        raise RuntimeError(f"Git operation timed out after {timeout}s")
     if proc.returncode != 0:
-        raise RuntimeError(f"Git command failed ({' '.join(cmd)}): {stderr.decode().strip()}")
+        stderr_text = stderr.decode().strip()
+        # Log full details for debugging, return sanitized message to caller
+        logger.error("Git command failed: %s | stderr: %s", " ".join(cmd), stderr_text)
+        # Provide a user-friendly error without exposing full paths
+        short_cmd = cmd[1] if len(cmd) > 1 else cmd[0]
+        raise RuntimeError(f"Git {short_cmd} failed: {stderr_text[:200]}")
     return stdout.decode().strip()
 
 
 async def checkout_branch(local_path: str, branch: str):
     """Checkout or create a branch."""
+    validate_branch_name(branch)
     try:
         await _run(["git", "checkout", branch], cwd=local_path)
-    except RuntimeError:
-        await _run(["git", "checkout", "-b", branch], cwd=local_path)
+    except RuntimeError as e:
+        # Only create branch if the error is about it not existing
+        if "pathspec" in str(e) or "did not match" in str(e):
+            await _run(["git", "checkout", "-b", branch], cwd=local_path)
+        else:
+            raise
 
 
 async def get_diff(local_path: str, branch: str = "") -> str:
     """Get git diff for the current branch against its merge-base with main."""
     if branch:
+        validate_branch_name(branch)
         # Try to diff against merge-base with common default branches
         for base in ("main", "master"):
             try:
@@ -37,17 +67,21 @@ async def get_diff(local_path: str, branch: str = "") -> str:
             except RuntimeError:
                 continue
         # Fallback: diff against HEAD (shows uncommitted changes)
+        logger.info("No main/master base found for branch %s, falling back to HEAD diff", branch)
         return await _run(["git", "diff", "HEAD"], cwd=local_path)
     return await _run(["git", "diff", "HEAD"], cwd=local_path)
 
 
 async def commit(local_path: str, message: str):
-    """Stage tracked changes and commit."""
-    await _run(["git", "add", "-u"], cwd=local_path)
+    """Stage all changes and commit.
+
+    Uses 'git add .' which respects .gitignore rules.
+    """
     await _run(["git", "add", "."], cwd=local_path)
     await _run(["git", "commit", "-m", message], cwd=local_path)
 
 
 async def push(local_path: str, branch: str):
     """Push to remote."""
+    validate_branch_name(branch)
     await _run(["git", "push", "-u", "origin", branch], cwd=local_path)

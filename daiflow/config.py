@@ -28,9 +28,9 @@ DEFAULT_LANGUAGE = "en"
 
 
 async def get_language_setting(db) -> str:
-    from daiflow.models import Setting
-    setting = await db.get(Setting, "language")
-    return setting.value if setting and setting.value else DEFAULT_LANGUAGE
+    """Deprecated: use daiflow.services.settings_service.get_language_setting instead."""
+    from daiflow.services.settings_service import get_language_setting as _get
+    return await _get(db)
 
 
 def init_daiflow_dir():

@@ -1,4 +1,5 @@
 import json
+import logging
 import shutil
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
@@ -8,7 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from daiflow.config import TASKS_DIR
 from daiflow.database import get_db
-from daiflow.models import ProjectRepo, Session, Task, TaskStatus, Todo
+from daiflow.models import ProjectRepo, Session, SessionStatus, Task, TaskStatus, Todo
+from daiflow.schemas import TaskResponse, TodoResponse
 from daiflow.services.git_service import commit, get_diff, push
 from daiflow.services.task_service import (
     execute_todo,
@@ -18,9 +20,13 @@ from daiflow.services.task_service import (
     start_coding,
 )
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
 VALID_TRANSITIONS = {
+    TaskStatus.CREATED: {TaskStatus.INITIALIZING},
+    TaskStatus.INITIALIZING: {TaskStatus.PLANNING},
     TaskStatus.PLANNING: {TaskStatus.PLAN_LOCKED},
     TaskStatus.PLAN_LOCKED: {TaskStatus.TODO_READY},
     TaskStatus.TODO_READY: {TaskStatus.CODING},
@@ -57,19 +63,7 @@ class TaskUpdate(BaseModel):
 
 
 def _task_to_dict(t: Task) -> dict:
-    return {
-        "id": t.id,
-        "name": t.name,
-        "project_id": t.project_id,
-        "description": t.description,
-        "branch": t.branch,
-        "prd": t.prd,
-        "tech_plan": t.tech_plan,
-        "status": t.status,
-        "mr_info": json.loads(t.mr_info) if t.mr_info else {},
-        "created_at": t.created_at.isoformat() if t.created_at else None,
-        "updated_at": t.updated_at.isoformat() if t.updated_at else None,
-    }
+    return TaskResponse.model_validate(t).model_dump()
 
 
 async def _get_task_repos(db: AsyncSession, project_id: str):
@@ -117,7 +111,7 @@ async def create_task(
         branch=data.branch,
         prd=data.prd,
         tech_plan=data.tech_plan,
-        status=TaskStatus.INITIALIZING,
+        status=TaskStatus.CREATED,
     )
     db.add(task)
     await db.commit()
@@ -200,7 +194,7 @@ async def start_review(task_id: str, db: AsyncSession = Depends(get_db)):
     session_id = f"task:{task_id}:review"
     existing = await db.get(Session, session_id)
     if not existing:
-        session = Session(session_id=session_id, type="review", ref_id=task_id, status=0)
+        session = Session(session_id=session_id, type="review", ref_id=task_id, status=SessionStatus.WAITING)
         db.add(session)
 
     task.status = TaskStatus.REVIEWING
@@ -246,17 +240,7 @@ async def get_todos(task_id: str, db: AsyncSession = Depends(get_db)):
         select(Todo).where(Todo.task_id == task_id).order_by(Todo.seq)
     )
     todos = result.scalars().all()
-    return [
-        {
-            "id": t.id,
-            "seq": t.seq,
-            "title": t.title,
-            "description": t.description,
-            "status": t.status,
-            "cody_session_id": t.cody_session_id,
-        }
-        for t in todos
-    ]
+    return [TodoResponse.model_validate(t).model_dump() for t in todos]
 
 
 # ── Review Stage ──
@@ -283,6 +267,60 @@ async def get_task_diff(task_id: str, db: AsyncSession = Depends(get_db)):
     return {"diffs": diffs}
 
 
+@router.post("/{task_id}/generate-commit-message")
+async def generate_commit_message(task_id: str, db: AsyncSession = Depends(get_db)):
+    """Generate a commit message from the task's diff using AI."""
+    task = await db.get(Task, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    repos, allowed_roots = await _get_task_repos(db, task.project_id)
+
+    # Collect diffs
+    diff_texts = []
+    for repo in repos:
+        if repo.local_path:
+            try:
+                d = await get_diff(repo.local_path, task.branch)
+                if d:
+                    diff_texts.append(d)
+            except Exception:
+                pass
+
+    if not diff_texts:
+        return {"commit_message": f"feat: {task.name}"}
+
+    # Truncate diff if too large (keep first 8000 chars)
+    combined_diff = "\n".join(diff_texts)
+    if len(combined_diff) > 8000:
+        combined_diff = combined_diff[:8000] + "\n... (truncated)"
+
+    prompt = (
+        "Generate a concise git commit message for the following changes.\n"
+        "Use conventional commit format (feat/fix/refactor/docs/chore).\n"
+        "Include a short subject line and a brief body with bullet points.\n\n"
+        f"Task: {task.name}\n"
+        f"Description: {task.description or 'N/A'}\n\n"
+        f"Diff:\n```\n{combined_diff}\n```\n\n"
+        "Output ONLY the commit message, nothing else."
+    )
+
+    try:
+        from daiflow.services.cody_service import build_cody_client
+        client = await build_cody_client(db, allowed_roots[0] if allowed_roots else ".", allowed_roots)
+        result_text = ""
+        async with client:
+            async for chunk in client.stream(prompt):
+                if chunk.type == "text_delta":
+                    result_text += chunk.content
+                elif chunk.type == "done":
+                    break
+        return {"commit_message": result_text.strip() or f"feat: {task.name}"}
+    except Exception:
+        logger.warning("AI commit message generation failed for task %s", task_id, exc_info=True)
+        return {"commit_message": f"feat: {task.name}\n\n{task.description or ''}"}
+
+
 class SubmitMR(BaseModel):
     commit_message: str = ""
 
@@ -299,17 +337,32 @@ async def submit_mr(
 
     commit_msg = data.commit_message or f"feat: {task.name}"
 
-    results = []
-    for repo in repos:
-        if repo.local_path:
-            try:
-                await commit(repo.local_path, commit_msg)
-                await push(repo.local_path, task.branch)
-                results.append({"repo": repo.git_url, "status": "success"})
-            except Exception as e:
-                results.append({"repo": repo.git_url, "status": "error", "error": str(e)})
+    # Phase 1: commit all repos first (safer — all-or-nothing per phase)
+    commit_results = []
+    active_repos = [r for r in repos if r.local_path]
+    for repo in active_repos:
+        try:
+            await commit(repo.local_path, commit_msg)
+            commit_results.append({"repo": repo.git_url, "committed": True})
+        except Exception as e:
+            commit_results.append({"repo": repo.git_url, "committed": False, "error": str(e)})
 
-    task.status = TaskStatus.DONE
+    # Phase 2: push only successfully committed repos
+    results = []
+    for repo, cr in zip(active_repos, commit_results):
+        if not cr.get("committed"):
+            results.append({"repo": repo.git_url, "status": "error", "error": cr.get("error", "commit failed")})
+            continue
+        try:
+            await push(repo.local_path, task.branch)
+            results.append({"repo": repo.git_url, "status": "success"})
+        except Exception as e:
+            results.append({"repo": repo.git_url, "status": "error", "error": str(e)})
+
+    # Only mark as DONE if at least one repo succeeded
+    has_success = any(r["status"] == "success" for r in results)
+    if has_success:
+        task.status = TaskStatus.DONE
     task.mr_info = json.dumps(results)
     await db.commit()
 

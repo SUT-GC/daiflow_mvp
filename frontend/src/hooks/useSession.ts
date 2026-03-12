@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { getSessionStatus, getSessionLogs } from '../api'
+import { SessionStatus } from '../types/enums'
 import { wsClient } from '../ws'
 
 export interface SessionEvent {
@@ -46,11 +47,11 @@ export function useSession(sessionId: string | null) {
         }
 
         // 3. If running, subscribe via WebSocket
-        if (statusData.status === 1) {
+        if (statusData.status === SessionStatus.RUNNING) {
           unsub = wsClient.subscribe(
             `session:${sessionId}`,
             (event) => {
-              logsRef.current = [...logsRef.current, event]
+              logsRef.current.push(event)
               // Batch log updates via rAF
               if (rafRef.current === null) {
                 rafRef.current = requestAnimationFrame(flushLogs)

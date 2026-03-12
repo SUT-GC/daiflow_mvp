@@ -35,7 +35,7 @@ class TestTasksCRUD:
         assert data["name"] == "Task 1"
         assert data["project_id"] == pid
         assert data["branch"] == "feature/test"
-        assert data["status"] == 1  # INITIALIZING
+        assert data["status"] == 0  # CREATED
 
     @_mock_bg
     async def test_get_task(self, mock_init, client):
@@ -130,7 +130,21 @@ class TestTasksCRUD:
 
 class TestStageTransitions:
     @_mock_bg
-    async def test_lock_plan_invalid_transition(self, mock_init, client):
+    async def test_lock_plan_invalid_from_created(self, mock_init, client):
+        """Cannot lock plan when task is in CREATED status."""
+        pid = await _create_project(client)
+        create_resp = await client.post("/api/tasks", json={
+            "name": "Task 1", "project_id": pid,
+        })
+        tid = create_resp.json()["id"]
+
+        # Task is in CREATED (0), lock-plan requires PLANNING (2)
+        resp = await client.post(f"/api/tasks/{tid}/lock-plan")
+        assert resp.status_code == 400
+        assert "Cannot transition" in resp.json()["detail"]
+
+    @_mock_bg
+    async def test_lock_plan_invalid_from_initializing(self, mock_init, client, db_session):
         """Cannot lock plan when task is in INITIALIZING status."""
         pid = await _create_project(client)
         create_resp = await client.post("/api/tasks", json={
@@ -138,7 +152,11 @@ class TestStageTransitions:
         })
         tid = create_resp.json()["id"]
 
-        # Task is in INITIALIZING (1), lock-plan requires PLANNING (2)
+        from daiflow.models import Task, TaskStatus
+        task = await db_session.get(Task, tid)
+        task.status = TaskStatus.INITIALIZING
+        await db_session.commit()
+
         resp = await client.post(f"/api/tasks/{tid}/lock-plan")
         assert resp.status_code == 400
         assert "Cannot transition" in resp.json()["detail"]
@@ -170,3 +188,61 @@ class TestStageTransitions:
         resp = await client.post(f"/api/tasks/{tid}/lock-plan")
         assert resp.status_code == 200
         assert resp.json()["status"] == TaskStatus.PLAN_LOCKED
+
+
+class TestGenerateCommitMessage:
+    @_mock_bg
+    async def test_not_found(self, mock_init, client):
+        resp = await client.post("/api/tasks/nonexistent/generate-commit-message")
+        assert resp.status_code == 404
+
+    @_mock_bg
+    async def test_no_diff_returns_fallback(self, mock_init, client):
+        """When there are no diffs, return a fallback commit message."""
+        pid = await _create_project(client)
+        create_resp = await client.post("/api/tasks", json={
+            "name": "My Feature", "project_id": pid,
+        })
+        tid = create_resp.json()["id"]
+
+        resp = await client.post(f"/api/tasks/{tid}/generate-commit-message")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "commit_message" in data
+        assert "My Feature" in data["commit_message"]
+
+
+class TestInitTaskTransition:
+    async def test_init_task_sets_initializing_then_planning(self, db_session):
+        """init_task should transition CREATED → INITIALIZING → PLANNING."""
+        from daiflow.models import Project, ProjectRepo, Task, TaskStatus
+
+        p = Project(name="proj")
+        db_session.add(p)
+        await db_session.flush()
+        t = Task(name="task", project_id=p.id, status=TaskStatus.CREATED, branch="main")
+        db_session.add(t)
+        await db_session.commit()
+        task_id = t.id
+
+        # Mock generate_plan since it requires Cody SDK
+        with patch("daiflow.services.task_service.generate_plan", new_callable=AsyncMock) as mock_plan, \
+             patch("daiflow.services.task_service.sync_skills_to_task"):
+            from daiflow.services.task_service import init_task
+
+            # We need to patch get_background_db to return our test session
+            from contextlib import asynccontextmanager
+
+            @asynccontextmanager
+            async def mock_bg_db():
+                yield db_session
+
+            with patch("daiflow.services.task_service.get_background_db", mock_bg_db):
+                await init_task(task_id)
+
+            # After init_task, status should be PLANNING (set before generate_plan call)
+            await db_session.refresh(t)
+            assert t.status == TaskStatus.PLANNING
+
+            # generate_plan should have been called
+            mock_plan.assert_awaited_once_with(task_id)
