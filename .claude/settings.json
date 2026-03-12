@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/bin/python -m pytest tests/ -v --ignore=tests/test_sse_manager.py)",
+      "Bash(python -m pytest --tb=short -q)",
+      "Bash(pip3 show:*)",
+      "Read(//opt/homebrew/**)",
+      "Bash(find /Users/bytedance/GC/Work/code/daiflow -name pytest -path */bin/*)",
+      "Bash(.venv/bin/pytest --tb=short -q)"
+    ]
+  }
+}

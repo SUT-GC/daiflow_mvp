@@ -49,7 +49,8 @@ export function usePlanStage(taskId: string | undefined) {
 
   const chat = useStageChat({
     sessionId,
-    chatPath: `/tasks/${taskId}/plan/chat`,
+    stage: 'plan',
+    entityId: taskId || '',
     onUpdated,
   })
 

@@ -16,6 +16,7 @@ import { checkSettings } from './api'
 import ErrorBoundary from './components/ErrorBoundary/ErrorBoundary'
 import { ThemeContext, useThemeProvider } from './hooks/useTheme'
 import { LocaleContext, useLocaleProvider } from './hooks/useLocale'
+import { useWebSocket } from './ws'
 
 // Cache settings check result to avoid repeated API calls
 const SettingsContext = createContext<{ configured: boolean; model: string; recheck: () => void }>({
@@ -61,6 +62,7 @@ function SettingsGuard({ children }: { children: React.ReactNode }) {
 export default function App() {
   const themeValue = useThemeProvider()
   const localeValue = useLocaleProvider()
+  useWebSocket()
 
   return (
     <BrowserRouter>

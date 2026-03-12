@@ -6,12 +6,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 DaiFlow is a local AI-powered programming workbench that productizes the full development workflow (requirement → technical plan → task decomposition → coding → code review → merge request). It uses an in-process AI engine (Cody SDK) to understand project context and assist developers.
 
-**Current status:** Early implementation — backend skeleton (FastAPI + SQLAlchemy models + routers + services) and frontend scaffold (React + Vite with pages/hooks/components) are in place. Core business logic (SessionRunner, SSEManager, Cody integration) is being built out.
+**Current status:** Early implementation — backend skeleton (FastAPI + SQLAlchemy models + routers + services) and frontend scaffold (React + Vite with pages/hooks/components) are in place. Core business logic (SessionRunner, WSManager, Cody integration) is being built out.
 
 ## Tech Stack
 
 - **Frontend:** React 19 + TypeScript, built with Vite 6, react-router-dom v7
-- **Backend:** Python 3.11+ with FastAPI (async), SSE for streaming
+- **Backend:** Python 3.11+ with FastAPI (async), WebSocket for streaming
 - **AI Engine:** Cody SDK (`pip install cody-ai`, `from cody import AsyncCodyClient`) — in-process, no external service; see `docs/Cody_sdk.md` for full API
 - **Database:** SQLite via SQLAlchemy async ORM (aiosqlite driver), Alembic for migrations
 - **Local Storage:** `~/.daiflow/` directory for DB, sessions, projects, tasks (override with `DAIFLOW_HOME` env var)
@@ -50,7 +50,7 @@ alembic upgrade head                               # Apply migrations
 
 ```
 Frontend (React SPA)
-    ↕  HTTP REST + SSE
+    ↕  HTTP REST + WebSocket
 Backend (FastAPI)
     ↕              ↕
 Cody SDK       SQLite DB
@@ -63,18 +63,24 @@ Cody SDK       SQLite DB
 3. **Code Implementation** — Each todo executed independently by AI; user reviews
 4. **Code Review & Submit** — Review all diffs, generate commit message, push MR
 
-### Session Architecture (SessionRunner + SSEManager)
+### Session Architecture (SessionRunner + WSManager)
 
-All AI interactions share a unified pattern: **SessionRunner** executes Cody → writes logs to `.jsonl` → updates status in DB → pushes SSE via **SSEManager**. Three unified APIs serve all scenarios:
+All AI interactions share a unified pattern: **SessionRunner** executes Cody → writes logs to `.jsonl` → updates status in DB → pushes events via **WSManager** (WebSocket). Three data access patterns:
 - `GET /api/sessions/{id}/status` — DB snapshot (survives restart)
 - `GET /api/sessions/{id}/logs` — `.jsonl` file replay (survives restart)
-- `GET /api/sessions/{id}/stream` — real-time SSE (in-memory Queue)
+- `WS /api/ws` — single multiplexed WebSocket connection for all real-time events
+
+**WebSocket Protocol:** Single connection, channel-based pub/sub. Client sends `{"action": "subscribe", "channel": "session:task:42:plan"}` to receive events; sends `{"action": "chat", "id": "req_1", "chat_path": "plan", "entity_id": "abc", "message": "..."}` for bidirectional chat. Server pushes `{"channel": "...", "event": {...}}`.
 
 **Two IDs to distinguish:**
 - `session_id` — DaiFlow business ID (e.g. `task:42:plan`, `init:proj_1:frontend_structure`)
 - `cody_session_id` — Cody SDK's internal UUID (stored in sessions table for traceability)
 
-**Project-level SSE bus:** Init page uses `GET /api/projects/{id}/init/stream` to receive all session status changes through one SSE connection (channel: `project:init:{project_id}`). Individual session detail uses the standard `useSession` hook.
+**Channel naming:**
+
+- `session:{session_id}` — individual session event stream
+- `project:init:{project_id}` — project init aggregation bus
+- `chat:{request_id}` — ephemeral chat response stream (auto-cleaned on done)
 
 ### Cody Session Strategy
 
@@ -107,10 +113,11 @@ Output: `~/.daiflow/projects/{project_id}/skills/{knowledge_type}/SKILL.md`
 | Category | Key Endpoints |
 |----------|--------------|
 | Settings | `GET/PUT /api/settings`, `GET /api/settings/check` |
-| Projects | CRUD `/api/projects`, `POST .../init`, `GET .../init/sessions`, `GET .../init/stream` (SSE) |
+| Projects | CRUD `/api/projects`, `POST .../init`, `GET .../init/sessions` |
 | Tasks | CRUD `/api/tasks`, `POST .../lock-plan`, `POST .../start-coding`, `POST .../start-review` |
-| Dev Flow | `POST /api/tasks/{id}/plan`, `POST .../plan/chat`, `POST .../todo`, `POST .../todo/chat`, `POST /api/todos/{id}/execute`, `POST .../todos/{id}/chat`, `POST .../review/chat` |
-| Sessions | `GET /api/sessions/{id}/status`, `GET .../logs`, `GET .../stream` (SSE) |
+| Dev Flow | `POST /api/tasks/{id}/plan`, `POST .../todo`, `POST /api/todos/{id}/execute` |
+| Sessions | `GET /api/sessions/{id}/status`, `GET .../logs` |
+| WebSocket | `WS /api/ws` — subscribe to channels, real-time events, stage chat |
 | Review | `GET /api/tasks/{id}/diff`, `POST /api/tasks/{id}/submit-mr` |
 
 ## Database Schema (6 tables)
@@ -141,10 +148,10 @@ Defined in `daiflow/models.py`. All primary keys use UUID hex strings (`uuid.uui
 ## Conventions
 
 - Skill files use YAML frontmatter + Markdown body, with `user-invocable: false`
-- All AI tasks go through SessionRunner → SSEManager → unified Session API
+- All AI tasks go through SessionRunner → WSManager → WebSocket push
 - Cody SDK StreamChunk types: `text_delta`, `thinking`, `tool_call`, `tool_result`, `done`, `compact`
-- DaiFlow SSE event types: above + `status_change` (converted from done), `plan_updated` / `todo_updated` / `code_updated` (file write detection per stage), `session_status` (init bus)
-- All 4 stage chat endpoints return SSE streams (not JSON), share common pattern: `useStageChat` hook + `stage_chat()` backend template
+- DaiFlow event types: above + `status_change` (converted from done), `plan_updated` / `todo_updated` / `code_updated` (file write detection per stage), `session_status` (init bus)
+- All 4 stage chats go through `WS /api/ws` chat action, shared pattern: `useStageChat` hook + `chat_service.prepare_stage_chat()` + `run_stage_chat()` backend generator
 - Stage-specific updated events: `plan_updated` (push full content), `todo_updated` (push full content), `code_updated` (push null, frontend re-fetches diff)
 - Session logs persisted to `~/.daiflow/sessions/{session_id}.jsonl` for replay after restart
 - Multi-repo support via `allowed_roots` in Cody client config

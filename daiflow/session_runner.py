@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from daiflow.config import FILE_WRITE_TOOLS, LANGUAGE_INSTRUCTIONS, SESSIONS_DIR, safe_filename
 from daiflow.models import Session, SessionStatus
-from daiflow.sse_manager import sse_manager
+from daiflow.ws_manager import ws_manager
 
 
 def _now():
@@ -91,7 +91,7 @@ class SessionRunner:
             db: Database session (must be an independent session for background tasks)
             session_id: DaiFlow business session ID
             prompt: The prompt to send to Cody
-            extra_channels: Additional SSE channels to publish status to
+            extra_channels: Additional WebSocket channels to publish status to
             on_tool_result: Optional callback(event) for detecting file writes
             cody_session_id: Optional Cody session ID to continue a previous conversation
             language: Language code (e.g. 'zh', 'en') to append language instruction
@@ -132,19 +132,19 @@ class SessionRunner:
                         result_cody_session_id = chunk.session_id
 
                     status_event = {"type": "status_change", "status": SessionStatus.DONE, "ts": event["ts"]}
-                    await sse_manager.publish(channel, status_event)
+                    await ws_manager.publish(channel, status_event)
                     _append_log(session_id, status_event)
 
                     if extra_channels:
                         for ch in extra_channels:
-                            await sse_manager.publish(ch, {
+                            await ws_manager.publish(ch, {
                                 "type": "session_status",
                                 "session_id": session_id,
                                 "status": SessionStatus.DONE,
                                 "ts": event["ts"],
                             })
                 else:
-                    await sse_manager.publish(channel, event)
+                    await ws_manager.publish(channel, event)
 
                     # Cache tool_call args for later association with tool_result
                     if event["type"] == "tool_call":
@@ -160,7 +160,7 @@ class SessionRunner:
                         extra_event = await on_tool_result(event)
                         if extra_event:
                             _append_log(session_id, extra_event)
-                            await sse_manager.publish(channel, extra_event)
+                            await ws_manager.publish(channel, extra_event)
 
             self._last_cody_session_id = result_cody_session_id
 
@@ -182,11 +182,11 @@ class SessionRunner:
             _append_log(session_id, error_event)
 
             status_event = {"type": "status_change", "status": SessionStatus.FAILED, "error": str(e), "ts": _now().isoformat()}
-            await sse_manager.publish(channel, status_event)
+            await ws_manager.publish(channel, status_event)
 
             if extra_channels:
                 for ch in extra_channels:
-                    await sse_manager.publish(ch, {
+                    await ws_manager.publish(ch, {
                         "type": "session_status",
                         "session_id": session_id,
                         "status": SessionStatus.FAILED,
@@ -211,9 +211,9 @@ async def run_stage_chat(
     language: str | None = None,
 ):
     """
-    Stage chat SSE generator. Yields SSE-formatted strings.
+    Stage chat async generator. Yields raw event dicts.
 
-    Used by plan/chat, todo/chat, todo_exec/chat, review/chat endpoints.
+    Used by WS handler. The caller sends events via ws.send_json.
     """
     if language:
         message = message + LANGUAGE_INSTRUCTIONS.get(language, "")
@@ -239,10 +239,10 @@ async def run_stage_chat(
             _append_log(session_id, event)
 
             if event["type"] == "done":
-                yield f"data: {json.dumps({'type': 'done'})}\n\n"
+                yield {"type": "done"}
                 return
 
-            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            yield event
 
             # Cache tool_call args for later association with tool_result
             if event["type"] == "tool_call":
@@ -259,12 +259,12 @@ async def run_stage_chat(
                 updated_event = await on_tool_result(event)
                 if updated_event:
                     _append_log(session_id, updated_event)
-                    yield f"data: {json.dumps(updated_event, ensure_ascii=False)}\n\n"
+                    yield updated_event
 
     except Exception as e:
         error_event = {"type": "error", "content": str(e), "ts": _now().isoformat()}
         _append_log(session_id, error_event)
-        yield f"data: {json.dumps(error_event, ensure_ascii=False)}\n\n"
+        yield error_event
 
 
 def _extract_file_path(event: dict) -> str:
@@ -282,7 +282,7 @@ def make_file_write_detector(target_file: str | None, event_type: str, on_match=
 
     Args:
         target_file: Filename to match (e.g. "plan.md"), or None to match any write.
-        event_type: SSE event type to emit (e.g. "plan_updated", "code_updated").
+        event_type: Event type to emit (e.g. "plan_updated", "code_updated").
         on_match: Optional async callback(file_path) called on match, returns event content or None.
     """
     async def on_tool_result(event: dict):

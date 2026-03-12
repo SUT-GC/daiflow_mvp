@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
-import { getTask, getTodos, TaskData, TodoData, SSEEvent } from '../api'
+import { getTask, getTodos, TaskData, TodoData } from '../api'
+import type { WSEvent } from '../ws'
 import { useSession } from './useSession'
 import { useStageChat } from './useStageChat'
 
@@ -30,7 +31,7 @@ export function useTodoStage(taskId: string | undefined) {
     }
   }, [status, refreshTodos])
 
-  const onUpdated = useCallback((event: SSEEvent) => {
+  const onUpdated = useCallback((event: WSEvent) => {
     if (event.type === 'todo_updated') {
       // Re-fetch from DB to get full todo records with ids
       refreshTodos()
@@ -39,7 +40,8 @@ export function useTodoStage(taskId: string | undefined) {
 
   const chat = useStageChat({
     sessionId,
-    chatPath: `/tasks/${taskId}/todo/chat`,
+    stage: 'todo',
+    entityId: taskId || '',
     onUpdated,
   })
 
