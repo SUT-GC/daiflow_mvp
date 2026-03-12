@@ -83,6 +83,10 @@ async def init_task(task_id: str):
         if not project:
             return
 
+        # Mark as initializing
+        task.status = TaskStatus.INITIALIZING
+        await db.commit()
+
         # Sync skills
         sync_skills_to_task(task.project_id, task_id)
 

@@ -100,3 +100,72 @@
 .diff-table tr.rm .code {
   color: var(--red);
 }
+
+/* ── Mode Toggle ── */
+
+.diff-mode-toggle {
+  display: flex;
+  gap: 0;
+  align-self: flex-end;
+  border: 1px solid var(--border);
+  border-radius: var(--r2);
+  overflow: hidden;
+}
+
+.diff-mode-btn {
+  padding: 4px 12px;
+  font-size: 11px;
+  font-family: var(--mono);
+  background: var(--bg-2);
+  border: none;
+  color: var(--t2);
+  cursor: pointer;
+}
+
+.diff-mode-btn + .diff-mode-btn {
+  border-left: 1px solid var(--border);
+}
+
+.diff-mode-btn.active {
+  background: var(--bg-4);
+  color: var(--t0);
+  font-weight: 600;
+}
+
+/* ── Split View ── */
+
+.diff-table-split {
+  table-layout: fixed;
+}
+
+.diff-table-split .ln {
+  width: 40px;
+  min-width: 40px;
+}
+
+.diff-table-split .split-left,
+.diff-table-split .split-right {
+  width: calc(50% - 40px);
+}
+
+.diff-table-split .split-left {
+  border-right: 1px solid var(--border);
+}
+
+.diff-table-split td.rm {
+  background: var(--diff-rm-bg);
+  color: var(--red);
+}
+
+.diff-table-split td.add {
+  background: var(--diff-add-bg);
+  color: var(--green);
+}
+
+.diff-table-split td.empty {
+  background: var(--bg-3);
+}
+
+.diff-table-split td.ctx {
+  color: var(--t1);
+}

@@ -1,6 +1,7 @@
 import { useNavigate } from 'react-router-dom'
 import { useLocale } from '../../hooks/useLocale'
 import type { TranslationKey } from '../../i18n'
+import { TaskStatus } from '../../types/enums'
 
 interface StageProgressProps {
   taskId: string
@@ -9,10 +10,10 @@ interface StageProgressProps {
 }
 
 const STAGES: { num: number; labelKey: TranslationKey; path: string; minStatus: number }[] = [
-  { num: 1, labelKey: 'stage.1', path: 'plan', minStatus: 2 },
-  { num: 2, labelKey: 'stage.2', path: 'todo', minStatus: 3 },
-  { num: 3, labelKey: 'stage.3', path: 'coding', minStatus: 5 },
-  { num: 4, labelKey: 'stage.4', path: 'review', minStatus: 6 },
+  { num: 1, labelKey: 'stage.1', path: 'plan', minStatus: TaskStatus.PLANNING },
+  { num: 2, labelKey: 'stage.2', path: 'todo', minStatus: TaskStatus.PLAN_LOCKED },
+  { num: 3, labelKey: 'stage.3', path: 'coding', minStatus: TaskStatus.CODING },
+  { num: 4, labelKey: 'stage.4', path: 'review', minStatus: TaskStatus.REVIEWING },
 ]
 
 export default function StageProgress({ taskId, currentStage, taskStatus }: StageProgressProps) {

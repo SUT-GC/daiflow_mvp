@@ -103,7 +103,7 @@ def compute_init_sessions(project_id: str, repos: list) -> list[dict]:
 
     # Layer 2: per-repo knowledge
     for repo in repos:
-        repo_type = repo.repo_type if hasattr(repo, "repo_type") else repo.get("repo_type", "custom")
+        repo_type = repo.repo_type
         types = LAYER_2_TYPES.get(repo_type, [])
         for kt in types:
             sessions.append({
