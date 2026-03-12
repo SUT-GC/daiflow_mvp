@@ -93,10 +93,10 @@ export default function ProjectForm({
         <div key={i} className="repo-block">
           <div className="repo-block-head">
             <div className="type-toggle">
-              {['frontend', 'backend', 'custom'].map(tp => (
+              {['frontend', 'backend', 'fullstack', 'custom'].map(tp => (
                 <button
                   key={tp}
-                  className={`type-btn ${repo.repo_type === tp ? (tp === 'frontend' ? 'fe' : tp === 'backend' ? 'be' : 'custom') : ''}`}
+                  className={`type-btn ${repo.repo_type === tp ? (tp === 'frontend' ? 'fe' : tp === 'backend' ? 'be' : tp === 'fullstack' ? 'fs' : 'custom') : ''}`}
                   onClick={() => updateRepo(i, 'repo_type', tp)}
                 >
                   {tp}

@@ -51,6 +51,12 @@
   color: var(--teal);
 }
 
+.type-btn.fs {
+  background: var(--purple-d, rgba(139,92,246,.15));
+  border-color: rgba(139,92,246,.25);
+  color: var(--purple, #a78bfa);
+}
+
 .type-btn.custom {
   background: var(--amber-d);
   border-color: rgba(251,191,36,.25);

@@ -119,7 +119,7 @@ export const deleteProject = (id: string) =>
 export const initProject = (id: string) =>
   request<{ ok: boolean }>(`/projects/${id}/init`, { method: 'POST' })
 export const getInitSessions = (id: string) =>
-  request<SessionStatusData[]>(`/projects/${id}/init/sessions`)
+  request<Record<number, SessionStatusData[]>>(`/projects/${id}/init/sessions`)
 export const retryInit = (id: string) =>
   request<{ ok: boolean }>(`/projects/${id}/init/retry`, { method: 'POST' })
 export const getProjectKnowledge = (id: string) =>

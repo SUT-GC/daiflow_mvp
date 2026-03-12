@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { getSessionStatus, getSessionLogs } from '../api'
+import { getSessionStatus, getSessionLogs, SessionStatusData } from '../api'
 import { SessionStatus } from '../types/enums'
 import { wsClient } from '../ws'
 
@@ -12,6 +12,20 @@ export interface SessionEvent {
   status?: number
   error?: string
   ts?: string
+}
+
+// Convert API log response to SessionEvent
+function convertLogToEvent(log: Record<string, unknown>): SessionEvent {
+  return {
+    type: (log.event_type as string) || (log.type as string) || 'unknown',
+    content: log.content as string,
+    tool_name: log.tool_name as string,
+    args: log.args,
+    tool_call_id: log.tool_call_id as string,
+    status: log.status as number,
+    error: log.error as string,
+    ts: log.ts as string,
+  }
 }
 
 export function useSession(sessionId: string | null) {
@@ -42,8 +56,9 @@ export function useSession(sessionId: string | null) {
         // 2. Fetch logs
         const logsData = await getSessionLogs(sessionId!)
         if (Array.isArray(logsData)) {
-          logsRef.current = logsData
-          setLogs(logsData)
+          const events = logsData.map(convertLogToEvent)
+          logsRef.current = events
+          setLogs(events)
         }
 
         // 3. If running, subscribe via WebSocket

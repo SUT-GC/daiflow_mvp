@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { getInitSessions } from '../api'
+import { getInitSessions, SessionStatusData } from '../api'
 import { SessionStatus } from '../types/enums'
 import { wsClient } from '../ws'
 
@@ -25,10 +25,23 @@ export function useInitProgress(projectId: string | null) {
     async function load() {
       try {
         const data = await getInitSessions(projectId!)
-        setLayers(data)
+        // API already returns Record<number, SessionStatusData[]>, just convert to InitSession[]
+        const converted: Record<number, InitSession[]> = {}
+        for (const [layerStr, sessions] of Object.entries(data)) {
+          const layer = Number(layerStr)
+          converted[layer] = sessions.map(s => ({
+            session_id: s.session_id,
+            status: s.status,
+            layer: s.layer ?? layer,
+            error: s.error,
+            started_at: s.started_at,
+            finished_at: s.finished_at,
+          }))
+        }
+        setLayers(converted)
 
         // Compute done from loaded data (covers page opened after init finished)
-        const allSessions = (Object.values(data) as InitSession[][]).flat()
+        const allSessions = Object.values(converted).flat()
         if (allSessions.length > 0 && allSessions.every(s => s.status >= SessionStatus.DONE)) {
           setDone(true)
           return // No need for WS — already finished

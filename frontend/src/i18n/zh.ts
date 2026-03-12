@@ -79,6 +79,8 @@ const zh: Record<TranslationKey, string> = {
   'init.layer': '层',
   'init.retrying': '重试中...',
   'init.retry_failed': '重试 {count} 个失败项',
+  'init.regenerate': '重新生成',
+  'init.regenerating': '重新生成中...',
   'init.return_projects': '返回项目列表',
   'init.enter_project': '进入项目',
   'init.no_logs': '暂无日志。',

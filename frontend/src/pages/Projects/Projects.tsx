@@ -1,17 +1,17 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import Topbar from '../../components/Shell/Topbar'
-import { listProjects, deleteProject, getInitSessions } from '../../api'
+import { listProjects, deleteProject, getInitSessions, SessionStatusData } from '../../api'
 import { useLocale } from '../../hooks/useLocale'
 import type { ProjectData } from '../../api'
 import './Projects.css'
 
 type InitStatus = 'none' | 'running' | 'done' | 'partial'
 
-function computeInitStatus(sessions: Record<string, any[]>): InitStatus {
-  const all = Object.values(sessions).flat()
+function computeInitStatus(layers: Record<number, SessionStatusData[]>): InitStatus {
+  const all = Object.values(layers).flat()
   if (all.length === 0) return 'none'
-  const statuses = all.map((s: any) => s.status as number)
+  const statuses = all.map((s) => s.status as number)
   if (statuses.some(s => s <= 1)) return 'running'  // 0=waiting, 1=running
   if (statuses.every(s => s === 2)) return 'done'
   return 'partial' // some failed
