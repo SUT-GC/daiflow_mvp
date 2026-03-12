@@ -1,0 +1,81 @@
+.settings-page {
+  max-width: 540px;
+}
+
+.eyebrow {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--blue);
+  text-transform: uppercase;
+  letter-spacing: .1em;
+  margin-bottom: 6px;
+}
+
+.page-title {
+  font-size: 22px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.page-desc {
+  font-size: 13px;
+  color: var(--t2);
+  margin-bottom: 28px;
+  line-height: 1.5;
+}
+
+.settings-card {
+  padding: 22px;
+  margin-bottom: 28px;
+}
+
+.settings-card .card-title {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 18px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+  position: relative;
+}
+
+.actions {
+  display: flex;
+  gap: 10px;
+}
+
+.theme-switch {
+  display: flex;
+  gap: 12px;
+}
+
+.theme-option {
+  flex: 1;
+  padding: 16px;
+  border-radius: var(--r2);
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  text-align: center;
+  transition: all .15s;
+}
+
+.theme-option:hover {
+  border-color: var(--border-md);
+}
+
+.theme-option.selected {
+  border-color: var(--blue);
+  background: var(--blue-d);
+}
+
+.theme-option-icon {
+  font-size: 24px;
+  margin-bottom: 8px;
+}
+
+.theme-option-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--t1);
+}

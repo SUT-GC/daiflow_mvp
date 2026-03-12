@@ -6,32 +6,44 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 DaiFlow is a local AI-powered programming workbench that productizes the full development workflow (requirement → technical plan → task decomposition → coding → code review → merge request). It uses an in-process AI engine (Cody SDK) to understand project context and assist developers.
 
-**Current status:** MVP phase — technical spec, product docs, and UI prototypes are complete; backend/frontend implementation has not yet started.
+**Current status:** Early implementation — backend skeleton (FastAPI + SQLAlchemy models + routers + services) and frontend scaffold (React + Vite with pages/hooks/components) are in place. Core business logic (SessionRunner, SSEManager, Cody integration) is being built out.
 
 ## Tech Stack
 
-- **Frontend:** React + TypeScript, built with Vite
+- **Frontend:** React 19 + TypeScript, built with Vite 6, react-router-dom v7
 - **Backend:** Python 3.11+ with FastAPI (async), SSE for streaming
 - **AI Engine:** Cody SDK (`pip install cody-ai`, `from cody import AsyncCodyClient`) — in-process, no external service; see `docs/Cody_sdk.md` for full API
-- **Database:** SQLite via SQLAlchemy ORM
-- **Local Storage:** `~/.daiflow/` directory for projects, tasks, skill files, and session logs
+- **Database:** SQLite via SQLAlchemy async ORM (aiosqlite driver), Alembic for migrations
+- **Local Storage:** `~/.daiflow/` directory for DB, sessions, projects, tasks (override with `DAIFLOW_HOME` env var)
 
 ## Development Commands
 
 ```bash
-# Start the application (planned CLI entry point)
-daiflow start
-# Starts FastAPI on http://localhost:8000, serves React build as static files, auto-opens browser
-
-# Backend (Python/FastAPI)
+# Backend setup & run
 pip install -r requirements.txt
+pip install -e .                      # Install daiflow package in dev mode
 uvicorn daiflow.main:app --reload --port 8000
 
-# Frontend (React/Vite)
+# CLI entry point (after pip install -e .)
+daiflow start                         # Starts server + auto-opens browser
+daiflow start --port 9000 --no-browser
+
+# Frontend
 cd frontend
 npm install
-npm run dev          # Dev server with HMR
-npm run build        # Build to backend static/ directory
+npm run dev          # Vite dev server with HMR
+npm run build        # tsc + vite build
+
+# Testing
+pip install pytest pytest-asyncio httpx  # Test dependencies
+pytest                                   # Run all tests
+pytest tests/test_models.py              # Run a single test file
+pytest tests/test_api_tasks.py -k "test_create_task"  # Run a single test
+
+# Database migrations (Alembic)
+alembic revision --autogenerate -m "description"  # Generate migration
+alembic upgrade head                               # Apply migrations
+# Note: alembic env.py auto-strips +aiosqlite from DATABASE_URL for sync Alembic
 ```
 
 ## Architecture
@@ -50,62 +62,6 @@ Cody SDK       SQLite DB
 2. **Task Decomposition** — Plan broken into sequential todos
 3. **Code Implementation** — Each todo executed independently by AI; user reviews
 4. **Code Review & Submit** — Review all diffs, generate commit message, push MR
-
-### Planned Backend Structure
-
-```
-daiflow/
-├── main.py                  # FastAPI entry, mounts static files
-├── database.py              # SQLAlchemy init
-├── models.py                # ORM models
-├── config.py                # Global config (~/.daiflow path, etc.)
-├── sse_manager.py           # SSEManager — in-process asyncio.Queue pub/sub
-├── session_runner.py        # SessionRunner — unified AI task executor
-├── routers/
-│   ├── settings.py          # GET/PUT /api/settings, GET /api/settings/check
-│   ├── projects.py          # CRUD /api/projects, POST /api/projects/{id}/init
-│   ├── tasks.py             # CRUD /api/tasks, lock-plan/start-coding/start-review
-│   ├── todos.py             # GET /api/tasks/{id}/todos, POST /api/todos/{id}/execute
-│   └── sessions.py          # Unified session API (status / logs / stream)
-├── services/
-│   ├── project_service.py   # Project business logic + 4-layer init orchestration
-│   ├── task_service.py      # Task lifecycle + plan/todo generation
-│   ├── cody_service.py      # Cody SDK wrapper (build_cody_client)
-│   ├── git_service.py       # Git operations (checkout, diff, commit, push)
-│   └── skill_service.py     # Skill file sync and management
-└── static/                  # React build output
-```
-
-### Planned Frontend Structure
-
-```
-src/
-├── pages/
-│   ├── Settings/            # Model/API config (cody_model, base_url, api_key, theme)
-│   ├── Projects/            # Project CRUD + init trigger
-│   ├── Tasks/               # Task list per project
-│   └── DevFlow/             # 4-stage dev workflow
-│       ├── PlanStage/       # Tech plan generation + AI chat
-│       ├── TodoStage/       # Todo decomposition + AI chat
-│       ├── CodingStage/     # Per-todo execution with diff viewer
-│       └── ReviewStage/     # Full diff review + MR submission
-├── components/
-│   ├── ChatPanel/           # Reusable AI chat panel (right sidebar)
-│   ├── MarkdownViewer/      # Markdown rendering
-│   ├── DiffViewer/          # Code diff (react-diff-viewer)
-│   └── StreamLog/           # SSE execution log display
-├── hooks/
-│   ├── useSession.ts        # Unified session hook (status restore + log replay + SSE)
-│   ├── useStageChat.ts      # Common stage chat hook (shared by all 4 stages)
-│   ├── useInitProgress.ts   # Init page hook (project-level SSE bus for all init sessions)
-│   ├── usePlanStage.ts      # Plan stage hook (plan content + chat + plan_updated sync)
-│   ├── useTodoStage.ts      # Todo stage hook (todo list + chat + todo_updated sync)
-│   ├── useCodingStage.ts    # Coding stage hook (todo exec + diff + chat + code_updated)
-│   ├── useSSE.ts            # Low-level SSE connection wrapper (EventSource)
-│   └── useChat.ts           # Chat interaction logic
-└── api/
-    └── index.ts             # API client
-```
 
 ### Session Architecture (SessionRunner + SSEManager)
 
@@ -138,6 +94,14 @@ Layers execute serially (await), tasks within each layer run concurrently (async
 
 Output: `~/.daiflow/projects/{project_id}/skills/{knowledge_type}/SKILL.md`
 
+## Testing Patterns
+
+- Tests use `pytest` with `asyncio_mode = auto` (see `pytest.ini`)
+- `conftest.py` sets `DAIFLOW_HOME` to a temp directory before any daiflow imports
+- DB tests use in-memory SQLite (`sqlite+aiosqlite:///:memory:`)
+- API tests use `httpx.AsyncClient` with ASGI transport against the FastAPI app
+- `get_db` and `get_background_db` are both overridden in the test `client` fixture — when adding new services that use `get_background_db`, add corresponding patches in `conftest.py`
+
 ## Key API Routes
 
 | Category | Key Endpoints |
@@ -151,24 +115,27 @@ Output: `~/.daiflow/projects/{project_id}/skills/{knowledge_type}/SKILL.md`
 
 ## Database Schema (6 tables)
 
-- **projects** — id, name, description, skill_names (JSON array)
-- **project_repos** — id, project_id (FK), git_url, local_path, repo_type (frontend/backend/custom), description
-- **tasks** — id, name, project_id (FK), description, branch, prd, tech_plan, status, plan_cody_session_id, review_cody_session_id, mr_info
-- **todos** — id, task_id (FK), seq, title, description, status, cody_session_id, result
-- **sessions** — session_id (PK, business ID), cody_session_id, type, ref_id, layer (init层级:1/2/3/4, 其他NULL), status, error, started_at, finished_at
+Defined in `daiflow/models.py`. All primary keys use UUID hex strings (`uuid.uuid4().hex`).
+
+- **projects** — id, name, description, skill_names (JSON array string)
+- **project_repos** — id, project_id (FK), git_url, local_path, repo_type (frontend/backend/custom), repo_type_label, description
+- **tasks** — id, name, project_id (FK), description, branch, prd, tech_plan, status (int), plan_cody_session_id, review_cody_session_id, mr_info (JSON string)
+- **todos** — id, task_id (FK), seq, title, description, status (int), cody_session_id, result
+- **sessions** — session_id (PK, business ID), cody_session_id, type, ref_id, layer (1-4 for init, NULL otherwise), status (int), error, started_at, finished_at
 - **settings** — key/value pairs: `cody_model`, `cody_base_url`, `cody_api_key`, `theme`
 
-## Status Enums
+## Status Enums (IntEnum in models.py)
 
-- **Task:** 0=created, 1=initializing, 2=planning, 3=plan_locked, 4=todo_ready, 5=coding, 6=reviewing, 7=done
-- **Todo:** 0=pending, 1=running, 2=done, 3=failed
-- **Session:** 0=waiting, 1=running, 2=done, 3=failed
+- **TaskStatus:** 0=CREATED, 1=INITIALIZING, 2=PLANNING, 3=PLAN_LOCKED, 4=TODO_READY, 5=CODING, 6=REVIEWING, 7=DONE
+- **TodoStatus:** 0=PENDING, 1=RUNNING, 2=DONE, 3=FAILED
+- **SessionStatus:** 0=WAITING, 1=RUNNING, 2=DONE, 3=FAILED
 
 ## Key File Locations
 
 - `docs/DaiFlow_技术方案.md` — Full technical specification (primary reference for implementation)
 - `docs/DaiFlow_产品文档.md` — Product requirements document
-- `demo/daiflow-ui/` — HTML/CSS UI prototypes (8 pages)
+- `docs/Cody_sdk.md` — Cody SDK API reference
+- `demo/daiflow-ui/` — HTML/CSS UI prototypes (design reference)
 - `demo/daiflow-ui/shared.css` — Design system (theme tokens, color palette, typography)
 
 ## Conventions
@@ -185,3 +152,5 @@ Output: `~/.daiflow/projects/{project_id}/skills/{knowledge_type}/SKILL.md`
 - Documentation is in Chinese (产品文档 = product doc, 技术方案 = tech spec)
 - UI supports dark/light theme via `data-theme` attribute and CSS custom properties
 - Fonts: Sora (sans-serif UI) + JetBrains Mono (code/monospace)
+- Alembic migrations use `render_as_batch=True` (required for SQLite ALTER TABLE support)
+- `config.py` file-write detection uses `FILE_WRITE_TOOLS` frozenset to identify Cody tool calls that modify files
