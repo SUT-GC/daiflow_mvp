@@ -2,7 +2,6 @@ import json
 import shutil
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,7 +11,6 @@ from daiflow.config import PROJECTS_DIR
 from daiflow.database import get_db
 from daiflow.models import Project, ProjectRepo, Session
 from daiflow.services.project_service import compute_init_sessions, run_init, run_init_retry
-from daiflow.sse_manager import sse_manager
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
@@ -310,24 +308,6 @@ async def get_init_sessions(project_id: str, db: AsyncSession = Depends(get_db))
 
     return layers
 
-
-@router.get("/{project_id}/init/stream")
-async def init_stream(project_id: str):
-    """Project-level SSE bus for init progress."""
-    channel = f"project:init:{project_id}"
-
-    async def event_generator():
-        queue = sse_manager.subscribe(channel)
-        try:
-            while True:
-                event = await queue.get()
-                yield f"data: {json.dumps(event)}\n\n"
-                if event.get("type") == "done":
-                    break
-        finally:
-            sse_manager.unsubscribe(channel, queue)
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 @router.get("/{project_id}/knowledge")

@@ -94,8 +94,8 @@ jq --version
 # 确认 sqlite3 可用（用于数据库检查）
 sqlite3 --version
 
-# 确认 curl 支持 SSE
-curl --version | head -1
+# 确认 WebSocket 测试工具可用
+python3 -c "import websockets; print('OK')" 2>/dev/null || echo "pip install websockets"
 ```
 
 如果缺少 `jq`：

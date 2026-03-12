@@ -41,7 +41,8 @@ export function useCodingStage(taskId: string | undefined) {
 
   const chat = useStageChat({
     sessionId,
-    chatPath: currentTodo ? `/todos/${currentTodo.id}/chat` : '',
+    stage: 'todo_exec',
+    entityId: currentTodo?.id || '',
     onUpdated,
   })
 
