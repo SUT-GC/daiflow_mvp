@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from daiflow.config import init_daiflow_dir
 from daiflow.database import init_db
-from daiflow.routers import projects, sessions, settings, tasks, todos, ws
+from daiflow.routers import jobs, projects, sessions, settings, tasks, todos, ws
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +105,7 @@ app.include_router(projects.router)
 app.include_router(tasks.router)
 app.include_router(todos.router)
 app.include_router(sessions.router)
+app.include_router(jobs.router)
 app.include_router(ws.router)
 
 # Serve React build as static files (production mode)

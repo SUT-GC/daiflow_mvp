@@ -12,7 +12,6 @@ from daiflow.database import get_db
 from daiflow.models import Project, ProjectRepo, Session
 from daiflow.schemas import ProjectCreate, ProjectResponse, ProjectUpdate
 from daiflow.services.project_service import compute_init_sessions, run_init, run_init_retry
-from daiflow.services.repo_monitor import check_all_projects
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
@@ -276,17 +275,6 @@ async def get_init_sessions(project_id: str, db: AsyncSession = Depends(get_db))
         })
 
     return layers
-
-
-
-@router.post("/monitor/check")
-async def check_repo_updates():
-    """Manually trigger a repo monitor check across all projects.
-
-    Returns list of projects with detected repo changes.
-    """
-    changes = await check_all_projects()
-    return {"changes": changes}
 
 
 @router.get("/{project_id}/knowledge")

@@ -137,6 +137,26 @@ class Session(Base):
     created_at = Column(DateTime, default=_now)
 
 
+class MonitorJobStatus(IntEnum):
+    RUNNING = 0
+    UPDATED = 1     # found changes, pulled & triggered re-init
+    NO_CHANGE = 2   # checked, nothing new
+    FAILED = 3
+
+
+class MonitorLog(Base):
+    __tablename__ = "monitor_logs"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    project_name = Column(String, default="")
+    status = Column(Integer, default=0)  # MonitorJobStatus
+    repos_changed = Column(Text, default="[]")  # JSON: [{"repo_name": ..., "old": ..., "new": ...}]
+    error = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=_now)
+    finished_at = Column(DateTime, nullable=True)
+
+
 class Setting(Base):
     __tablename__ = "settings"
 

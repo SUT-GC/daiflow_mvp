@@ -1,11 +1,11 @@
-"""Background job that monitors project repos for new commits on master/main.
+"""Background job: monitor project repos for new master commits.
 
-Periodically fetches remote and compares HEAD hash with stored master_hash.
-When changes are detected, notifies via WebSocket and optionally triggers
-knowledge re-generation (project re-init).
+Flow: git fetch → compare hash → git pull → trigger re-init.
+Results logged to monitor_logs table for the Job tab.
 """
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timezone
 
@@ -13,37 +13,36 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from daiflow.database import get_background_db
-from daiflow.models import Project, ProjectRepo
-from daiflow.services.git_service import fetch_remote, get_remote_head
-from daiflow.services.skill_service import get_project_dir
+from daiflow.models import MonitorJobStatus, MonitorLog, Project, ProjectRepo, Setting
+from daiflow.services.git_service import clone_or_pull, fetch_remote, get_remote_head
 from daiflow.services.project_service import _repo_dir_name
-from daiflow.ws_manager import ws_manager
+from daiflow.services.skill_service import get_project_dir
 
 logger = logging.getLogger(__name__)
 
-# Default check interval in seconds (5 minutes)
-DEFAULT_INTERVAL = 300
-
-# Global handle for the monitor task so it can be cancelled on shutdown
+DEFAULT_INTERVAL = 300  # 5 minutes
 _monitor_task: asyncio.Task | None = None
 
 
-async def _check_project_repos(project: Project, repos: list[ProjectRepo]) -> list[dict]:
-    """Check all git repos in a project for new remote commits.
+async def _check_and_pull_project(db, project: Project) -> MonitorLog:
+    """Check one project's repos, pull if updated, return a MonitorLog."""
+    log = MonitorLog(
+        project_id=project.id,
+        project_name=project.name,
+        status=MonitorJobStatus.RUNNING,
+    )
+    db.add(log)
+    await db.flush()
 
-    Returns a list of dicts describing repos that have new commits:
-    [{"repo_id": ..., "repo_name": ..., "old_hash": ..., "new_hash": ...}, ...]
-    """
     project_dir = get_project_dir(project.id)
     changed = []
 
-    for repo in repos:
+    for repo in project.repos:
         if not repo.git_url:
             continue
 
         clone_dir = project_dir / "code" / _repo_dir_name(repo.git_url)
         if not (clone_dir / ".git").exists():
-            # Repo not cloned yet (init not run), skip
             continue
 
         try:
@@ -54,87 +53,103 @@ async def _check_project_repos(project: Project, repos: list[ProjectRepo]) -> li
 
             old_hash = repo.master_hash or ""
             if old_hash and new_hash != old_hash:
+                # Pull latest code
+                await clone_or_pull(repo.git_url, str(clone_dir))
                 changed.append({
-                    "repo_id": repo.id,
                     "repo_name": _repo_dir_name(repo.git_url),
-                    "git_url": repo.git_url,
-                    "old_hash": old_hash[:8],
-                    "new_hash": new_hash[:8],
+                    "old": old_hash[:8],
+                    "new": new_hash[:8],
                 })
 
-            # Always update the stored hash (initial seed or change)
             repo.master_hash = new_hash
-
         except Exception as e:
-            logger.warning(
-                "Failed to check repo %s for project %s: %s",
-                repo.git_url, project.id, e,
-            )
+            logger.warning("Failed to check %s: %s", repo.git_url, e)
 
-    return changed
+    log.repos_changed = json.dumps(changed)
+    log.finished_at = datetime.now(timezone.utc)
+
+    if changed:
+        log.status = MonitorJobStatus.UPDATED
+        logger.info(
+            "Project [%s] has %d repo(s) updated: %s",
+            project.name, len(changed),
+            ", ".join(r["repo_name"] for r in changed),
+        )
+    else:
+        log.status = MonitorJobStatus.NO_CHANGE
+
+    await db.commit()
+    return log
 
 
 async def check_all_projects() -> list[dict]:
-    """Check all projects for repo changes. Returns list of change events."""
-    all_changes = []
+    """Check all projects. Pull if updated. Trigger re-init for changed ones."""
+    from daiflow.services.project_service import run_init
+
+    results = []
 
     async with get_background_db() as db:
-        result = await db.execute(
-            select(Project).options(selectinload(Project.repos))
-        )
-        projects = result.scalars().all()
+        query = select(Project).options(selectinload(Project.repos))
+        projects = (await db.execute(query)).scalars().all()
 
         for project in projects:
             git_repos = [r for r in project.repos if r.git_url]
             if not git_repos:
                 continue
 
-            changed = await _check_project_repos(project, git_repos)
-
-            if changed:
-                event = {
-                    "type": "repo_changed",
+            try:
+                log = await _check_and_pull_project(db, project)
+            except Exception as e:
+                logger.error("Monitor failed for project %s: %s", project.id, e)
+                # Write a failed log
+                err_log = MonitorLog(
+                    project_id=project.id,
+                    project_name=project.name,
+                    status=MonitorJobStatus.FAILED,
+                    error=str(e)[:500],
+                    finished_at=datetime.now(timezone.utc),
+                )
+                db.add(err_log)
+                await db.commit()
+                results.append({
                     "project_id": project.id,
                     "project_name": project.name,
-                    "repos": changed,
-                    "detected_at": datetime.now(timezone.utc).isoformat(),
-                }
-                all_changes.append(event)
+                    "status": "failed",
+                    "error": str(e)[:200],
+                })
+                continue
 
-                # Notify via WebSocket on a project-scoped channel
-                await ws_manager.publish(
-                    f"project:monitor:{project.id}", event,
-                )
-                # Also publish to a global monitor channel
-                await ws_manager.publish("monitor:repo_changes", event)
+            status_str = MonitorJobStatus(log.status).name.lower()
+            entry = {
+                "project_id": project.id,
+                "project_name": project.name,
+                "status": status_str,
+                "repos_changed": json.loads(log.repos_changed),
+            }
+            results.append(entry)
 
-                logger.info(
-                    "Detected %d repo change(s) in project %s: %s",
-                    len(changed), project.name,
-                    ", ".join(r["repo_name"] for r in changed),
-                )
+            # Auto trigger re-init if repos changed
+            if log.status == MonitorJobStatus.UPDATED:
+                logger.info("Triggering re-init for project %s", project.name)
+                asyncio.create_task(run_init(project.id))
 
-        await db.commit()
-
-    return all_changes
+    return results
 
 
 async def _get_interval() -> int:
-    """Read the monitor interval from settings. Falls back to DEFAULT_INTERVAL."""
+    """Read monitor interval from settings."""
     try:
         async with get_background_db() as db:
-            from daiflow.models import Setting
             setting = await db.get(Setting, "repo_monitor_interval")
             if setting and setting.value:
-                return max(60, int(setting.value))  # minimum 60s
+                return max(60, int(setting.value))
     except Exception:
         pass
     return DEFAULT_INTERVAL
 
 
 async def _monitor_loop():
-    """Main loop: periodically checks repos and sleeps."""
-    # Wait a bit after startup before first check
+    """Main loop: check periodically."""
     await asyncio.sleep(30)
     logger.info("Repo monitor started")
 
@@ -142,25 +157,25 @@ async def _monitor_loop():
         try:
             await check_all_projects()
         except Exception as e:
-            logger.error("Repo monitor check failed: %s", e)
+            logger.error("Repo monitor cycle failed: %s", e)
 
         interval = await _get_interval()
         await asyncio.sleep(interval)
 
 
 def start_monitor():
-    """Start the repo monitor background task. Idempotent."""
+    """Start the background monitor. Idempotent."""
     global _monitor_task
     if _monitor_task and not _monitor_task.done():
         return
     _monitor_task = asyncio.create_task(_monitor_loop())
-    logger.info("Repo monitor task created (first check in 30s)")
+    logger.info("Repo monitor scheduled (first check in 30s)")
 
 
 def stop_monitor():
-    """Stop the repo monitor background task."""
+    """Stop the background monitor."""
     global _monitor_task
     if _monitor_task and not _monitor_task.done():
         _monitor_task.cancel()
-        logger.info("Repo monitor task cancelled")
+        logger.info("Repo monitor stopped")
     _monitor_task = None
