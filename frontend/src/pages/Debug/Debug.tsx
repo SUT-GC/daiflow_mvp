@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import Topbar from '../../components/Shell/Topbar'
-import { listProjects, listTasks, listSessions, getSessionLogs, getTodos } from '../../api'
-import type { ProjectData, TaskData, SessionStatusData, TodoData } from '../../api'
+import { listProjects, listTasks, listSessions, getSessionLogs, getTodos, listJobs, getJobRuns } from '../../api'
+import type { ProjectData, TaskData, SessionStatusData, TodoData, JobData, JobRunData } from '../../api'
 import { useLocale } from '../../hooks/useLocale'
 import './Debug.css'
 
@@ -12,6 +12,12 @@ const SESSION_STATUS_LABELS: Record<number, { label: string; cls: string }> = {
   3: { label: 'failed', cls: 'tag-red' },
 }
 
+const JOB_RUN_STATUS_COLORS: Record<string, string> = {
+  success: 'tag-green',
+  failed: 'tag-red',
+  running: 'tag-blue',
+}
+
 const STAGE_LABELS: Record<string, string> = {
   init: 'Init',
   plan: 'Plan',
@@ -19,6 +25,8 @@ const STAGE_LABELS: Record<string, string> = {
   todo_exec: 'Todo Exec',
   review: 'Review',
 }
+
+const LOG_TYPE_FILTERS = ['all', 'text_delta', 'thinking', 'tool_call', 'tool_result', 'error', 'done', 'status_change']
 
 export default function Debug() {
   const { t } = useLocale()
@@ -29,11 +37,17 @@ export default function Debug() {
   const [todos, setTodos] = useState<TodoData[]>([])
   const [sessions, setSessions] = useState<SessionStatusData[]>([])
   const [logs, setLogs] = useState<Record<string, unknown>[]>([])
+  const [jobs, setJobs] = useState<JobData[]>([])
+  const [jobRuns, setJobRuns] = useState<JobRunData[]>([])
 
   // Selection
   const [selectedProject, setSelectedProject] = useState<string>('')
-  const [selectedScope, setSelectedScope] = useState<string>('')  // "init" or task_id
+  const [selectedScope, setSelectedScope] = useState<string>('')  // "init", "jobs", or task_id
   const [selectedSession, setSelectedSession] = useState<string>('')
+
+  // Filters
+  const [logTypeFilter, setLogTypeFilter] = useState<string>('all')
+  const [logSearch, setLogSearch] = useState<string>('')
 
   // Loading
   const [loadingLogs, setLoadingLogs] = useState(false)
@@ -43,38 +57,58 @@ export default function Debug() {
     listProjects().then(setProjects).catch(() => {})
   }, [])
 
-  // Load tasks + clear downstream when project changes
+  // Load tasks + jobs + clear downstream when project changes
   useEffect(() => {
     setTasks([])
     setTodos([])
     setSessions([])
     setLogs([])
+    setJobs([])
+    setJobRuns([])
     setSelectedScope('')
     setSelectedSession('')
+    setLogTypeFilter('all')
+    setLogSearch('')
     if (!selectedProject) return
     listTasks(selectedProject).then(setTasks).catch(() => {})
+    listJobs().then(allJobs => {
+      setJobs(allJobs.filter(j => j.project_id === selectedProject))
+    }).catch(() => {})
   }, [selectedProject])
 
-  // Load sessions when scope changes
+  // Load sessions/job runs when scope changes
   useEffect(() => {
     setSessions([])
     setLogs([])
+    setJobRuns([])
     setSelectedSession('')
+    setLogTypeFilter('all')
+    setLogSearch('')
     if (!selectedScope) return
 
     if (selectedScope === 'init') {
       listSessions({ ref_id: selectedProject, type: 'init' }).then(setSessions).catch(() => {})
+    } else if (selectedScope === 'jobs') {
+      const projectJobs = jobs.filter(j => j.project_id === selectedProject)
+      if (projectJobs.length > 0) {
+        Promise.all(projectJobs.map(j => getJobRuns(j.id, 30))).then(results => {
+          setJobRuns(results.flat().sort((a, b) =>
+            (b.started_at || '').localeCompare(a.started_at || '')
+          ))
+        }).catch(() => {})
+      }
     } else {
-      // task scope — load all session types for this task
+      // task scope
       listSessions({ ref_id: selectedScope }).then(setSessions).catch(() => {})
-      // also load todos so we can label todo_exec sessions
       getTodos(selectedScope).then(setTodos).catch(() => {})
     }
-  }, [selectedScope, selectedProject])
+  }, [selectedScope, selectedProject, jobs])
 
   // Load logs when session selected
   useEffect(() => {
     setLogs([])
+    setLogTypeFilter('all')
+    setLogSearch('')
     if (!selectedSession) return
     setLoadingLogs(true)
     getSessionLogs(selectedSession)
@@ -83,6 +117,19 @@ export default function Debug() {
       .finally(() => setLoadingLogs(false))
   }, [selectedSession])
 
+  // Filtered logs
+  const filteredLogs = useMemo(() => {
+    let result = logs
+    if (logTypeFilter !== 'all') {
+      result = result.filter(e => (e.type as string) === logTypeFilter)
+    }
+    if (logSearch.trim()) {
+      const q = logSearch.toLowerCase()
+      result = result.filter(e => JSON.stringify(e).toLowerCase().includes(q))
+    }
+    return result
+  }, [logs, logTypeFilter, logSearch])
+
   // Helpers
   const selectedProjectObj = projects.find(p => p.id === selectedProject)
   const selectedTaskObj = tasks.find(t => t.id === selectedScope)
@@ -90,12 +137,10 @@ export default function Debug() {
 
   function getSessionLabel(s: SessionStatusData): string {
     if (s.type === 'init') {
-      // e.g. init:abc123:frontend-structure → "frontend-structure"
       const parts = s.session_id.split(':')
       return parts[parts.length - 1]
     }
     if (s.type === 'todo_exec') {
-      // Try to find matching todo
       const parts = s.session_id.split(':')
       const todoId = parts[parts.length - 1]
       const todo = todos.find(t => t.id === todoId)
@@ -105,11 +150,20 @@ export default function Debug() {
     return STAGE_LABELS[s.type] || s.type
   }
 
-  function formatDuration(s: SessionStatusData): string {
-    if (!s.started_at || !s.finished_at) return '-'
-    const ms = new Date(s.finished_at).getTime() - new Date(s.started_at).getTime()
+  function formatDuration(start: string | null, end: string | null): string {
+    if (!start || !end) return '-'
+    const ms = new Date(end).getTime() - new Date(start).getTime()
     if (ms < 1000) return `${ms}ms`
     return `${(ms / 1000).toFixed(1)}s`
+  }
+
+  function formatTime(ts: string | null): string {
+    if (!ts) return '-'
+    try {
+      return new Date(ts).toLocaleTimeString(undefined, { hour12: false })
+    } catch {
+      return '-'
+    }
   }
 
   return (
@@ -133,6 +187,12 @@ export default function Debug() {
             <>
               <span className="breadcrumb-sep">/</span>
               <span className="breadcrumb-item" onClick={() => setSelectedSession('')}>Init</span>
+            </>
+          )}
+          {selectedScope === 'jobs' && (
+            <>
+              <span className="breadcrumb-sep">/</span>
+              <span className="breadcrumb-current">{t('debug.jobs')}</span>
             </>
           )}
           {selectedTaskObj && (
@@ -168,13 +228,17 @@ export default function Debug() {
               </div>
             )}
 
-            {/* Scope picker: Init or Tasks */}
+            {/* Scope picker: Init, Jobs, or Tasks */}
             {selectedProject && !selectedScope && (
               <div className="debug-section">
                 <div className="debug-section-title">{t('debug.select_scope')}</div>
                 <button className="debug-item" onClick={() => setSelectedScope('init')}>
                   <span className="debug-item-name">{t('debug.project_init')}</span>
                   <span className="tag tag-purple">init</span>
+                </button>
+                <button className="debug-item" onClick={() => setSelectedScope('jobs')}>
+                  <span className="debug-item-name">{t('debug.repo_monitor')}</span>
+                  <span className="tag tag-teal">jobs</span>
                 </button>
                 {tasks.length > 0 && <div className="debug-section-sub">{t('debug.tasks')}</div>}
                 {tasks.map(task => (
@@ -189,7 +253,7 @@ export default function Debug() {
             )}
 
             {/* Session list */}
-            {selectedScope && (
+            {selectedScope && selectedScope !== 'jobs' && (
               <div className="debug-section">
                 <div className="debug-section-title">{t('debug.sessions')}</div>
                 {sessions.map(s => {
@@ -202,7 +266,7 @@ export default function Debug() {
                     >
                       <span className="debug-item-name">{getSessionLabel(s)}</span>
                       <span className="debug-item-right">
-                        <span className="debug-item-duration">{formatDuration(s)}</span>
+                        <span className="debug-item-duration">{formatDuration(s.started_at, s.finished_at)}</span>
                         <span className={`tag ${st.cls}`}>{st.label}</span>
                       </span>
                     </button>
@@ -211,14 +275,83 @@ export default function Debug() {
                 {sessions.length === 0 && <div className="debug-empty">{t('debug.no_sessions')}</div>}
               </div>
             )}
+
+            {/* Job runs list */}
+            {selectedScope === 'jobs' && (
+              <div className="debug-section">
+                <div className="debug-section-title">{t('debug.job_runs')}</div>
+                {jobs.map(j => (
+                  <div key={j.id} className="debug-job-info">
+                    <span className="debug-item-meta">{j.type}</span>
+                    <span className={`tag ${j.enabled ? 'tag-green' : 'tag-dim'}`}>
+                      {j.enabled ? 'on' : 'off'}
+                    </span>
+                    <span className="debug-item-meta">{j.interval}s</span>
+                  </div>
+                ))}
+                {jobs.length === 0 && <div className="debug-empty">{t('debug.no_jobs')}</div>}
+                {jobRuns.map(run => (
+                  <div key={run.id} className="debug-item debug-job-run-item">
+                    <span className="debug-item-name">
+                      <span className="debug-job-run-time">{formatTime(run.started_at)}</span>
+                    </span>
+                    <span className="debug-item-right">
+                      <span className="debug-item-duration">{formatDuration(run.started_at, run.finished_at)}</span>
+                      <span className={`tag ${JOB_RUN_STATUS_COLORS[run.status] || 'tag-dim'}`}>{run.status}</span>
+                    </span>
+                  </div>
+                ))}
+                {jobRuns.length === 0 && jobs.length > 0 && <div className="debug-empty">{t('debug.no_job_runs')}</div>}
+              </div>
+            )}
           </div>
 
-          {/* Right: Log viewer */}
+          {/* Right: Log viewer / Job detail */}
           <div className="debug-logs">
-            {!selectedSession && (
+            {!selectedSession && selectedScope !== 'jobs' && (
               <div className="debug-placeholder">
                 <div className="debug-placeholder-icon">&#128269;</div>
                 <div>{t('debug.select_session_hint')}</div>
+              </div>
+            )}
+            {selectedScope === 'jobs' && (
+              <div className="debug-logs-inner">
+                {jobRuns.length > 0 ? (
+                  <div className="debug-job-detail">
+                    {jobRuns.map(run => (
+                      <div key={run.id} className="debug-job-run-card">
+                        <div className="debug-job-run-card-header">
+                          <span className={`tag ${JOB_RUN_STATUS_COLORS[run.status] || 'tag-dim'}`}>{run.status}</span>
+                          <span className="debug-item-meta">{run.started_at || '-'}</span>
+                          <span className="debug-item-duration">{formatDuration(run.started_at, run.finished_at)}</span>
+                        </div>
+                        {run.error && (
+                          <div className="debug-job-run-error">{run.error}</div>
+                        )}
+                        {(() => {
+                          const changed = (run.result as Record<string, unknown>)?.repos_changed
+                          if (Array.isArray(changed) && changed.length > 0) {
+                            return (
+                              <div className="debug-job-run-changes">
+                                {changed.map((c: Record<string, string>, i: number) => (
+                                  <div key={i} className="debug-job-run-change">
+                                    <code>{c.repo_name}</code>
+                                    <span className="debug-item-meta">{c.old} → {c.new}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            )
+                          }
+                          return null
+                        })()}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="debug-placeholder">
+                    <div>{jobs.length > 0 ? t('debug.no_job_runs') : t('debug.no_jobs')}</div>
+                  </div>
+                )}
               </div>
             )}
             {selectedSession && loadingLogs && (
@@ -247,12 +380,39 @@ export default function Debug() {
                     )}
                   </div>
                 )}
+                {/* Log filters */}
+                {logs.length > 0 && (
+                  <div className="debug-log-filters">
+                    <div className="debug-log-type-filters">
+                      {LOG_TYPE_FILTERS.map(f => (
+                        <button
+                          key={f}
+                          className={`debug-filter-btn ${logTypeFilter === f ? 'active' : ''}`}
+                          onClick={() => setLogTypeFilter(f)}
+                        >
+                          {f}
+                        </button>
+                      ))}
+                    </div>
+                    <input
+                      className="debug-log-search"
+                      type="text"
+                      placeholder={t('debug.search_logs')}
+                      value={logSearch}
+                      onChange={e => setLogSearch(e.target.value)}
+                    />
+                    <span className="debug-log-count">{filteredLogs.length}/{logs.length}</span>
+                  </div>
+                )}
                 {/* Logs */}
                 <div className="debug-log-list">
-                  {logs.map((entry, i) => (
+                  {filteredLogs.map((entry, i) => (
                     <LogEntry key={i} entry={entry} index={i} />
                   ))}
                   {logs.length === 0 && <div className="debug-empty">{t('debug.no_logs')}</div>}
+                  {logs.length > 0 && filteredLogs.length === 0 && (
+                    <div className="debug-empty">{t('debug.no_matching_logs')}</div>
+                  )}
                 </div>
               </>
             )}
@@ -266,6 +426,7 @@ export default function Debug() {
 function LogEntry({ entry, index }: { entry: Record<string, unknown>; index: number }) {
   const [expanded, setExpanded] = useState(false)
   const type = (entry.type as string) || 'unknown'
+  const ts = entry.ts as string | undefined
 
   const TYPE_COLORS: Record<string, string> = {
     text_delta: 'tag-dim',
@@ -285,10 +446,21 @@ function LogEntry({ entry, index }: { entry: Record<string, unknown>; index: num
     ? (entry.error as string || entry.message as string || '').slice(0, 120)
     : ''
 
+  function formatLogTime(timestamp: string | undefined): string {
+    if (!timestamp) return ''
+    try {
+      const d = new Date(timestamp)
+      return d.toLocaleTimeString(undefined, { hour12: false })
+    } catch {
+      return ''
+    }
+  }
+
   return (
     <div className={`log-entry ${expanded ? 'expanded' : ''}`} onClick={() => setExpanded(e => !e)}>
       <div className="log-entry-header">
         <span className="log-index">#{index}</span>
+        {ts && <span className="log-timestamp">{formatLogTime(ts)}</span>}
         <span className={`tag ${TYPE_COLORS[type] || 'tag-dim'}`}>{type}</span>
         {preview && <span className="log-preview">{preview}</span>}
       </div>

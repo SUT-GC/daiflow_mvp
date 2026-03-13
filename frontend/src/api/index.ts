@@ -178,3 +178,30 @@ export const getSessionStatus = (sessionId: string) =>
 export const getSessionLogs = (sessionId: string) =>
   request<Record<string, unknown>[]>(`/sessions/${sessionId}/logs`)
 
+// ── Jobs ──
+export interface JobData {
+  id: string
+  project_id: string
+  type: string
+  enabled: boolean
+  interval: number
+  config: Record<string, unknown>
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface JobRunData {
+  id: string
+  job_id: string
+  status: string
+  result: Record<string, unknown>
+  error: string | null
+  started_at: string | null
+  finished_at: string | null
+  project_id?: string
+  job_type?: string
+}
+
+export const listJobs = () => request<JobData[]>('/jobs')
+export const getJobRuns = (jobId: string, limit = 50) =>
+  request<JobRunData[]>(`/jobs/${jobId}/runs?limit=${limit}`)
