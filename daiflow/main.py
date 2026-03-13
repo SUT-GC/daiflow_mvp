@@ -73,7 +73,15 @@ async def lifespan(app: FastAPI):
     init_daiflow_dir()
     await init_db()
     await _recover_interrupted_sessions()
+
+    # Start repo monitor background job
+    from daiflow.services.repo_monitor import start_monitor, stop_monitor
+    start_monitor()
+
     yield
+
+    # Stop repo monitor on shutdown
+    stop_monitor()
 
 
 app = FastAPI(title="DaiFlow", version="0.1.0", lifespan=lifespan)

@@ -121,3 +121,23 @@ async def push(local_path: str, branch: str):
     """Push to remote."""
     validate_branch_name(branch)
     await _run(["git", "push", "-u", "origin", branch], cwd=local_path)
+
+
+async def fetch_remote(local_path: str, timeout: int = 120) -> None:
+    """Fetch latest from origin."""
+    await _run(["git", "fetch", "origin"], cwd=local_path, timeout=timeout)
+
+
+async def get_remote_head(local_path: str, branch: str = "") -> str | None:
+    """Get the commit hash of a remote branch (origin/<branch>).
+
+    Tries origin/main then origin/master if branch is not specified.
+    Returns None if no remote branch is found.
+    """
+    candidates = [branch] if branch else ["main", "master"]
+    for b in candidates:
+        try:
+            return await _run(["git", "rev-parse", f"origin/{b}"], cwd=local_path)
+        except RuntimeError:
+            continue
+    return None

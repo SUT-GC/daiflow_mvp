@@ -10,7 +10,7 @@ from daiflow.services.settings_service import get_language_setting
 from daiflow.database import get_background_db
 from daiflow.models import ProjectRepo, Session, SessionStatus
 from daiflow.services.cody_service import append_path_boundary, build_cody_client
-from daiflow.services.git_service import clone_or_pull
+from daiflow.services.git_service import clone_or_pull, get_head_hash
 from daiflow.services.skill_service import get_project_dir
 from daiflow.session_runner import SessionRunner, _append_log
 from daiflow.ws_manager import ws_manager
@@ -351,6 +351,12 @@ async def run_init(project_id: str):
                         clone_dir = project_dir / "code" / _repo_dir_name(r.git_url)
                         await _append_log(sid, {"type": "text_delta", "content": f"Cloning/pulling {r.git_url} → {clone_dir} ...\n"})
                         await clone_or_pull(r.git_url, str(clone_dir))
+                        # Seed master_hash for repo monitor
+                        try:
+                            head = await get_head_hash(str(clone_dir))
+                            r.master_hash = head
+                        except Exception:
+                            pass
                         await _append_log(sid, {"type": "text_delta", "content": f"✓ {_repo_dir_name(r.git_url)} ready.\n"})
 
                     await _append_log(sid, {"type": "done"})

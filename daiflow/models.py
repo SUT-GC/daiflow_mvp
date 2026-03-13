@@ -76,6 +76,7 @@ class ProjectRepo(Base):
     repo_type = Column(String, default="custom")  # frontend / backend / custom
     repo_type_label = Column(String, default="")
     description = Column(Text, default="")
+    master_hash = Column(String, default="")  # last known master/main HEAD hash
     created_at = Column(DateTime, default=_now)
 
     project = relationship("Project", back_populates="repos")
