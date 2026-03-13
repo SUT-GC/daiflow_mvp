@@ -47,7 +47,7 @@ export default function TodoStage() {
 
   return (
     <div id="page" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <Topbar title={task.name} branch={task.branch} backTo="/tasks" backLabel={t('nav.tasks')} />
+      <Topbar title={task.name} branch={task.branch} taskStatus={task.status} backTo="/tasks" backLabel={t('nav.tasks')} />
       <StageProgress taskId={taskId!} currentStage={2} taskStatus={task.status} />
       <ResizableSplitPane
         right={

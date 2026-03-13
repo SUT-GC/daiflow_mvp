@@ -11,30 +11,22 @@ const SCROLL_NEAR_BOTTOM_PX = 80
 /** Max visible lines before a user message is collapsed. */
 const USER_MSG_COLLAPSE_LINES = 3
 
-function CollapsibleUserMsg({ content }: { content: string }) {
+function CollapsibleMsg({ content }: { content: string }) {
   const lines = content.split('\n')
   const shouldCollapse = lines.length > USER_MSG_COLLAPSE_LINES
   const [collapsed, setCollapsed] = useState(shouldCollapse)
 
   return (
-    <div>
-      <div style={{
-        whiteSpace: 'pre-wrap',
-        ...(collapsed ? {
-          display: '-webkit-box',
-          WebkitLineClamp: USER_MSG_COLLAPSE_LINES,
-          WebkitBoxOrient: 'vertical' as const,
-          overflow: 'hidden',
-        } : {}),
-      }}>
-        {content}
+    <div className="collapsible-msg">
+      <div className={`collapsible-msg-body ${collapsed ? 'clamped' : ''}`}>
+        <MarkdownViewer content={content} />
       </div>
       {shouldCollapse && (
         <button
           className="msg-toggle-btn"
           onClick={() => setCollapsed(c => !c)}
         >
-          {collapsed ? '展开 ▾' : '收起 ▴'}
+          {collapsed ? '展开' : '收起'}
         </button>
       )}
     </div>
@@ -93,6 +85,10 @@ export default function ChatPanel({ messages, onSend, streaming = false, title, 
       <div className="chat-messages" ref={messagesRef} onScroll={handleScroll}>
         {messages.map((msg, i) => {
           const toolGroups = msg.role === 'ai' ? groupChatToolEvents(msg.events || []) : []
+          const isLastAi = msg.role === 'ai' && i === messages.length - 1
+          const isAiStreaming = isLastAi && streaming
+          const isAiDone = msg.role === 'ai' && !isAiStreaming
+
           return (
             <div key={msg.id} className={`msg ${msg.role === 'user' ? 'user' : ''}`}>
               <div className={msg.role === 'ai' ? 'avatar avatar-ai' : 'avatar avatar-u'}>
@@ -100,9 +96,9 @@ export default function ChatPanel({ messages, onSend, streaming = false, title, 
               </div>
               <div className="bubble">
                 {msg.content && (
-                  msg.role === 'ai'
-                    ? <MarkdownViewer content={msg.content} />
-                    : <CollapsibleUserMsg content={msg.content} />
+                  msg.role === 'user'
+                    ? <CollapsibleMsg content={msg.content} />
+                    : <MarkdownViewer content={msg.content} />
                 )}
                 {toolGroups.length > 0 && (
                   <div className="chat-tool-groups">
@@ -111,11 +107,16 @@ export default function ChatPanel({ messages, onSend, streaming = false, title, 
                     ))}
                   </div>
                 )}
-                {streaming && i === messages.length - 1 && msg.role === 'ai' && (
-                  <div className="typing-row">
-                    <div className="typing-dot" />
-                    <div className="typing-dot" />
-                    <div className="typing-dot" />
+                {/* AI message status indicator */}
+                {msg.role === 'ai' && (
+                  <div className="msg-status">
+                    {isAiStreaming ? (
+                      <span className="msg-status-spinner" title="AI responding..." />
+                    ) : isAiDone && msg.content ? (
+                      <svg className="msg-status-check" width="14" height="14" viewBox="0 0 14 14" fill="none">
+                        <path d="M3 7L6 10L11 4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                    ) : null}
                   </div>
                 )}
               </div>

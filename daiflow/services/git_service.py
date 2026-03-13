@@ -71,7 +71,18 @@ async def checkout_branch(local_path: str, branch: str):
 
 
 async def get_diff(local_path: str, branch: str = "") -> str:
-    """Get git diff for the current branch against its merge-base with main."""
+    """Get git diff for the current branch against its merge-base with main.
+
+    Uses `git add -N .` first to include untracked (new) files in the diff.
+    This only registers new files in the index without staging their content,
+    so it won't affect commits.
+    """
+    # Make untracked files visible to git diff
+    try:
+        await _run(["git", "add", "-N", "."], cwd=local_path)
+    except RuntimeError:
+        pass
+
     if branch:
         validate_branch_name(branch)
         # Try to diff against merge-base with common default branches

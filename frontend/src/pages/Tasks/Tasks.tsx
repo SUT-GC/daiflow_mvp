@@ -108,7 +108,7 @@ export default function Tasks() {
                 <div className="task-right">
                   <div className="stage-pip">
                     {[1, 2, 3, 4].map(s => (
-                      <div key={s} className={`pip ${s < stage ? 'done' : s === stage ? 'active' : ''}`} />
+                      <div key={s} className={`pip ${task.status >= 7 ? 'done' : s < stage ? 'done' : s === stage ? 'active' : ''}`} />
                     ))}
                   </div>
                   <span className={`tag ${STATUS_TAGS[task.status] || 'tag-dim'}`}>

@@ -9,6 +9,7 @@ import { useStageChat } from '../../../hooks/useStageChat'
 import Loading from '../../../components/Loading/Loading'
 import { getTask, getTaskDiff, generateCommitMessage, submitMR, TaskData } from '../../../api'
 import { useLocale } from '../../../hooks/useLocale'
+import { TaskStatus } from '../../../types/enums'
 import '../DevFlow.css'
 import './ReviewStage.css'
 
@@ -83,25 +84,9 @@ export default function ReviewStage() {
       <Topbar
         title={task.name}
         branch={task.branch}
+        taskStatus={task.status}
         backTo="/tasks"
         backLabel={t('nav.tasks')}
-        actions={
-          <button className="btn btn-teal btn-sm" disabled={generating} onClick={async () => {
-            setShowCommitModal(true)
-            setGenerating(true)
-            setCommitMessage('')
-            try {
-              const result = await generateCommitMessage(taskId!)
-              setCommitMessage(result.commit_message)
-            } catch {
-              setCommitMessage(`feat: ${task.name}\n\nImplemented via DaiFlow automated workflow.`)
-            } finally {
-              setGenerating(false)
-            }
-          }}>
-            {t('review.submit_mr')}
-          </button>
-        }
       />
       <StageProgress taskId={taskId!} currentStage={4} taskStatus={task.status} />
       <div className="devflow-body">
@@ -119,6 +104,21 @@ export default function ReviewStage() {
               <span className="summary-num" style={{ color: 'var(--blue)' }}>{files}</span>
               <span className="summary-label">{t('review.files')}</span>
             </div>
+            <button className="btn btn-teal btn-sm" style={{ marginLeft: 'auto' }} disabled={generating || task.status >= TaskStatus.DONE} onClick={async () => {
+              setShowCommitModal(true)
+              setGenerating(true)
+              setCommitMessage('')
+              try {
+                const result = await generateCommitMessage(taskId!)
+                setCommitMessage(result.commit_message)
+              } catch {
+                setCommitMessage(`feat: ${task.name}\n\nImplemented via DaiFlow automated workflow.`)
+              } finally {
+                setGenerating(false)
+              }
+            }}>
+              {t('review.submit_mr')}
+            </button>
           </div>
           <DiffViewer
             diffs={diff}
@@ -131,6 +131,7 @@ export default function ReviewStage() {
           onSend={sendMessage}
           streaming={streaming}
           title={t('review.chat_title')}
+          disabled={task.status >= TaskStatus.DONE}
         />
       </div>
 

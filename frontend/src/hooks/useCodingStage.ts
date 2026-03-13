@@ -38,19 +38,24 @@ export function useCodingStage(taskId: string | undefined) {
 
   // Fetch per-todo diff when selecting a completed/failed todo
   const fetchTodoDiff = useCallback(async (todoId: string) => {
+    let todoDiff = ''
     try {
       const data = await getTodoDiff(todoId)
-      const allDiffs = data.diffs?.map((d: any) => d.diff).join('\n') || ''
-      setDiff(allDiffs)
+      todoDiff = data.diffs?.map((d: any) => d.diff).join('\n') || ''
     } catch {
-      // Fallback to task-level diff if per-todo diff not available
-      if (taskId) {
-        try {
-          const data = await getTaskDiff(taskId)
-          setDiff(data.diffs?.map((d: any) => d.diff).join('\n') || '')
-        } catch {
-          setDiff('')
-        }
+      // per-todo diff failed, will fallback below
+    }
+    // If per-todo diff is empty, fallback to task-level diff
+    if (todoDiff) {
+      setDiff(todoDiff)
+      return
+    }
+    if (taskId) {
+      try {
+        const data = await getTaskDiff(taskId)
+        setDiff(data.diffs?.map((d: any) => d.diff).join('\n') || '')
+      } catch {
+        setDiff('')
       }
     }
   }, [taskId])

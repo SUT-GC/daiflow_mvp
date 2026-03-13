@@ -8,6 +8,7 @@ import Loading from '../../../components/Loading/Loading'
 import { useCodingStage } from '../../../hooks/useCodingStage'
 import { executeTodo, startReview } from '../../../api'
 import { useLocale } from '../../../hooks/useLocale'
+import { TaskStatus } from '../../../types/enums'
 import '../DevFlow.css'
 import './CodingStage.css'
 
@@ -46,7 +47,7 @@ export default function CodingStage() {
 
   return (
     <div id="page" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <Topbar title={task.name} branch={task.branch} backTo="/tasks" backLabel={t('nav.tasks')} />
+      <Topbar title={task.name} branch={task.branch} taskStatus={task.status} backTo="/tasks" backLabel={t('nav.tasks')} />
       <StageProgress taskId={taskId!} currentStage={3} taskStatus={task.status} />
       <div className="devflow-body">
         {/* Left: Todo Timeline */}
@@ -78,7 +79,7 @@ export default function CodingStage() {
                     <div className="tl-status">
                       {isDone ? t('coding.status.done') : isRunning ? t('coding.status.running') : isFailed ? t('coding.status.failed') : t('coding.status.pending')}
                     </div>
-                    {isPending && !isRunning && (
+                    {isPending && !isRunning && task.status < TaskStatus.REVIEWING && (
                       <button
                         className="btn btn-primary btn-xs tl-run-btn"
                         onClick={(e) => { e.stopPropagation(); handleExecute(todo.id) }}
@@ -91,7 +92,7 @@ export default function CodingStage() {
               )
             })}
           </div>
-          {allDone && (
+          {allDone && task.status < TaskStatus.REVIEWING && (
             <div style={{ padding: '12px' }}>
               <button className="btn btn-primary" style={{ width: '100%' }} onClick={handleNextStage}>
                 {t('coding.next_review')}
@@ -141,6 +142,7 @@ export default function CodingStage() {
           onSend={sendMessage}
           streaming={streaming}
           title={t('coding.chat_title')}
+          disabled={task.status >= TaskStatus.REVIEWING}
         />
       </div>
     </div>

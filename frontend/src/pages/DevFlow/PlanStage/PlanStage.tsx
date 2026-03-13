@@ -45,6 +45,7 @@ export default function PlanStage() {
       <Topbar
         title={task.name}
         branch={task.branch}
+        taskStatus={task.status}
         backTo="/tasks"
         backLabel={t('nav.tasks')}
       />

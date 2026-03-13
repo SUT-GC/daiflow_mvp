@@ -1,0 +1,147 @@
+/* ── Stepper Bar ── */
+.stepper-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 24px;
+  flex-shrink: 0;
+  transition: background .2s;
+}
+
+.stepper-item {
+  display: flex;
+  align-items: center;
+}
+
+/* ── Connector Line ── */
+.stepper-line {
+  width: 64px;
+  height: 2px;
+  background: var(--bg-5);
+  margin: 0 4px;
+  border-radius: 1px;
+  transition: background .3s;
+}
+
+.stepper-line.filled {
+  background: var(--teal);
+}
+
+/* ── Node ── */
+.stepper-node {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  position: relative;
+}
+
+.stepper-node.disabled {
+  cursor: default;
+}
+
+.stepper-circle {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  background: var(--bg-5);
+  color: var(--t3);
+  border: 2px solid var(--bg-5);
+  transition: all .2s;
+}
+
+/* ── Done = green ── */
+.stepper-node.done .stepper-circle {
+  background: var(--teal);
+  border-color: var(--teal);
+  color: #fff;
+}
+
+/* ── In-progress = yellow/amber, no pulse ── */
+.stepper-node.in-progress .stepper-circle {
+  background: var(--amber);
+  border-color: var(--amber);
+  color: #fff;
+}
+
+/* ── Active (clicked/viewing) = blue ring with pulse ── */
+.stepper-node.active .stepper-circle {
+  border-color: var(--blue);
+  animation: stepper-pulse 2s ease-in-out infinite;
+}
+
+@keyframes stepper-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--blue) 30%, transparent); }
+  50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--blue) 15%, transparent); }
+}
+
+/* Active + done: keep green fill, blue ring */
+.stepper-node.active.done .stepper-circle {
+  background: var(--teal);
+  border-color: var(--blue);
+}
+
+/* Active + in-progress: keep yellow fill, blue ring */
+.stepper-node.active.in-progress .stepper-circle {
+  background: var(--amber);
+  border-color: var(--blue);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--blue) 20%, transparent);
+}
+
+/* ── Disabled = grey (default, just reduce opacity) ── */
+.stepper-node.disabled .stepper-circle {
+  opacity: 0.4;
+}
+
+/* Hover */
+.stepper-node:not(.disabled):hover .stepper-circle {
+  transform: scale(1.1);
+}
+
+/* ── Label ── */
+.stepper-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--t3);
+  white-space: nowrap;
+  transition: color .2s;
+}
+
+.stepper-node.done .stepper-label {
+  color: var(--teal);
+}
+
+.stepper-node.in-progress .stepper-label {
+  color: var(--amber);
+  font-weight: 600;
+}
+
+.stepper-node.active .stepper-label {
+  color: var(--blue);
+  font-weight: 600;
+}
+
+/* Active + done: blue text (viewing takes priority) */
+.stepper-node.active.done .stepper-label {
+  color: var(--blue);
+  font-weight: 600;
+}
+
+.stepper-node.disabled .stepper-label {
+  opacity: 0.4;
+}
+
+/* ── Responsive ── */
+@media (max-width: 768px) {
+  .stepper-bar { padding: 10px 12px; }
+  .stepper-line { width: 32px; }
+  .stepper-label { font-size: 10px; }
+}
