@@ -29,14 +29,14 @@ async def execute_todo_route(
     if task.status != TaskStatus.CODING:
         raise HTTPException(status_code=400, detail="Task is not in coding stage")
 
-    # Validate transition: pending → running (with sequence guard)
-    # Actual transition happens in execute_todo background task
+    # Use may_execute / may_retry to validate without actually transitioning
+    # (transitions auto-generates may_<trigger> methods that check source state + conditions)
     wf = TodoWorkflow(todo, db)
-    if todo.status == TodoStatus.FAILED:
-        if not await wf._prev_todo_completed():
+    if todo.status == TodoStatus.PENDING:
+        if not await wf.may_execute():
             raise HTTPException(status_code=400, detail="Previous todo must be completed first")
-    elif todo.status == TodoStatus.PENDING:
-        if not await wf._prev_todo_completed():
+    elif todo.status == TodoStatus.FAILED:
+        if not await wf.may_retry():
             raise HTTPException(status_code=400, detail="Previous todo must be completed first")
     else:
         raise HTTPException(
