@@ -93,8 +93,6 @@ class Task(Base):
     prd = Column(Text, default="")
     tech_plan = Column(Text, default="")
     status = Column(Integer, default=0)  # 0=created..7=done
-    plan_cody_session_id = Column(String, nullable=True)
-    review_cody_session_id = Column(String, nullable=True)
     mr_info = Column(Text, default="{}")  # JSON
     created_at = Column(DateTime, default=_now)
     updated_at = Column(DateTime, default=_now, onupdate=_now)
@@ -126,6 +124,7 @@ class Session(Base):
     __tablename__ = "sessions"
 
     session_id = Column(String, primary_key=True)  # business ID like task:42:plan
+    task_id = Column(String, ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True, index=True)
     cody_session_id = Column(String, nullable=True)
     type = Column(String, nullable=False)  # init/plan/todo_split/todo_exec/review
     ref_id = Column(String, default="", index=True)

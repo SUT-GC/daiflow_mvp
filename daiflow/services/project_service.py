@@ -13,6 +13,7 @@ from daiflow.services.cody_service import append_path_boundary, build_cody_clien
 from daiflow.services.git_service import clone_or_pull, get_head_hash
 from daiflow.services.skill_service import get_project_dir
 from daiflow.session_runner import SessionRunner, _append_log
+from daiflow.workflow.pipeline import run_simple_task
 from daiflow.ws_manager import ws_manager
 
 logger = logging.getLogger(__name__)
@@ -305,99 +306,45 @@ async def run_init(project_id: str):
         )
         repos = result.scalars().all()
 
-        # Layer 1: skill_fetch + repo_clone (parallel)
-        async def _run_skill_fetch():
-            sid = f"init:{project_id}:skill_fetch"
-            skill_started = datetime.now(timezone.utc)
-            await db.execute(
-                update(Session).where(Session.session_id == sid).values(
-                    status=SessionStatus.RUNNING, started_at=skill_started
-                )
-            )
-            await db.commit()
-            await ws_manager.publish(project_bus, {
-                "type": "session_status", "session_id": sid, "status": SessionStatus.RUNNING, "layer": 1,
-                "started_at": skill_started.isoformat(),
-            })
-            # Placeholder — no external skill fetching yet
-            await _append_log(sid, {"type": "text_delta", "ts": datetime.now(timezone.utc).isoformat(), "content": "Skill fetch: no external skills configured, skipping.\n"})
-            skill_finished = datetime.now(timezone.utc)
-            await _append_log(sid, {"type": "done", "ts": skill_finished.isoformat()})
-            await db.execute(
-                update(Session).where(Session.session_id == sid).values(
-                    status=SessionStatus.DONE, finished_at=skill_finished
-                )
-            )
-            await db.commit()
-            await ws_manager.publish(project_bus, {
-                "type": "session_status", "session_id": sid, "status": SessionStatus.DONE, "layer": 1,
-                "finished_at": skill_finished.isoformat(),
+        # Layer 1: skill_fetch + repo_clone (parallel via run_simple_task)
+        async def _do_skill_fetch(task_db, session_id):
+            await _append_log(session_id, {
+                "type": "text_delta", "ts": datetime.now(timezone.utc).isoformat(),
+                "content": "Skill fetch: no external skills configured, skipping.\n",
             })
 
-        async def _run_repo_clone():
-            sid = f"init:{project_id}:repo_clone"
-            # Use independent DB session to avoid contention with concurrent skill_fetch
-            async with get_background_db() as clone_db:
-                clone_started = datetime.now(timezone.utc)
-                await clone_db.execute(
-                    update(Session).where(Session.session_id == sid).values(
-                        status=SessionStatus.RUNNING, started_at=clone_started
-                    )
-                )
-                await clone_db.commit()
-                await ws_manager.publish(project_bus, {
-                    "type": "session_status", "session_id": sid, "status": SessionStatus.RUNNING, "layer": 1,
-                    "started_at": clone_started.isoformat(),
+        async def _do_repo_clone(task_db, session_id):
+            git_repos = [r for r in repos if r.git_url and not r.local_path]
+            if not git_repos:
+                await _append_log(session_id, {
+                    "type": "text_delta", "ts": datetime.now(timezone.utc).isoformat(),
+                    "content": "No remote repos to clone, skipping.\n",
                 })
+                return
+            for r in git_repos:
+                clone_dir = project_dir / "code" / repo_dir_name(r.git_url)
+                await _append_log(session_id, {
+                    "type": "text_delta", "ts": datetime.now(timezone.utc).isoformat(),
+                    "content": f"Cloning/pulling {r.git_url} → {clone_dir} ...\n",
+                })
+                await clone_or_pull(r.git_url, str(clone_dir))
+                # Seed master_hash for repo monitor
                 try:
-                    git_repos = [r for r in repos if r.git_url and not r.local_path]
-                    if not git_repos:
-                        await _append_log(sid, {"type": "text_delta", "ts": datetime.now(timezone.utc).isoformat(), "content": "No remote repos to clone, skipping.\n"})
-                    for r in git_repos:
-                        clone_dir = project_dir / "code" / repo_dir_name(r.git_url)
-                        await _append_log(sid, {"type": "text_delta", "ts": datetime.now(timezone.utc).isoformat(), "content": f"Cloning/pulling {r.git_url} → {clone_dir} ...\n"})
-                        await clone_or_pull(r.git_url, str(clone_dir))
-                        # Seed master_hash for repo monitor (use clone_db, not outer db)
-                        try:
-                            head = await get_head_hash(str(clone_dir))
-                            await clone_db.execute(
-                                update(ProjectRepo).where(ProjectRepo.id == r.id).values(master_hash=head)
-                            )
-                        except Exception:
-                            pass
-                        await _append_log(sid, {"type": "text_delta", "ts": datetime.now(timezone.utc).isoformat(), "content": f"✓ {repo_dir_name(r.git_url)} ready.\n"})
-
-                    clone_finished = datetime.now(timezone.utc)
-                    await _append_log(sid, {"type": "done", "ts": clone_finished.isoformat()})
-                    await clone_db.execute(
-                        update(Session).where(Session.session_id == sid).values(
-                            status=SessionStatus.DONE, finished_at=clone_finished
-                        )
+                    head = await get_head_hash(str(clone_dir))
+                    await task_db.execute(
+                        update(ProjectRepo).where(ProjectRepo.id == r.id).values(master_hash=head)
                     )
-                    await clone_db.commit()
-                    await ws_manager.publish(project_bus, {
-                        "type": "session_status", "session_id": sid, "status": SessionStatus.DONE, "layer": 1,
-                        "finished_at": clone_finished.isoformat(),
-                    })
-                except Exception as e:
-                    logger.error("Layer 1 repo clone/pull failed: %s", e)
-                    await _append_log(sid, {"type": "text_delta", "ts": datetime.now(timezone.utc).isoformat(), "content": f"✗ Clone failed: {e}\n"})
-                    clone_failed_at = datetime.now(timezone.utc)
-                    await _append_log(sid, {"type": "done", "ts": clone_failed_at.isoformat()})
-                    await clone_db.execute(
-                        update(Session).where(Session.session_id == sid).values(
-                            status=SessionStatus.FAILED, error=str(e)[:500],
-                            finished_at=clone_failed_at,
-                        )
-                    )
-                    await clone_db.commit()
-                    await ws_manager.publish(project_bus, {
-                        "type": "session_status", "session_id": sid,
-                        "status": SessionStatus.FAILED, "error": str(e)[:500], "layer": 1,
-                        "finished_at": clone_failed_at.isoformat(),
-                    })
+                except Exception:
+                    pass
+                await _append_log(session_id, {
+                    "type": "text_delta", "ts": datetime.now(timezone.utc).isoformat(),
+                    "content": f"✓ {repo_dir_name(r.git_url)} ready.\n",
+                })
 
-        await asyncio.gather(_run_skill_fetch(), _run_repo_clone())
+        await asyncio.gather(
+            run_simple_task(f"init:{project_id}:skill_fetch", project_bus, _do_skill_fetch),
+            run_simple_task(f"init:{project_id}:repo_clone", project_bus, _do_repo_clone),
+        )
 
         # Check if Layer 1 had critical failures (repo_clone failure = no code to analyze)
         layer1_sessions = await db.execute(

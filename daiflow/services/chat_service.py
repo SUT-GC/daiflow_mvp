@@ -10,7 +10,7 @@ from typing import Any, Callable, Coroutine
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from daiflow.services.settings_service import get_language_setting
-from daiflow.models import Task, TaskStatus, Todo
+from daiflow.models import Session, Task, TaskStatus, Todo
 from daiflow.services.cody_service import build_cody_client
 from daiflow.services.skill_service import get_task_dir, get_task_skills_dir
 from daiflow.services.task_service import _resolve_task_roots, fetch_project_repos, sync_todos_from_file
@@ -89,10 +89,14 @@ async def prepare_stage_chat(
             "## User Message\n"
         )
 
+        # Look up cody_session_id from sessions table (was task.plan_cody_session_id)
+        plan_session = await db.get(Session, session_id)
+        plan_cody_sid = plan_session.cody_session_id if plan_session else None
+
         return StageChatContext(
             session_id=session_id,
             cody_client=client,
-            cody_session_id=task.plan_cody_session_id,
+            cody_session_id=plan_cody_sid,
             on_tool_result=on_tool_result,
             language=lang,
             system_prefix=system_prefix,
@@ -135,10 +139,15 @@ async def prepare_stage_chat(
             "## User Message\n"
         )
 
+        # Todo chat reuses plan's cody session — look up from plan session
+        plan_session_id = f"task:{entity_id}:plan"
+        plan_session = await db.get(Session, plan_session_id)
+        plan_cody_sid = plan_session.cody_session_id if plan_session else None
+
         return StageChatContext(
             session_id=session_id,
             cody_client=client,
-            cody_session_id=task.plan_cody_session_id,
+            cody_session_id=plan_cody_sid,
             on_tool_result=on_tool_result,
             language=lang,
             system_prefix=system_prefix,
@@ -182,10 +191,14 @@ async def prepare_stage_chat(
         client = await build_cody_client(db, str(task_dir), allowed_roots, skill_dir=skill_dir)
         on_tool_result = make_file_write_detector(None, "code_updated")
 
+        # Look up cody_session_id from sessions table (was task.review_cody_session_id)
+        review_session = await db.get(Session, session_id)
+        review_cody_sid = review_session.cody_session_id if review_session else None
+
         return StageChatContext(
             session_id=session_id,
             cody_client=client,
-            cody_session_id=task.review_cody_session_id,
+            cody_session_id=review_cody_sid,
             on_tool_result=on_tool_result,
             language=lang,
         )

@@ -27,8 +27,6 @@ export interface TaskData {
   prd: string
   tech_plan: string
   status: number
-  plan_cody_session_id?: string
-  review_cody_session_id?: string
   mr_info: Record<string, any>
   created_at: string | null
   updated_at: string | null

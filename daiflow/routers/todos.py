@@ -2,11 +2,13 @@ import json
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
+from transitions.core import MachineError
 
 from daiflow.database import get_db
 from daiflow.models import Task, TaskStatus, Todo, TodoStatus
 from daiflow.services.task_service import execute_todo
 from daiflow.services.git_service import get_diff_between
+from daiflow.workflow import TodoWorkflow
 
 router = APIRouter(prefix="/api/todos", tags=["todos"])
 
@@ -26,8 +28,21 @@ async def execute_todo_route(
         raise HTTPException(status_code=404, detail="Task not found")
     if task.status != TaskStatus.CODING:
         raise HTTPException(status_code=400, detail="Task is not in coding stage")
-    if todo.status not in (TodoStatus.PENDING, TodoStatus.FAILED):
-        raise HTTPException(status_code=400, detail=f"Todo is {TodoStatus(todo.status).name}, cannot execute")
+
+    # Validate transition: pending → running (with sequence guard)
+    # Actual transition happens in execute_todo background task
+    wf = TodoWorkflow(todo, db)
+    if todo.status == TodoStatus.FAILED:
+        if not await wf._prev_todo_completed():
+            raise HTTPException(status_code=400, detail="Previous todo must be completed first")
+    elif todo.status == TodoStatus.PENDING:
+        if not await wf._prev_todo_completed():
+            raise HTTPException(status_code=400, detail="Previous todo must be completed first")
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Todo is {TodoStatus(todo.status).name}, cannot execute",
+        )
 
     background_tasks.add_task(execute_todo, todo_id)
     return {"ok": True}
@@ -47,10 +62,15 @@ async def skip_todo_route(
         raise HTTPException(status_code=404, detail="Task not found")
     if task.status != TaskStatus.CODING:
         raise HTTPException(status_code=400, detail="Task is not in coding stage")
-    if todo.status not in (TodoStatus.PENDING, TodoStatus.FAILED):
-        raise HTTPException(status_code=400, detail=f"Todo is {TodoStatus(todo.status).name}, only PENDING or FAILED todos can be skipped")
 
-    todo.status = TodoStatus.SKIPPED
+    wf = TodoWorkflow(todo, db)
+    try:
+        await wf.skip()
+    except MachineError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Todo is {TodoStatus(todo.status).name}, only PENDING or FAILED todos can be skipped",
+        )
     await db.commit()
     return {"ok": True}
 

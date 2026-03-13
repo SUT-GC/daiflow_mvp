@@ -14,6 +14,7 @@ from daiflow.services.git_service import checkout_branch, get_head_hash
 from daiflow.services.project_service import repo_dir_name
 from daiflow.services.skill_service import get_project_dir, get_task_dir, get_task_skills_dir, sync_skills_to_task
 from daiflow.session_runner import SessionRunner, make_file_write_detector
+from daiflow.workflow import TaskWorkflow, TodoWorkflow
 
 logger = logging.getLogger(__name__)
 
@@ -132,8 +133,9 @@ async def init_task(task_id: str):
             if not project:
                 return
 
-            # Mark as initializing
-            task.status = TaskStatus.INITIALIZING
+            # Transition: created → initializing
+            wf = TaskWorkflow(task, db)
+            await wf.initialize()
             await db.commit()
 
             # Sync skills
@@ -149,21 +151,19 @@ async def init_task(task_id: str):
             if task.branch:
                 for repo in repos:
                     if repo.local_path:
-                        # User's local repo — checkout branch directly
                         try:
                             await checkout_branch(repo.local_path, task.branch)
                         except Exception as e:
                             logger.warning("Branch checkout for %s on %s: %s", task.branch, repo.local_path, e)
                     elif repo.git_url:
-                        # Task's isolated copy — checkout branch there
                         task_repo_path = str(get_task_dir(task_id) / "code" / repo_dir_name(repo.git_url))
                         try:
                             await checkout_branch(task_repo_path, task.branch)
                         except Exception as e:
                             logger.warning("Branch checkout for %s on %s: %s", task.branch, task_repo_path, e)
 
-            # Update status to planning
-            task.status = TaskStatus.PLANNING
+            # Transition: initializing → planning
+            await wf.plan_ready()
             await db.commit()
 
         # Then generate plan
@@ -176,7 +176,8 @@ async def init_task(task_id: str):
             async with get_background_db() as db:
                 task = await db.get(Task, task_id)
                 if task and task.status in (TaskStatus.INITIALIZING, TaskStatus.PLANNING):
-                    task.status = TaskStatus.CREATED
+                    wf = TaskWorkflow(task, db)
+                    await wf.reset()
                     await db.commit()
         except Exception:
             logger.exception("Failed to reset task %s status after init failure", task_id)
@@ -210,7 +211,7 @@ async def generate_plan(task_id: str):
             existing_session.started_at = None
             existing_session.finished_at = None
         else:
-            db.add(Session(session_id=session_id, type="plan", ref_id=task_id))
+            db.add(Session(session_id=session_id, type="plan", ref_id=task_id, task_id=task_id))
         await db.commit()
 
         # Build prompt
@@ -247,9 +248,7 @@ async def generate_plan(task_id: str):
             logger.debug("Task %s deleted before plan write", task_id)
             return
 
-        # Store cody_session_id for plan/todo session sharing
-        if runner.last_cody_session_id:
-            task.plan_cody_session_id = runner.last_cody_session_id
+        # cody_session_id is stored in sessions table by SessionRunner
 
         # Read plan.md and store in task
         if plan_path.exists():
@@ -284,7 +283,7 @@ async def generate_todos(task_id: str):
             existing_session.started_at = None
             existing_session.finished_at = None
         else:
-            db.add(Session(session_id=session_id, type="todo_split", ref_id=task_id))
+            db.add(Session(session_id=session_id, type="todo_split", ref_id=task_id, task_id=task_id))
         await db.commit()
 
         prompt = TODO_PROMPT_TEMPLATE.format(todo_path=str(todo_path))
@@ -294,6 +293,10 @@ async def generate_todos(task_id: str):
         lang = await get_language_setting(db)
         skill_dir = str(get_task_skills_dir(task_id))
         client = await build_cody_client(db, str(task_dir), allowed_roots, skill_dir=skill_dir)
+
+        # Look up plan's cody_session_id from sessions table
+        plan_session = await db.get(Session, f"task:{task_id}:plan")
+        plan_cody_sid = plan_session.cody_session_id if plan_session else None
 
         async def on_todo_match(_file_path):
             if todo_path.exists():
@@ -306,7 +309,7 @@ async def generate_todos(task_id: str):
         async with client:
             await runner.run(
                 db, session_id, prompt,
-                cody_session_id=task.plan_cody_session_id,
+                cody_session_id=plan_cody_sid,
                 language=lang,
                 on_tool_result=on_tool_result,
             )
@@ -327,7 +330,9 @@ async def generate_todos(task_id: str):
         else:
             logger.warning("todo.json not found for task %s after generation", task_id)
 
-        task.status = TaskStatus.TODO_READY
+        # Transition: plan_locked → todo_ready
+        wf = TaskWorkflow(task, db)
+        await wf.todos_ready()
         await db.commit()
 
 
@@ -385,7 +390,11 @@ def _insert_todos(db: AsyncSession, task_id: str, todos_data: list[dict]):
 
 
 async def start_coding(task_id: str, db: AsyncSession):
-    """Parse todo.json (if not already parsed), update task status to coding."""
+    """Parse todo.json (if not already parsed), update task status to coding.
+
+    Status transition is handled by TaskWorkflow in the router layer.
+    This function only ensures todos are loaded into DB.
+    """
     task = await db.get(Task, task_id)
     if not task:
         return
@@ -407,7 +416,6 @@ async def start_coding(task_id: str, db: AsyncSession):
             except (json.JSONDecodeError, KeyError, TypeError) as e:
                 logger.error("Failed to parse todo.json for task %s: %s", task_id, e)
 
-    task.status = TaskStatus.CODING
     await db.commit()
 
 
@@ -433,9 +441,15 @@ async def execute_todo(todo_id: str):
         session_id = f"task:{task.id}:todo:{todo_id}"
         existing_session = await db.get(Session, session_id)
         if not existing_session:
-            session = Session(session_id=session_id, type="todo_exec", ref_id=todo_id)
+            session = Session(session_id=session_id, type="todo_exec", ref_id=todo_id, task_id=task.id)
             db.add(session)
-        todo.status = TodoStatus.RUNNING
+
+        # Transition: pending → running (or failed → running for retry)
+        todo_wf = TodoWorkflow(todo, db)
+        if todo.status == TodoStatus.FAILED:
+            await todo_wf.retry()
+        else:
+            await todo_wf.execute()
 
         # Record HEAD hash of each repo before execution
         head_before: dict[str, str] = {}
@@ -475,6 +489,12 @@ async def execute_todo(todo_id: str):
         if runner.last_cody_session_id:
             todo.cody_session_id = runner.last_cody_session_id
 
+        # Transition: running → done or running → failed
         session_rec = await db.get(Session, session_id)
-        todo.status = TodoStatus.DONE if (session_rec and session_rec.status == SessionStatus.DONE) else TodoStatus.FAILED
+        succeeded = session_rec and session_rec.status == SessionStatus.DONE
+        todo_wf = TodoWorkflow(todo, db)
+        if succeeded:
+            await todo_wf.complete()
+        else:
+            await todo_wf.fail()
         await db.commit()
