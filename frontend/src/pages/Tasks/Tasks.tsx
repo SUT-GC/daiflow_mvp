@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Fragment } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import Topbar from '../../components/Shell/Topbar'
 import { listTasks, createTask, deleteTask, listProjects } from '../../api'
@@ -138,11 +138,13 @@ export default function Tasks() {
             </div>
             <div className="drawer-body">
               <div className="step-indicator">
-                {[1, 2, 3].map(s => (
-                  <span key={s}>
-                    {s > 1 && <span className={`step-line ${s <= step ? 'done' : ''}`} />}
+                {[1, 2, 3].map((s, index) => (
+                  <Fragment key={s}>
+                    {index > 0 && (
+                      <span className={`step-line ${s <= step ? 'done' : ''}`} />
+                    )}
                     <span className={`step-dot ${s === step ? 'active' : s < step ? 'done' : ''}`}>{s}</span>
-                  </span>
+                  </Fragment>
                 ))}
               </div>
               <div className="step-label-row">
