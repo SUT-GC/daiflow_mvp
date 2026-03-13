@@ -1,0 +1,92 @@
+import Topbar from '../Shell/Topbar'
+import StageProgress from '../StageProgress/StageProgress'
+import ChatPanel from '../ChatPanel/ChatPanel'
+import ResizableSplitPane from '../ResizableSplitPane/ResizableSplitPane'
+import Loading from '../Loading/Loading'
+import { useLocale } from '../../hooks/useLocale'
+import { TaskStatus } from '../../types/enums'
+import type { TaskData } from '../../api'
+import type { ChatMessage } from '../../hooks/useStageChat'
+import './StageLayout.css'
+
+/** Map stage number (1-4) to the minimum task status that locks it. */
+const STAGE_LOCK_STATUS: Record<number, number> = {
+  1: TaskStatus.PLAN_LOCKED,  // Plan locks when status >= PLAN_LOCKED (3)
+  2: TaskStatus.CODING,       // Todo locks when status >= CODING (5)
+  3: TaskStatus.REVIEWING,    // Coding locks when status >= REVIEWING (6)
+  4: TaskStatus.DONE,         // Review locks when status >= DONE (7)
+}
+
+export function isStageReadonly(taskStatus: number, currentStage: number): boolean {
+  const lockAt = STAGE_LOCK_STATUS[currentStage]
+  if (lockAt == null) return false
+  return taskStatus >= lockAt
+}
+
+interface StageLayoutProps {
+  taskId: string
+  task: TaskData | null
+  currentStage: 1 | 2 | 3 | 4
+  /** Main content area — each stage fills this in */
+  content: React.ReactNode
+  /** Action bar buttons — rendered at the bottom spanning full width */
+  actions?: React.ReactNode
+  /** Chat configuration */
+  chatTitle: string
+  chatMessages: ChatMessage[]
+  chatOnSend: (msg: string) => void
+  chatStreaming: boolean
+}
+
+export default function StageLayout({
+  taskId,
+  task,
+  currentStage,
+  content,
+  actions,
+  chatTitle,
+  chatMessages,
+  chatOnSend,
+  chatStreaming,
+}: StageLayoutProps) {
+  const { t } = useLocale()
+
+  if (!task) return <Loading />
+
+  const readonly = isStageReadonly(task.status, currentStage)
+
+  return (
+    <div className="stage-page">
+      <Topbar
+        title={task.name}
+        branch={task.branch}
+        taskStatus={task.status}
+        backTo="/tasks"
+        backLabel={t('nav.tasks')}
+      />
+      <StageProgress taskId={taskId} currentStage={currentStage} taskStatus={task.status} />
+      <div className="stage-body">
+        <ResizableSplitPane
+          right={
+            <ChatPanel
+              messages={chatMessages}
+              onSend={chatOnSend}
+              streaming={chatStreaming}
+              title={chatTitle}
+              disabled={readonly}
+            />
+          }
+        >
+          <div className="stage-content">
+            {content}
+          </div>
+        </ResizableSplitPane>
+      </div>
+      {actions && (
+        <div className={`stage-actions ${readonly ? 'stage-actions-disabled' : ''}`}>
+          {actions}
+        </div>
+      )}
+    </div>
+  )
+}

@@ -1,16 +1,11 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import Topbar from '../../../components/Shell/Topbar'
-import StageProgress from '../../../components/StageProgress/StageProgress'
-import ChatPanel from '../../../components/ChatPanel/ChatPanel'
+import StageLayout, { isStageReadonly } from '../../../components/StageLayout/StageLayout'
 import DiffViewer, { parseDiff } from '../../../components/DiffViewer/DiffViewer'
 import Modal from '../../../components/Modal/Modal'
 import { useStageChat } from '../../../hooks/useStageChat'
-import Loading from '../../../components/Loading/Loading'
 import { getTask, getTaskDiff, generateCommitMessage, submitMR, TaskData } from '../../../api'
 import { useLocale } from '../../../hooks/useLocale'
-import { TaskStatus } from '../../../types/enums'
-import '../DevFlow.css'
 import './ReviewStage.css'
 
 export default function ReviewStage() {
@@ -67,7 +62,6 @@ export default function ReviewStage() {
     }
   }
 
-  // Count additions/deletions from parsed diff data (accurate)
   const { additions, deletions, files } = useMemo(() => {
     const parsed = parseDiff(diff)
     return {
@@ -77,34 +71,42 @@ export default function ReviewStage() {
     }
   }, [diff])
 
-  if (!task) return <Loading />
+  const readonly = task ? isStageReadonly(task.status, 4) : false
 
   return (
-    <div id="page" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <Topbar
-        title={task.name}
-        branch={task.branch}
-        taskStatus={task.status}
-        backTo="/tasks"
-        backLabel={t('nav.tasks')}
-      />
-      <StageProgress taskId={taskId!} currentStage={4} taskStatus={task.status} />
-      <div className="devflow-body">
-        <div className="diff-main">
-          <div className="diff-summary-bar">
-            <div className="summary-stat">
-              <span className="summary-num" style={{ color: 'var(--green)' }}>+{additions}</span>
-              <span className="summary-label">{t('review.additions')}</span>
+    <>
+      <StageLayout
+        taskId={taskId!}
+        task={task}
+        currentStage={4}
+        content={
+          <div className="diff-main">
+            <div className="diff-summary-bar">
+              <div className="summary-stat">
+                <span className="summary-num" style={{ color: 'var(--green)' }}>+{additions}</span>
+                <span className="summary-label">{t('review.additions')}</span>
+              </div>
+              <div className="summary-stat">
+                <span className="summary-num" style={{ color: 'var(--red)' }}>-{deletions}</span>
+                <span className="summary-label">{t('review.deletions')}</span>
+              </div>
+              <div className="summary-stat">
+                <span className="summary-num" style={{ color: 'var(--blue)' }}>{files}</span>
+                <span className="summary-label">{t('review.files')}</span>
+              </div>
             </div>
-            <div className="summary-stat">
-              <span className="summary-num" style={{ color: 'var(--red)' }}>-{deletions}</span>
-              <span className="summary-label">{t('review.deletions')}</span>
-            </div>
-            <div className="summary-stat">
-              <span className="summary-num" style={{ color: 'var(--blue)' }}>{files}</span>
-              <span className="summary-label">{t('review.files')}</span>
-            </div>
-            <button className="btn btn-teal btn-sm" style={{ marginLeft: 'auto' }} disabled={generating || task.status >= TaskStatus.DONE} onClick={async () => {
+            <DiffViewer
+              diffs={diff}
+              collapsed={collapsed}
+              onToggleFile={(path) => setCollapsed(prev => ({ ...prev, [path]: !prev[path] }))}
+            />
+          </div>
+        }
+        actions={
+          <button
+            className="btn btn-teal"
+            disabled={readonly || generating}
+            onClick={async () => {
               setShowCommitModal(true)
               setGenerating(true)
               setCommitMessage('')
@@ -112,28 +114,20 @@ export default function ReviewStage() {
                 const result = await generateCommitMessage(taskId!)
                 setCommitMessage(result.commit_message)
               } catch {
-                setCommitMessage(`feat: ${task.name}\n\nImplemented via DaiFlow automated workflow.`)
+                setCommitMessage(`feat: ${task?.name}\n\nImplemented via DaiFlow automated workflow.`)
               } finally {
                 setGenerating(false)
               }
-            }}>
-              {t('review.submit_mr')}
-            </button>
-          </div>
-          <DiffViewer
-            diffs={diff}
-            collapsed={collapsed}
-            onToggleFile={(path) => setCollapsed(prev => ({ ...prev, [path]: !prev[path] }))}
-          />
-        </div>
-        <ChatPanel
-          messages={messages}
-          onSend={sendMessage}
-          streaming={streaming}
-          title={t('review.chat_title')}
-          disabled={task.status >= TaskStatus.DONE}
-        />
-      </div>
+            }}
+          >
+            {t('review.submit_mr')}
+          </button>
+        }
+        chatTitle={t('review.chat_title')}
+        chatMessages={messages}
+        chatOnSend={sendMessage}
+        chatStreaming={streaming}
+      />
 
       {/* Commit Modal */}
       <Modal open={showCommitModal} onClose={() => !submitting && setShowCommitModal(false)} width={560}>
@@ -155,7 +149,7 @@ export default function ReviewStage() {
             <div className="git-meta">
               <div className="git-meta-row">
                 <span className="git-meta-key">{t('review.branch')}</span>
-                <span className="git-meta-val val-branch">{task.branch}</span>
+                <span className="git-meta-val val-branch">{task?.branch}</span>
               </div>
               <div className="git-meta-row">
                 <span className="git-meta-key">{t('review.changes')}</span>
@@ -185,6 +179,6 @@ export default function ReviewStage() {
           </div>
         )}
       </Modal>
-    </div>
+    </>
   )
 }

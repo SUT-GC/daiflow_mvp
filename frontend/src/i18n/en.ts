@@ -179,10 +179,13 @@ const en = {
   'coding.no_changes': 'No code changes yet',
   'coding.next_review': 'Next: Review',
   'coding.execute': 'Execute',
+  'coding.skip': 'Skip',
+  'coding.retry': 'Retry',
   'coding.status.done': 'done',
   'coding.status.running': 'running...',
   'coding.status.failed': 'failed',
   'coding.status.pending': 'pending',
+  'coding.status.skipped': 'skipped',
   'coding.chat_title': 'Coding Chat',
 
   // ReviewStage

@@ -116,7 +116,7 @@ export function useCodingStage(taskId: string | undefined) {
     }
   }, [todoSessionStatus, loadData, selectedTodo, fetchTodoDiff])
 
-  const allDone = todos.length > 0 && todos.every(t => t.status === TodoStatus.DONE)
+  const allDone = todos.length > 0 && todos.every(t => t.status === TodoStatus.DONE || t.status === TodoStatus.SKIPPED)
 
   return {
     task,

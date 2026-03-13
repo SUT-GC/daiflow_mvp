@@ -16,6 +16,7 @@ export const TodoStatus = {
   RUNNING: 1,
   DONE: 2,
   FAILED: 3,
+  SKIPPED: 4,
 } as const
 
 export const SessionStatus = {

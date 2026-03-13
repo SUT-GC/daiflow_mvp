@@ -1,3 +1,10 @@
+.coding-split {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .todo-panel {
   width: 260px;
   flex-shrink: 0;
@@ -117,8 +124,13 @@
 .tl-item.s-running .tl-status { color: var(--blue); }
 .tl-item.s-done .tl-status { color: var(--green); }
 .tl-item.s-failed .tl-status { color: var(--red); }
+.tl-item.s-skipped .tl-status { color: var(--t3); }
 
-.tl-run-btn { margin-top: 6px; }
+.tl-item.s-skipped .tl-node { background: var(--bg-5); color: var(--t2); }
+.tl-item.s-skipped .tl-name { text-decoration: line-through; color: var(--t3); }
+
+.tl-btn-row { display: flex; gap: 6px; margin-top: 6px; }
+.tl-run-btn { }
 
 /* Center panel */
 .coding-center {

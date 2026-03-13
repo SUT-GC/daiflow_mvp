@@ -1,5 +1,8 @@
 import { useState, useRef, useCallback, useEffect, cloneElement, isValidElement } from 'react'
 
+/** Minimum width before the right panel snaps to collapsed */
+const COLLAPSE_THRESHOLD = 60
+
 interface ResizableSplitPaneProps {
   /** Left/main content */
   children: React.ReactNode
@@ -21,24 +24,35 @@ export default function ResizableSplitPane({
   maxRightWidth = 800,
 }: ResizableSplitPaneProps) {
   const [rightWidth, setRightWidth] = useState(initialRightWidth)
+  const [collapsed, setCollapsed] = useState(false)
   const dragging = useRef(false)
   const startX = useRef(0)
   const startWidth = useRef(initialRightWidth)
+  const prevWidth = useRef(initialRightWidth)
 
   const onMouseDown = useCallback((e: React.MouseEvent) => {
     dragging.current = true
     startX.current = e.clientX
-    startWidth.current = rightWidth
+    startWidth.current = collapsed ? 0 : rightWidth
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
-  }, [rightWidth])
+  }, [rightWidth, collapsed])
 
   useEffect(() => {
     const onMouseMove = (e: MouseEvent) => {
       if (!dragging.current) return
       const delta = startX.current - e.clientX
-      const newWidth = Math.max(minRightWidth, Math.min(maxRightWidth, startWidth.current + delta))
-      setRightWidth(newWidth)
+      const raw = startWidth.current + delta
+
+      if (raw < COLLAPSE_THRESHOLD) {
+        setCollapsed(true)
+        setRightWidth(0)
+      } else {
+        setCollapsed(false)
+        const newWidth = Math.max(minRightWidth, Math.min(maxRightWidth, raw))
+        setRightWidth(newWidth)
+        prevWidth.current = newWidth
+      }
     }
     const onMouseUp = () => {
       if (dragging.current) {
@@ -55,18 +69,37 @@ export default function ResizableSplitPane({
     }
   }, [minRightWidth, maxRightWidth])
 
+  // Double-click to toggle collapse
+  const onDoubleClick = useCallback(() => {
+    if (collapsed) {
+      setCollapsed(false)
+      setRightWidth(prevWidth.current || initialRightWidth)
+    } else {
+      prevWidth.current = rightWidth
+      setCollapsed(true)
+      setRightWidth(0)
+    }
+  }, [collapsed, rightWidth, initialRightWidth])
+
   // Inject width style into the right panel element
   const rightPanel = isValidElement(right)
-    ? cloneElement(right, { style: { ...right.props.style, width: rightWidth } })
+    ? cloneElement(right, {
+        style: {
+          ...right.props.style,
+          width: collapsed ? 0 : rightWidth,
+          overflow: collapsed ? 'hidden' : undefined,
+          display: collapsed ? 'none' : undefined,
+        },
+      })
     : right
 
   return (
-    <div className="devflow-body">
+    <>
       <div className="devflow-main">
         {children}
       </div>
-      <div className="resize-handle" onMouseDown={onMouseDown} />
+      <div className="resize-handle" onMouseDown={onMouseDown} onDoubleClick={onDoubleClick} />
       {rightPanel}
-    </div>
+    </>
   )
 }

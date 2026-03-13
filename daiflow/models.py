@@ -30,6 +30,7 @@ class TodoStatus(IntEnum):
     RUNNING = 1
     DONE = 2
     FAILED = 3
+    SKIPPED = 4
 
 
 class SessionStatus(IntEnum):

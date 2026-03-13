@@ -181,10 +181,13 @@ const zh: Record<TranslationKey, string> = {
   'coding.no_changes': '暂无代码变更',
   'coding.next_review': '下一步：审查',
   'coding.execute': '执行',
+  'coding.skip': '跳过',
+  'coding.retry': '重试',
   'coding.status.done': '完成',
   'coding.status.running': '运行中...',
   'coding.status.failed': '失败',
   'coding.status.pending': '待执行',
+  'coding.status.skipped': '已跳过',
   'coding.chat_title': '编码对话',
 
   // ReviewStage

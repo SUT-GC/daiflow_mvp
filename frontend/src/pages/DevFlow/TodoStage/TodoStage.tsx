@@ -1,15 +1,10 @@
 import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import Topbar from '../../../components/Shell/Topbar'
-import StageProgress from '../../../components/StageProgress/StageProgress'
-import ChatPanel from '../../../components/ChatPanel/ChatPanel'
-import ResizableSplitPane from '../../../components/ResizableSplitPane/ResizableSplitPane'
-import Loading from '../../../components/Loading/Loading'
+import StageLayout, { isStageReadonly } from '../../../components/StageLayout/StageLayout'
 import { useTodoStage } from '../../../hooks/useTodoStage'
 import { startCoding, triggerTodo } from '../../../api'
 import { useLocale } from '../../../hooks/useLocale'
 import type { TodoData } from '../../../api'
-import '../DevFlow.css'
 import './TodoStage.css'
 
 export default function TodoStage() {
@@ -35,63 +30,59 @@ export default function TodoStage() {
     }
   }
 
-  if (!task) return <Loading />
-
-  // Task has moved past todo stage (status >= 5 = CODING), disable all interactions
-  const isLocked = task.status >= 5
-  // AI is generating/streaming, disable buttons
+  const readonly = task ? isStageReadonly(task.status, 2) : false
   const isGenerating = status === 1 || streaming
-  const startCodingDisabled = todos.length === 0 || isGenerating || isLocked
-  const redecomposeDisabled = isGenerating || isLocked
-  const chatDisabled = isLocked
+  const startCodingDisabled = todos.length === 0 || isGenerating || readonly
+  const redecomposeDisabled = isGenerating || readonly
 
   return (
-    <div id="page" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <Topbar title={task.name} branch={task.branch} taskStatus={task.status} backTo="/tasks" backLabel={t('nav.tasks')} />
-      <StageProgress taskId={taskId!} currentStage={2} taskStatus={task.status} />
-      <ResizableSplitPane
-        right={
-          <ChatPanel
-            messages={messages}
-            onSend={sendMessage}
-            streaming={streaming}
-            title={t('todo.chat_title')}
-            disabled={chatDisabled}
-          />
-        }
-      >
-        <div className="card todo-wrap">
-          <div className="todo-card-title">
-            {t('todo.title')}
-            <span className="file-badge">todo.json</span>
-            {todos.length > 0 && <span className="count-badge">{todos.length}</span>}
+    <>
+      <StageLayout
+        taskId={taskId!}
+        task={task}
+        currentStage={2}
+        content={
+          <div className="card todo-wrap">
+            <div className="todo-card-title">
+              {t('todo.title')}
+              <span className="file-badge">todo.json</span>
+              {todos.length > 0 && <span className="count-badge">{todos.length}</span>}
+            </div>
+            {todos.length > 0 ? (
+              <div className="todo-items">
+                {todos.map((todo, i) => (
+                  <div
+                    key={i}
+                    className="card todo-item"
+                    onClick={() => setSelectedTodo(todo)}
+                  >
+                    <div className="todo-seq">{String(todo.seq || i + 1).padStart(2, '0')}</div>
+                    <div className="todo-title">{todo.title}</div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{ color: 'var(--t3)', textAlign: 'center', padding: '40px' }}>
+                {status === 1 ? t('todo.decomposing') : t('todo.no_todos')}
+              </div>
+            )}
           </div>
-          {todos.length > 0 ? (
-            <div className="todo-items">
-              {todos.map((todo, i) => (
-                <div
-                  key={i}
-                  className="card todo-item"
-                  onClick={() => setSelectedTodo(todo)}
-                >
-                  <div className="todo-seq">{String(todo.seq || i + 1).padStart(2, '0')}</div>
-                  <div className="todo-title">{todo.title}</div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div style={{ color: 'var(--t3)', textAlign: 'center', padding: '40px' }}>
-              {status === 1 ? t('todo.decomposing') : t('todo.no_todos')}
-            </div>
-          )}
-        </div>
-        <div className="actions-row">
-          <button className="btn btn-primary" onClick={handleStartCoding} disabled={startCodingDisabled}>
-            {t('todo.start_coding')}
-          </button>
-          <button className="btn btn-ghost" onClick={handleRedecompose} disabled={redecomposeDisabled}>{t('todo.redecompose')}</button>
-        </div>
-      </ResizableSplitPane>
+        }
+        actions={
+          <>
+            <button className="btn btn-primary" onClick={handleStartCoding} disabled={startCodingDisabled}>
+              {t('todo.start_coding')}
+            </button>
+            <button className="btn btn-ghost" onClick={handleRedecompose} disabled={redecomposeDisabled}>
+              {t('todo.redecompose')}
+            </button>
+          </>
+        }
+        chatTitle={t('todo.chat_title')}
+        chatMessages={messages}
+        chatOnSend={sendMessage}
+        chatStreaming={streaming}
+      />
 
       {/* Todo Detail Modal */}
       {selectedTodo && (
@@ -109,6 +100,6 @@ export default function TodoStage() {
           </div>
         </>
       )}
-    </div>
+    </>
   )
 }

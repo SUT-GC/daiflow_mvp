@@ -33,6 +33,28 @@ async def execute_todo_route(
     return {"ok": True}
 
 
+@router.post("/{todo_id}/skip")
+async def skip_todo_route(
+    todo_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    todo = await db.get(Todo, todo_id)
+    if not todo:
+        raise HTTPException(status_code=404, detail="Todo not found")
+
+    task = await db.get(Task, todo.task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task.status != TaskStatus.CODING:
+        raise HTTPException(status_code=400, detail="Task is not in coding stage")
+    if todo.status not in (TodoStatus.PENDING, TodoStatus.FAILED):
+        raise HTTPException(status_code=400, detail=f"Todo is {TodoStatus(todo.status).name}, only PENDING or FAILED todos can be skipped")
+
+    todo.status = TodoStatus.SKIPPED
+    await db.commit()
+    return {"ok": True}
+
+
 @router.get("/{todo_id}/diff")
 async def get_todo_diff(todo_id: str, db: AsyncSession = Depends(get_db)):
     """Get the diff produced by a specific todo execution."""

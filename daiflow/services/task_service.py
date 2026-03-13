@@ -344,7 +344,7 @@ async def sync_todos_from_file(db: AsyncSession, task_id: str, content: str):
         raise ValueError(f"Invalid todo.json format: {e}") from e
 
     # Delete only pending todos — preserve running/done/failed
-    _preserve_statuses = (TodoStatus.RUNNING, TodoStatus.DONE, TodoStatus.FAILED)
+    _preserve_statuses = (TodoStatus.RUNNING, TodoStatus.DONE, TodoStatus.FAILED, TodoStatus.SKIPPED)
     result = await db.execute(
         select(Todo).where(Todo.task_id == task_id)
     )
