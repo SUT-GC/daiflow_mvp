@@ -321,16 +321,17 @@ async def run_init(project_id: str):
             })
             # Placeholder — no external skill fetching yet
             await _append_log(sid, {"type": "text_delta", "ts": datetime.now(timezone.utc).isoformat(), "content": "Skill fetch: no external skills configured, skipping.\n"})
-            await _append_log(sid, {"type": "done", "ts": datetime.now(timezone.utc).isoformat()})
+            skill_finished = datetime.now(timezone.utc)
+            await _append_log(sid, {"type": "done", "ts": skill_finished.isoformat()})
             await db.execute(
                 update(Session).where(Session.session_id == sid).values(
-                    status=SessionStatus.DONE, finished_at=datetime.now(timezone.utc)
+                    status=SessionStatus.DONE, finished_at=skill_finished
                 )
             )
             await db.commit()
             await ws_manager.publish(project_bus, {
                 "type": "session_status", "session_id": sid, "status": SessionStatus.DONE, "layer": 1,
-                "finished_at": datetime.now(timezone.utc).isoformat(),
+                "finished_at": skill_finished.isoformat(),
             })
 
         async def _run_repo_clone():
@@ -366,32 +367,34 @@ async def run_init(project_id: str):
                             pass
                         await _append_log(sid, {"type": "text_delta", "ts": datetime.now(timezone.utc).isoformat(), "content": f"✓ {repo_dir_name(r.git_url)} ready.\n"})
 
-                    await _append_log(sid, {"type": "done", "ts": datetime.now(timezone.utc).isoformat()})
+                    clone_finished = datetime.now(timezone.utc)
+                    await _append_log(sid, {"type": "done", "ts": clone_finished.isoformat()})
                     await clone_db.execute(
                         update(Session).where(Session.session_id == sid).values(
-                            status=SessionStatus.DONE, finished_at=datetime.now(timezone.utc)
+                            status=SessionStatus.DONE, finished_at=clone_finished
                         )
                     )
                     await clone_db.commit()
                     await ws_manager.publish(project_bus, {
                         "type": "session_status", "session_id": sid, "status": SessionStatus.DONE, "layer": 1,
-                        "finished_at": datetime.now(timezone.utc).isoformat(),
+                        "finished_at": clone_finished.isoformat(),
                     })
                 except Exception as e:
                     logger.error("Layer 1 repo clone/pull failed: %s", e)
                     await _append_log(sid, {"type": "text_delta", "ts": datetime.now(timezone.utc).isoformat(), "content": f"✗ Clone failed: {e}\n"})
-                    await _append_log(sid, {"type": "done", "ts": datetime.now(timezone.utc).isoformat()})
+                    clone_failed_at = datetime.now(timezone.utc)
+                    await _append_log(sid, {"type": "done", "ts": clone_failed_at.isoformat()})
                     await clone_db.execute(
                         update(Session).where(Session.session_id == sid).values(
                             status=SessionStatus.FAILED, error=str(e)[:500],
-                            finished_at=datetime.now(timezone.utc),
+                            finished_at=clone_failed_at,
                         )
                     )
                     await clone_db.commit()
                     await ws_manager.publish(project_bus, {
                         "type": "session_status", "session_id": sid,
                         "status": SessionStatus.FAILED, "error": str(e)[:500], "layer": 1,
-                        "finished_at": datetime.now(timezone.utc).isoformat(),
+                        "finished_at": clone_failed_at.isoformat(),
                     })
 
         await asyncio.gather(_run_skill_fetch(), _run_repo_clone())
