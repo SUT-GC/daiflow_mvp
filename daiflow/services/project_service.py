@@ -12,7 +12,7 @@ from daiflow.models import ProjectRepo, Session, SessionStatus
 from daiflow.services.cody_service import append_path_boundary, build_cody_client
 from daiflow.services.git_service import clone_or_pull
 from daiflow.services.skill_service import get_project_dir
-from daiflow.session_runner import SessionRunner
+from daiflow.session_runner import SessionRunner, _append_log
 from daiflow.ws_manager import ws_manager
 
 logger = logging.getLogger(__name__)
@@ -318,6 +318,8 @@ async def run_init(project_id: str):
                 "type": "session_status", "session_id": sid, "status": SessionStatus.RUNNING, "layer": 1,
             })
             # Placeholder — no external skill fetching yet
+            await _append_log(sid, {"type": "text_delta", "content": "Skill fetch: no external skills configured, skipping.\n"})
+            await _append_log(sid, {"type": "done"})
             await db.execute(
                 update(Session).where(Session.session_id == sid).values(
                     status=SessionStatus.DONE, finished_at=datetime.now(timezone.utc)
@@ -343,10 +345,15 @@ async def run_init(project_id: str):
                 })
                 try:
                     git_repos = [r for r in repos if r.git_url and not r.local_path]
+                    if not git_repos:
+                        await _append_log(sid, {"type": "text_delta", "content": "No remote repos to clone, skipping.\n"})
                     for r in git_repos:
                         clone_dir = project_dir / "code" / _repo_dir_name(r.git_url)
+                        await _append_log(sid, {"type": "text_delta", "content": f"Cloning/pulling {r.git_url} → {clone_dir} ...\n"})
                         await clone_or_pull(r.git_url, str(clone_dir))
+                        await _append_log(sid, {"type": "text_delta", "content": f"✓ {_repo_dir_name(r.git_url)} ready.\n"})
 
+                    await _append_log(sid, {"type": "done"})
                     await clone_db.execute(
                         update(Session).where(Session.session_id == sid).values(
                             status=SessionStatus.DONE, finished_at=datetime.now(timezone.utc)
@@ -358,6 +365,8 @@ async def run_init(project_id: str):
                     })
                 except Exception as e:
                     logger.error("Layer 1 repo clone/pull failed: %s", e)
+                    await _append_log(sid, {"type": "text_delta", "content": f"✗ Clone failed: {e}\n"})
+                    await _append_log(sid, {"type": "done"})
                     await clone_db.execute(
                         update(Session).where(Session.session_id == sid).values(
                             status=SessionStatus.FAILED, error=str(e)[:500],
@@ -397,7 +406,9 @@ async def run_init(project_id: str):
         layer2_ok = await _run_layer(layer2, 2, project_dir, allowed_roots, repos, project_bus, lang)
 
         if not layer2_ok:
-            logger.warning("Layer 2 had failures, continuing to Layer 3...")
+            logger.error("Layer 2 had failures, aborting init for project %s", project_id)
+            await _finalize_init(db, project_id, project_bus)
+            return
 
         # Layer 3: Cross-repo knowledge (concurrent)
         layer3_sessions = await db.execute(
@@ -408,7 +419,9 @@ async def run_init(project_id: str):
         layer3_ok = await _run_layer(layer3, 3, project_dir, allowed_roots, repos, project_bus, lang)
 
         if not layer3_ok:
-            logger.warning("Layer 3 had failures, continuing to Layer 4...")
+            logger.error("Layer 3 had failures, aborting init for project %s", project_id)
+            await _finalize_init(db, project_id, project_bus)
+            return
 
         # Layer 4: Generate project.md
         try:

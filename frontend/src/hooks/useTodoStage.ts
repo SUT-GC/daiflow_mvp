@@ -9,6 +9,7 @@ export function useTodoStage(taskId: string | undefined) {
   const [task, setTask] = useState<TaskData | null>(null)
   const [todos, setTodos] = useState<TodoData[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [sessionRefreshKey, setSessionRefreshKey] = useState(0)
 
   const refreshTodos = useCallback(() => {
     if (taskId) {
@@ -28,7 +29,7 @@ export function useTodoStage(taskId: string | undefined) {
   }, [refreshTask, refreshTodos])
 
   const sessionId = taskId ? `task:${taskId}:todo_split` : null
-  const { status, logs, error: sessionError } = useSession(sessionId)
+  const { status, logs, error: sessionError } = useSession(sessionId, sessionRefreshKey)
 
   // Refresh task and todos when session completes (DB is synced at that point)
   useEffect(() => {
@@ -53,6 +54,10 @@ export function useTodoStage(taskId: string | undefined) {
     sessionLogs: logs,
   })
 
+  const refreshSession = useCallback(() => {
+    setSessionRefreshKey(k => k + 1)
+  }, [])
+
   return {
     task,
     todos,
@@ -60,6 +65,7 @@ export function useTodoStage(taskId: string | undefined) {
     status,
     logs,
     error: error || sessionError,
+    refreshSession,
     ...chat,
   }
 }

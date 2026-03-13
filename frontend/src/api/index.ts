@@ -160,6 +160,8 @@ export const submitMR = (taskId: string, commitMessage: string) =>
 // ── Todos ──
 export const executeTodo = (todoId: string) =>
   request<{ ok: boolean }>(`/todos/${todoId}/execute`, { method: 'POST' })
+export const getTodoDiff = (todoId: string) =>
+  request<DiffData>(`/todos/${todoId}/diff`)
 
 // ── Sessions ──
 export const getSessionStatus = (sessionId: string) =>

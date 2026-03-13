@@ -16,12 +16,13 @@ export default function TodoStage() {
   const { taskId } = useParams()
   const navigate = useNavigate()
   const { t } = useLocale()
-  const { task, todos, status, messages, sendMessage, streaming } = useTodoStage(taskId)
+  const { task, todos, status, messages, sendMessage, streaming, refreshSession } = useTodoStage(taskId)
   const [selectedTodo, setSelectedTodo] = useState<TodoData | null>(null)
 
   const handleRedecompose = async () => {
     if (!taskId) return
     await triggerTodo(taskId)
+    refreshSession()
   }
 
   const handleStartCoding = async () => {

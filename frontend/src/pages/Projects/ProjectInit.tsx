@@ -90,6 +90,37 @@ export default function ProjectInit() {
   const hasFailed = failedCount > 0
   const progress = totalCount > 0 ? Math.round((doneCount / totalCount) * 100) : 0
 
+  // Elapsed time computation
+  const startTime = useMemo(() => {
+    const times = allSessions.map(s => s.started_at).filter(Boolean) as string[]
+    if (times.length === 0) return null
+    return Math.min(...times.map(t => new Date(t).getTime()))
+  }, [allSessions])
+
+  const endTime = useMemo(() => {
+    if (!done) return null
+    const times = allSessions.map(s => s.finished_at).filter(Boolean) as string[]
+    if (times.length === 0) return null
+    return Math.max(...times.map(t => new Date(t).getTime()))
+  }, [allSessions, done])
+
+  const [now, setNow] = useState(Date.now())
+  useEffect(() => {
+    if (done || !startTime) return
+    const id = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [done, startTime])
+
+  const elapsed = useMemo(() => {
+    if (!startTime) return null
+    const ms = (done && endTime ? endTime : now) - startTime
+    if (ms < 0) return null
+    const secs = Math.floor(ms / 1000)
+    const m = Math.floor(secs / 60)
+    const s = secs % 60
+    return m > 0 ? `${m}m ${s}s` : `${s}s`
+  }, [startTime, endTime, done, now])
+
   const STATUS_KEYS: TranslationKey[] = ['init.status.waiting', 'init.status.running', 'init.status.done', 'init.status.failed']
 
   const handleRetry = async () => {
@@ -139,7 +170,10 @@ export default function ProjectInit() {
                   {done && !hasFailed ? t('init.completed') : hasFailed && done ? t('init.partial') : t('init.in_progress')}
                 </span>
               </div>
-              <p className="init-desc">{t('init.desc')}</p>
+              <p className="init-desc">
+                {t('init.desc')}
+                {elapsed && <span className="init-elapsed">{elapsed}</span>}
+              </p>
             </div>
 
             <div className="progress-strip">
@@ -170,7 +204,7 @@ export default function ProjectInit() {
                           onClick={() => s.status > 0 && setViewSession({ id: s.session_id, label })}
                         >
                           <div className="know-icon">
-                            {s.status === 2 ? '✓' : s.status === 1 ? '↻' : s.status === 3 ? '✗' : '○'}
+                            {s.status === 2 ? '✓' : s.status === 1 ? <span className="spinner" /> : s.status === 3 ? '✗' : '○'}
                           </div>
                           <div className="know-info">
                             <div className="know-name">{label}</div>

@@ -148,6 +148,11 @@ class SessionRunner:
             prompt = prompt + LANGUAGE_INSTRUCTIONS.get(language, "")
         channel = f"session:{session_id}"
 
+        # Clear previous log file (for regenerate scenarios)
+        log_file = _log_path(session_id)
+        if log_file.exists():
+            log_file.unlink()
+
         # Update session status to running
         await db.execute(
             update(Session)

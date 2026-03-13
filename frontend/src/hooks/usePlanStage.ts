@@ -9,6 +9,8 @@ export function usePlanStage(taskId: string | undefined) {
   const [initialPlan, setInitialPlan] = useState('')
   const [chatPlanContent, setChatPlanContent] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [sessionRefreshKey, setSessionRefreshKey] = useState(0)
+  const [regenerating, setRegenerating] = useState(false)
 
   const refreshTask = useCallback(() => {
     if (taskId) {
@@ -22,11 +24,12 @@ export function usePlanStage(taskId: string | undefined) {
   useEffect(() => { refreshTask() }, [refreshTask])
 
   const sessionId = taskId ? `task:${taskId}:plan` : null
-  const { status, logs, error: sessionError } = useSession(sessionId)
+  const { status, logs, error: sessionError } = useSession(sessionId, sessionRefreshKey)
 
   // Refresh task when session completes (tech_plan is synced to DB at that point)
   useEffect(() => {
-    if (status === SessionStatus.DONE) {
+    if (status === SessionStatus.DONE || status === SessionStatus.FAILED) {
+      setRegenerating(false)
       refreshTask()
     }
   }, [status, refreshTask])
@@ -61,12 +64,20 @@ export function usePlanStage(taskId: string | undefined) {
     sessionLogs: logs,
   })
 
+  const refreshSession = useCallback(() => {
+    setChatPlanContent(null)
+    setRegenerating(true)
+    setSessionRefreshKey(k => k + 1)
+  }, [])
+
   return {
     task,
     planContent,
     status,
     logs,
     error: error || sessionError,
+    refreshSession,
+    regenerating,
     ...chat,
   }
 }

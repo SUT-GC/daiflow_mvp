@@ -24,6 +24,19 @@
 .init-desc {
   font-size: 13px;
   color: var(--t2);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.init-elapsed {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--blue);
+  background: var(--blue-d);
+  padding: 2px 8px;
+  border-radius: 10px;
 }
 
 .progress-strip {
@@ -148,7 +161,7 @@
   color: var(--t2);
 }
 
-.know-item.running .know-icon { color: var(--blue); animation: pulse 1.5s infinite; }
+.know-item.running .know-icon { color: var(--blue); }
 .know-item.done .know-icon { color: var(--green); }
 .know-item.failed .know-icon { color: var(--red); }
 
@@ -180,6 +193,21 @@
 .know-item.running .know-status { color: var(--blue); }
 .know-item.done .know-status { color: var(--green); }
 .know-item.failed .know-status { color: var(--red); }
+
+/* Spinner for running items */
+.spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--blue);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
 
 /* Clickable session items */
 .know-item.clickable {

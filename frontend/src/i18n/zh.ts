@@ -178,6 +178,7 @@ const zh: Record<TranslationKey, string> = {
   'coding.execution_log': '执行日志',
   'coding.writing_code': 'AI 正在编写代码...',
   'coding.code_changes': '代码变更',
+  'coding.no_changes': '暂无代码变更',
   'coding.next_review': '下一步：审查',
   'coding.execute': '执行',
   'coding.status.done': '完成',

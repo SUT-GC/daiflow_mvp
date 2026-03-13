@@ -148,6 +148,8 @@ textarea.input { resize: none; font-family: var(--sans); font-size: 13px; }
 .log-block { margin: 8px 0 3px; padding: 10px 12px; background: var(--bg-1); border: 1px solid var(--border); border-radius: var(--r); font-family: var(--mono); }
 .log-line { font-size: 11px; line-height: 1.85; display: flex; gap: 8px; }
 .log-tool { color: var(--amber); } .log-read { color: var(--teal); } .log-ok { color: var(--green); } .log-err { color: var(--red); }
+.msg-toggle-btn { background: none; border: none; color: var(--blue); font-size: 11px; cursor: pointer; padding: 2px 0 0; font-family: var(--sans); opacity: .85; }
+.msg-toggle-btn:hover { opacity: 1; }
 .chat-tool-groups { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
 .typing-row { display: flex; gap: 4px; padding: 3px 0; align-items: center; }
 .typing-dot { width: 4px; height: 4px; border-radius: 50%; background: var(--blue); animation: blink 1.2s infinite; }

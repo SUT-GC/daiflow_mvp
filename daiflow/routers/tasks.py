@@ -307,7 +307,15 @@ async def generate_commit_message(task_id: str, db: AsyncSession = Depends(get_d
 
     try:
         from daiflow.services.cody_service import build_cody_client
-        client = await build_cody_client(db, allowed_roots[0] if allowed_roots else ".", allowed_roots)
+        # Resolve workdir: prefer first allowed_root, fallback to resolved repo path or task dir
+        if allowed_roots:
+            workdir = allowed_roots[0]
+        else:
+            resolved = [_resolve_repo_path(r, task_id) for r in repos]
+            resolved = [p for p in resolved if p]
+            workdir = resolved[0] if resolved else str(get_task_dir(task_id))
+            allowed_roots = resolved or [workdir]
+        client = await build_cody_client(db, workdir, allowed_roots)
         result_text = ""
         async with client:
             async for chunk in client.stream(prompt):

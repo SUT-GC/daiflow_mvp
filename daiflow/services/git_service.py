@@ -87,6 +87,16 @@ async def get_diff(local_path: str, branch: str = "") -> str:
     return await _run(["git", "diff", "HEAD"], cwd=local_path)
 
 
+async def get_head_hash(local_path: str) -> str:
+    """Get the current HEAD commit hash."""
+    return await _run(["git", "rev-parse", "HEAD"], cwd=local_path)
+
+
+async def get_diff_between(local_path: str, hash_before: str, hash_after: str) -> str:
+    """Get diff between two commit hashes."""
+    return await _run(["git", "diff", hash_before, hash_after], cwd=local_path)
+
+
 async def commit(local_path: str, message: str):
     """Stage all changes and commit.
 

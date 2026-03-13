@@ -176,6 +176,7 @@ const en = {
   'coding.execution_log': 'Execution Log',
   'coding.writing_code': 'AI is writing code...',
   'coding.code_changes': 'Code Changes',
+  'coding.no_changes': 'No code changes yet',
   'coding.next_review': 'Next: Review',
   'coding.execute': 'Execute',
   'coding.status.done': 'done',

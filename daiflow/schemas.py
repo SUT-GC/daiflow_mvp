@@ -68,7 +68,7 @@ class TaskResponse(_ORMBase):
     prd: str
     tech_plan: str
     status: int
-    mr_info: dict = {}
+    mr_info: dict | list = {}
     created_at: str | None = None
     updated_at: str | None = None
 

@@ -111,6 +111,8 @@ class Todo(Base):
     description = Column(Text, default="")
     status = Column(Integer, default=0)  # 0=pending,1=running,2=done,3=failed
     cody_session_id = Column(String, nullable=True)
+    commit_before = Column(Text, default="")  # JSON: {"repo_path": "hash", ...}
+    commit_after = Column(Text, default="")   # JSON: {"repo_path": "hash", ...}
     result = Column(Text, default="")
     created_at = Column(DateTime, default=_now)
     updated_at = Column(DateTime, default=_now, onupdate=_now)

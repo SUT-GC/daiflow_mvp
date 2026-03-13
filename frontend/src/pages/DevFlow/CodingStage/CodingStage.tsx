@@ -19,7 +19,7 @@ export default function CodingStage() {
 
   const {
     task, todos, selectedTodo, setSelectedTodo, diff,
-    todoSessionStatus, logs, loadData, allDone,
+    todoSessionStatus, allDone,
     messages, sendMessage, streaming,
   } = useCodingStage(taskId)
 
@@ -100,7 +100,7 @@ export default function CodingStage() {
           )}
         </div>
 
-        {/* Center: Log + Diff */}
+        {/* Center: Code Changes */}
         <div className="coding-center">
           {!selectedTodo ? (
             <div className="center-idle">
@@ -110,42 +110,25 @@ export default function CodingStage() {
             </div>
           ) : (
             <div className="center-running">
-              {/* Log area */}
-              <div className="log-area">
-                <div className="sec-bar">
-                  {t('coding.execution_log')}
-                  {todoSessionStatus === 1 && <div className="live-dot" />}
-                </div>
-                <div className="log-lines">
-                  {logs.filter(e => e.type !== 'user_message' && e.type !== 'compact').map((event, i) => (
-                    <div key={i} className="log-line">
-                      <span className="log-ts">{event.ts ? new Date(event.ts).toLocaleTimeString() : ''}</span>
-                      {event.type === 'text_delta' && <span className="l-info">{event.content}</span>}
-                      {event.type === 'tool_call' && <span className="l-write">[tool] {event.tool_name}</span>}
-                      {event.type === 'tool_result' && <span className="l-read">[result] {(event.content || '').slice(0, 120)}</span>}
-                      {event.type === 'thinking' && <span className="l-think">[think] {(event.content || '').slice(0, 80)}</span>}
-                      {event.type === 'status_change' && <span className="l-done">[done]</span>}
-                      {event.type === 'error' && <span className="l-err">[error] {event.content}</span>}
-                    </div>
-                  ))}
-                  {todoSessionStatus === 1 && (
-                    <div className="spinner-row">
-                      <div className="spinner" />
-                      {t('coding.writing_code')}
-                    </div>
-                  )}
-                </div>
+              <div className="sec-bar">
+                {t('coding.code_changes')}
+                {todoSessionStatus === 1 && <div className="live-dot" />}
               </div>
-
-              {/* Diff area */}
-              {diff && (
-                <div className="diff-area">
-                  <div className="sec-bar">{t('coding.code_changes')}</div>
-                  <DiffViewer
-                    diffs={diff}
-                    collapsed={collapsed}
-                    onToggleFile={(path) => setCollapsed(prev => ({ ...prev, [path]: !prev[path] }))}
-                  />
+              {todoSessionStatus === 1 && !diff && (
+                <div className="spinner-row" style={{ padding: '40px 0', justifyContent: 'center' }}>
+                  <div className="spinner" />
+                  {t('coding.writing_code')}
+                </div>
+              )}
+              {diff ? (
+                <DiffViewer
+                  diffs={diff}
+                  collapsed={collapsed}
+                  onToggleFile={(path) => setCollapsed(prev => ({ ...prev, [path]: !prev[path] }))}
+                />
+              ) : todoSessionStatus !== 1 && (
+                <div style={{ color: 'var(--t3)', textAlign: 'center', padding: '40px' }}>
+                  {t('coding.no_changes')}
                 </div>
               )}
             </div>

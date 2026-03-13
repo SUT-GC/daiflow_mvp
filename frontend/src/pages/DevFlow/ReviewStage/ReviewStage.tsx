@@ -167,7 +167,7 @@ export default function ReviewStage() {
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
               <button className="btn btn-ghost" onClick={() => setShowCommitModal(false)}>{t('review.cancel')}</button>
-              <button className="btn btn-teal" onClick={handleSubmitMR} disabled={submitting}>
+              <button className="btn btn-teal" onClick={handleSubmitMR} disabled={submitting || generating}>
                 {submitting ? t('review.pushing') : t('review.confirm_push')}
               </button>
             </div>

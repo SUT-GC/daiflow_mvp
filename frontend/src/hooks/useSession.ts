@@ -28,7 +28,7 @@ function convertLogToEvent(log: Record<string, unknown>): SessionEvent {
   }
 }
 
-export function useSession(sessionId: string | null) {
+export function useSession(sessionId: string | null, refreshKey?: number) {
   const [status, setStatus] = useState<number>(0)
   const [logs, setLogs] = useState<SessionEvent[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -46,6 +46,11 @@ export function useSession(sessionId: string | null) {
     if (!sessionId) return
 
     let unsub: (() => void) | null = null
+    // Reset state on re-run (e.g. regenerate)
+    logsRef.current = []
+    setLogs([])
+    setStatus(0)
+    setError(null)
 
     async function load() {
       try {
@@ -91,7 +96,7 @@ export function useSession(sessionId: string | null) {
         rafRef.current = null
       }
     }
-  }, [sessionId, flushLogs])
+  }, [sessionId, refreshKey, flushLogs])
 
   return { status, logs, error }
 }

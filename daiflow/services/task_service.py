@@ -10,7 +10,7 @@ from daiflow.services.settings_service import get_language_setting
 from daiflow.database import get_background_db
 from daiflow.models import Project, ProjectRepo, Session, SessionStatus, Task, TaskStatus, Todo, TodoStatus
 from daiflow.services.cody_service import append_path_boundary, build_cody_client
-from daiflow.services.git_service import checkout_branch
+from daiflow.services.git_service import checkout_branch, get_head_hash
 from daiflow.services.project_service import _repo_dir_name
 from daiflow.services.skill_service import get_project_dir, get_task_dir, get_task_skills_dir, sync_skills_to_task
 from daiflow.session_runner import SessionRunner, make_file_write_detector
@@ -200,13 +200,18 @@ async def generate_plan(task_id: str):
         repos = await fetch_project_repos(db, task.project_id)
         allowed_roots = _resolve_task_roots(task_id, repos)
 
-        # Create session record (idempotent — skip if already exists)
+        # Create or reset session record
         session_id = f"task:{task_id}:plan"
         existing_session = await db.get(Session, session_id)
-        if not existing_session:
-            session = Session(session_id=session_id, type="plan", ref_id=task_id)
-            db.add(session)
-            await db.commit()
+        if existing_session:
+            existing_session.status = SessionStatus.WAITING
+            existing_session.error = None
+            existing_session.cody_session_id = None
+            existing_session.started_at = None
+            existing_session.finished_at = None
+        else:
+            db.add(Session(session_id=session_id, type="plan", ref_id=task_id))
+        await db.commit()
 
         # Build prompt
         prompt = PLAN_PROMPT_TEMPLATE.format(
@@ -272,9 +277,14 @@ async def generate_todos(task_id: str):
 
         session_id = f"task:{task_id}:todo_split"
         existing_session = await db.get(Session, session_id)
-        if not existing_session:
-            session = Session(session_id=session_id, type="todo_split", ref_id=task_id)
-            db.add(session)
+        if existing_session:
+            existing_session.status = SessionStatus.WAITING
+            existing_session.error = None
+            existing_session.cody_session_id = None
+            existing_session.started_at = None
+            existing_session.finished_at = None
+        else:
+            db.add(Session(session_id=session_id, type="todo_split", ref_id=task_id))
         await db.commit()
 
         prompt = TODO_PROMPT_TEMPLATE.format(todo_path=str(todo_path))
@@ -426,6 +436,15 @@ async def execute_todo(todo_id: str):
             session = Session(session_id=session_id, type="todo_exec", ref_id=todo_id)
             db.add(session)
         todo.status = TodoStatus.RUNNING
+
+        # Record HEAD hash of each repo before execution
+        head_before: dict[str, str] = {}
+        for root in allowed_roots:
+            try:
+                head_before[root] = await get_head_hash(root)
+            except Exception:
+                pass
+        todo.commit_before = json.dumps(head_before)
         await db.commit()
 
         prompt = TODO_EXECUTE_PROMPT_TEMPLATE.format(
@@ -442,6 +461,15 @@ async def execute_todo(todo_id: str):
         on_tool_result = make_file_write_detector(None, "code_updated")
         async with client:
             await runner.run(db, session_id, prompt, on_tool_result=on_tool_result, language=lang)
+
+        # Record HEAD hash of each repo after execution
+        head_after: dict[str, str] = {}
+        for root in allowed_roots:
+            try:
+                head_after[root] = await get_head_hash(root)
+            except Exception:
+                pass
+        todo.commit_after = json.dumps(head_after)
 
         # Update todo status
         if runner.last_cody_session_id:

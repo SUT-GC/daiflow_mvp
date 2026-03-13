@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { getTask, getTodos, getTaskDiff, TaskData, TodoData } from '../api'
+import { getTask, getTodos, getTaskDiff, getTodoDiff, TaskData, TodoData } from '../api'
 import { SessionStatus, TodoStatus } from '../types/enums'
 import { useSession } from './useSession'
 import { useStageChat } from './useStageChat'
@@ -36,9 +36,40 @@ export function useCodingStage(taskId: string | undefined) {
 
   const { status: todoSessionStatus, logs, error: sessionError } = useSession(sessionId)
 
+  // Fetch per-todo diff when selecting a completed/failed todo
+  const fetchTodoDiff = useCallback(async (todoId: string) => {
+    try {
+      const data = await getTodoDiff(todoId)
+      const allDiffs = data.diffs?.map((d: any) => d.diff).join('\n') || ''
+      setDiff(allDiffs)
+    } catch {
+      // Fallback to task-level diff if per-todo diff not available
+      if (taskId) {
+        try {
+          const data = await getTaskDiff(taskId)
+          setDiff(data.diffs?.map((d: any) => d.diff).join('\n') || '')
+        } catch {
+          setDiff('')
+        }
+      }
+    }
+  }, [taskId])
+
+  // When selecting a todo, load its diff
+  useEffect(() => {
+    if (!selectedTodo) {
+      setDiff('')
+      return
+    }
+    const todo = todos.find(t => t.id === selectedTodo)
+    if (todo && (todo.status === TodoStatus.DONE || todo.status === TodoStatus.FAILED)) {
+      fetchTodoDiff(selectedTodo)
+    }
+  }, [selectedTodo, todos, fetchTodoDiff])
+
   const onUpdated = useCallback(async (event: any) => {
     if (event.type === 'code_updated' && taskId) {
-      // Debounce: wait 500ms before fetching to avoid N+1 rapid-fire requests
+      // During execution, use task-level diff (uncommitted changes)
       if (debounceRef.current) clearTimeout(debounceRef.current)
       debounceRef.current = setTimeout(async () => {
         try {
@@ -69,12 +100,16 @@ export function useCodingStage(taskId: string | undefined) {
     sessionLogs: logs,
   })
 
-  // Reload data when a todo execution completes
+  // Reload data when a todo execution completes, then fetch per-todo diff
   useEffect(() => {
     if (todoSessionStatus === SessionStatus.DONE || todoSessionStatus === SessionStatus.FAILED) {
       loadData()
+      if (selectedTodo) {
+        // Small delay to let backend commit the HEAD hash
+        setTimeout(() => fetchTodoDiff(selectedTodo), 300)
+      }
     }
-  }, [todoSessionStatus, loadData])
+  }, [todoSessionStatus, loadData, selectedTodo, fetchTodoDiff])
 
   const allDone = todos.length > 0 && todos.every(t => t.status === TodoStatus.DONE)
 
@@ -84,7 +119,6 @@ export function useCodingStage(taskId: string | undefined) {
     selectedTodo,
     setSelectedTodo,
     diff,
-    setDiff,
     todoSessionStatus,
     logs,
     loadData,

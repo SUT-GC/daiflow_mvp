@@ -8,6 +8,39 @@ import { groupChatToolEvents } from '../../utils/groupToolEvents'
 /** Distance (px) from bottom to consider "near bottom" for auto-scroll. */
 const SCROLL_NEAR_BOTTOM_PX = 80
 
+/** Max visible lines before a user message is collapsed. */
+const USER_MSG_COLLAPSE_LINES = 3
+
+function CollapsibleUserMsg({ content }: { content: string }) {
+  const lines = content.split('\n')
+  const shouldCollapse = lines.length > USER_MSG_COLLAPSE_LINES
+  const [collapsed, setCollapsed] = useState(shouldCollapse)
+
+  return (
+    <div>
+      <div style={{
+        whiteSpace: 'pre-wrap',
+        ...(collapsed ? {
+          display: '-webkit-box',
+          WebkitLineClamp: USER_MSG_COLLAPSE_LINES,
+          WebkitBoxOrient: 'vertical' as const,
+          overflow: 'hidden',
+        } : {}),
+      }}>
+        {content}
+      </div>
+      {shouldCollapse && (
+        <button
+          className="msg-toggle-btn"
+          onClick={() => setCollapsed(c => !c)}
+        >
+          {collapsed ? '展开 ▾' : '收起 ▴'}
+        </button>
+      )}
+    </div>
+  )
+}
+
 interface ChatPanelProps {
   messages: ChatMessage[]
   onSend: (text: string) => void
@@ -69,7 +102,7 @@ export default function ChatPanel({ messages, onSend, streaming = false, title, 
                 {msg.content && (
                   msg.role === 'ai'
                     ? <MarkdownViewer content={msg.content} />
-                    : <div style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</div>
+                    : <CollapsibleUserMsg content={msg.content} />
                 )}
                 {toolGroups.length > 0 && (
                   <div className="chat-tool-groups">

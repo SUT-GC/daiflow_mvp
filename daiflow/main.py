@@ -16,46 +16,53 @@ from daiflow.routers import projects, sessions, settings, tasks, todos, ws
 logger = logging.getLogger(__name__)
 
 
-async def _recover_interrupted_inits():
-    """Reset interrupted init sessions (RUNNING → FAILED) and auto-retry affected projects."""
-    from sqlalchemy import select, update
+async def _recover_interrupted_sessions():
+    """Reset all interrupted sessions (RUNNING → FAILED) on startup.
+
+    Also auto-retries interrupted init pipelines.
+    """
+    from datetime import datetime, timezone
+    from sqlalchemy import select
     from daiflow.database import get_background_db
     from daiflow.models import Session, SessionStatus
     from daiflow.services.project_service import run_init_retry
 
     async with get_background_db() as db:
-        # Find all RUNNING init sessions (interrupted by shutdown)
+        # Find ALL RUNNING sessions (interrupted by shutdown)
         result = await db.execute(
-            select(Session).where(
-                Session.type == "init",
-                Session.status == SessionStatus.RUNNING,
-            )
+            select(Session).where(Session.status == SessionStatus.RUNNING)
         )
         interrupted = result.scalars().all()
         if not interrupted:
             return
 
-        # Group by project and find earliest interrupted layer per project
-        projects_to_retry: dict[str, dict] = {}  # ref_id -> {from_layer, failed_ids}
+        # Mark all as FAILED
+        projects_to_retry: dict[str, dict] = {}
         for s in interrupted:
             s.status = SessionStatus.FAILED
             s.error = "Interrupted by server shutdown"
-            pid = s.ref_id
-            if pid not in projects_to_retry:
-                projects_to_retry[pid] = {"from_layer": s.layer or 1, "failed_ids": []}
-            info = projects_to_retry[pid]
-            if s.layer and s.layer < info["from_layer"]:
-                info["from_layer"] = s.layer
-            if s.layer == info["from_layer"]:
-                info["failed_ids"].append(s.session_id)
+            s.finished_at = datetime.now(timezone.utc)
+
+            # Track init sessions for auto-retry
+            if s.type == "init":
+                pid = s.ref_id
+                if pid not in projects_to_retry:
+                    projects_to_retry[pid] = {"from_layer": s.layer or 1, "failed_ids": []}
+                info = projects_to_retry[pid]
+                if s.layer and s.layer < info["from_layer"]:
+                    info["from_layer"] = s.layer
+                if s.layer == info["from_layer"]:
+                    info["failed_ids"].append(s.session_id)
         await db.commit()
 
         logger.info(
-            "Recovered %d interrupted init sessions across %d projects",
-            len(interrupted), len(projects_to_retry),
+            "Recovered %d interrupted sessions (%d init, %d other)",
+            len(interrupted),
+            sum(1 for s in interrupted if s.type == "init"),
+            sum(1 for s in interrupted if s.type != "init"),
         )
 
-        # Auto-retry each affected project
+        # Auto-retry each affected init project
         for pid, info in projects_to_retry.items():
             logger.info("Auto-retrying init for project %s from layer %d", pid, info["from_layer"])
             asyncio.create_task(run_init_retry(pid, info["failed_ids"], info["from_layer"]))
@@ -65,7 +72,7 @@ async def _recover_interrupted_inits():
 async def lifespan(app: FastAPI):
     init_daiflow_dir()
     await init_db()
-    await _recover_interrupted_inits()
+    await _recover_interrupted_sessions()
     yield
 
 

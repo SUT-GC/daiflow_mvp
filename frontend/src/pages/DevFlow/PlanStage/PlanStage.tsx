@@ -14,11 +14,12 @@ export default function PlanStage() {
   const { taskId } = useParams()
   const navigate = useNavigate()
   const { t } = useLocale()
-  const { task, planContent, status, messages, sendMessage, streaming } = usePlanStage(taskId)
+  const { task, planContent, status, messages, sendMessage, streaming, regenerating, refreshSession } = usePlanStage(taskId)
 
   const handleRegenerate = async () => {
     if (!taskId) return
     await triggerPlan(taskId)
+    refreshSession()
   }
 
   const handleLockPlan = async () => {
@@ -34,7 +35,7 @@ export default function PlanStage() {
   if (!task) return <Loading />
 
   const isLocked = task.status >= 3
-  const isGenerating = status === 1 || streaming
+  const isGenerating = status === 1 || streaming || regenerating
   const lockDisabled = !planContent || isGenerating || isLocked
   const regenerateDisabled = isGenerating || isLocked
   const chatDisabled = isLocked
