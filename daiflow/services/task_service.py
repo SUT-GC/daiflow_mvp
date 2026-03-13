@@ -294,9 +294,13 @@ async def generate_todos(task_id: str):
         skill_dir = str(get_task_skills_dir(task_id))
         client = await build_cody_client(db, str(task_dir), allowed_roots, skill_dir=skill_dir)
 
-        # Look up plan's cody_session_id from sessions table
-        plan_session = await db.get(Session, f"task:{task_id}:plan")
-        plan_cody_sid = plan_session.cody_session_id if plan_session else None
+        # Look up plan's cody_session_id via task_id FK
+        result = await db.execute(
+            select(Session.cody_session_id).where(
+                Session.task_id == task_id, Session.type == "plan",
+            )
+        )
+        plan_cody_sid = result.scalar()
 
         async def on_todo_match(_file_path):
             if todo_path.exists():
@@ -422,6 +426,8 @@ async def start_coding(task_id: str, db: AsyncSession):
 async def execute_todo(todo_id: str):
     """Execute a single todo item.
 
+    The router has already transitioned the todo to RUNNING.
+    This function runs Cody and transitions to done/failed.
     Uses an independent DB session for background execution.
     """
     async with get_background_db() as db:
@@ -443,13 +449,6 @@ async def execute_todo(todo_id: str):
         if not existing_session:
             session = Session(session_id=session_id, type="todo_exec", ref_id=todo_id, task_id=task.id)
             db.add(session)
-
-        # Transition: pending → running (or failed → running for retry)
-        todo_wf = TodoWorkflow(todo, db)
-        if todo.status == TodoStatus.FAILED:
-            await todo_wf.retry()
-        else:
-            await todo_wf.execute()
 
         # Record HEAD hash of each repo before execution
         head_before: dict[str, str] = {}

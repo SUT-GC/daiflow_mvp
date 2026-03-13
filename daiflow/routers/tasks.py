@@ -169,12 +169,14 @@ async def start_coding_route(task_id: str, db: AsyncSession = Depends(get_db)):
     # Transition: todo_ready → coding (with _has_todos guard)
     wf = TaskWorkflow(task, db)
     try:
-        await wf.start_coding()
+        result = await wf.start_coding()
     except MachineError:
         raise HTTPException(
             status_code=400,
             detail=f"Cannot transition from {TaskStatus(task.status).name} to CODING",
         )
+    if not result:
+        raise HTTPException(status_code=400, detail="Task has no todos")
     await db.commit()
     return {"ok": True, "status": task.status}
 
@@ -188,12 +190,14 @@ async def start_review(task_id: str, db: AsyncSession = Depends(get_db)):
     # Transition: coding → reviewing (with _all_todos_done guard)
     wf = TaskWorkflow(task, db)
     try:
-        await wf.start_review()
+        result = await wf.start_review()
     except MachineError:
         raise HTTPException(
             status_code=400,
             detail=f"Cannot transition from {TaskStatus(task.status).name} to REVIEWING",
         )
+    if not result:
+        raise HTTPException(status_code=400, detail="All todos must be done or skipped before review")
 
     session_id = f"task:{task_id}:review"
     existing = await db.get(Session, session_id)
