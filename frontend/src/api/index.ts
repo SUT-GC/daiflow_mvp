@@ -166,6 +166,13 @@ export const getTodoDiff = (todoId: string) =>
   request<DiffData>(`/todos/${todoId}/diff`)
 
 // ── Sessions ──
+export const listSessions = (params?: { ref_id?: string; type?: string }) => {
+  const qs = new URLSearchParams()
+  if (params?.ref_id) qs.set('ref_id', params.ref_id)
+  if (params?.type) qs.set('type', params.type)
+  const query = qs.toString()
+  return request<SessionStatusData[]>(`/sessions${query ? `?${query}` : ''}`)
+}
 export const getSessionStatus = (sessionId: string) =>
   request<SessionStatusData>(`/sessions/${sessionId}/status`)
 export const getSessionLogs = (sessionId: string) =>

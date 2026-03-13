@@ -6,6 +6,7 @@ const zh: Record<TranslationKey, string> = {
   'nav.projects': '项目',
   'nav.tasks': '任务',
   'nav.settings': '设置',
+  'nav.debug': '排障',
   'nav.not_configured': '未配置',
 
   // Settings
@@ -212,6 +213,20 @@ const zh: Record<TranslationKey, string> = {
   // ChatPanel
   'chat.default_title': 'AI 对话',
   'chat.placeholder': '发送消息...',
+
+  // Debug
+  'debug.title': '排障',
+  'debug.all_projects': '全部项目',
+  'debug.select_project': '选择项目',
+  'debug.select_scope': '选择范围',
+  'debug.project_init': '项目初始化 (知识库)',
+  'debug.tasks': '任务',
+  'debug.sessions': 'Sessions',
+  'debug.no_projects': '暂无项目',
+  'debug.no_sessions': '暂无 Session',
+  'debug.no_logs': '暂无日志',
+  'debug.select_session_hint': '选择项目、范围和 Session 查看日志',
+  'debug.loading': '加载日志中...',
 
   // ErrorBoundary
   'error.title': '出现错误',

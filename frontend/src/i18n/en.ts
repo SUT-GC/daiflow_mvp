@@ -4,6 +4,7 @@ const en = {
   'nav.projects': 'Projects',
   'nav.tasks': 'Tasks',
   'nav.settings': 'Settings',
+  'nav.debug': 'Debug',
   'nav.not_configured': 'not configured',
 
   // Settings
@@ -210,6 +211,20 @@ const en = {
   // ChatPanel
   'chat.default_title': 'AI Chat',
   'chat.placeholder': 'Send a message...',
+
+  // Debug
+  'debug.title': 'Debug',
+  'debug.all_projects': 'All Projects',
+  'debug.select_project': 'Select Project',
+  'debug.select_scope': 'Select Scope',
+  'debug.project_init': 'Project Init (Knowledge)',
+  'debug.tasks': 'Tasks',
+  'debug.sessions': 'Sessions',
+  'debug.no_projects': 'No projects found',
+  'debug.no_sessions': 'No sessions found',
+  'debug.no_logs': 'No log entries',
+  'debug.select_session_hint': 'Select a project, scope, and session to view logs',
+  'debug.loading': 'Loading logs...',
 
   // ErrorBoundary
   'error.title': 'Something went wrong',
