@@ -1,10 +1,10 @@
 import { useParams, useNavigate } from 'react-router-dom'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import Topbar from '../../components/Shell/Topbar'
 import Modal from '../../components/Modal/Modal'
 import { useInitProgress, type InitSession } from '../../hooks/useInitProgress'
-import { useSession } from '../../hooks/useSession'
-import { getProject, retryInit } from '../../api'
+import { useSession, type SessionEvent } from '../../hooks/useSession'
+import { getProject, retryInit, initProject } from '../../api'
 import { useLocale } from '../../hooks/useLocale'
 import type { TranslationKey } from '../../i18n'
 import './ProjectInit.css'
@@ -24,10 +24,128 @@ const KNOWLEDGE_KEYS: Record<string, TranslationKey> = {
 
 const STATUS_CLASSES = ['waiting', 'running', 'done', 'failed']
 
+/** Merge raw log events into grouped display blocks.
+ *
+ * Key insight: Cody streams produce repeating cycles of
+ *   thinking x N → tool_call → tool_result → thinking x N → ...
+ * We merge each cycle of (thinking* + tool*) into a single "tool-group" block
+ * so the UI shows one collapsible per group instead of dozens of thin lines.
+ */
+type ToolEntry = { toolName: string; args?: any; result?: string }
+type LogBlock =
+  | { kind: 'text'; content: string }
+  | { kind: 'tool-group'; tools: ToolEntry[] }
+  | { kind: 'error'; content: string }
+  | { kind: 'status'; status: number }
+
+function groupLogs(logs: SessionEvent[]): LogBlock[] {
+  const blocks: LogBlock[] = []
+  let textBuf = ''
+  // Accumulate consecutive thinking+tool sequences into one group
+  let toolGroup: ToolEntry[] = []
+  let pendingTool: { toolName: string; args?: any } | null = null
+
+  const flushText = () => {
+    if (textBuf) { blocks.push({ kind: 'text', content: textBuf }); textBuf = '' }
+  }
+  const flushToolGroup = () => {
+    if (pendingTool) {
+      toolGroup.push({ toolName: pendingTool.toolName, args: pendingTool.args })
+      pendingTool = null
+    }
+    if (toolGroup.length > 0) {
+      blocks.push({ kind: 'tool-group', tools: [...toolGroup] })
+      toolGroup = []
+    }
+  }
+
+  for (const log of logs) {
+    if (log.type === 'text_delta') {
+      flushToolGroup()
+      textBuf += log.content ?? ''
+    } else if (log.type === 'thinking') {
+      // thinking is part of the tool-group cycle, just skip display
+      flushText()
+    } else if (log.type === 'tool_call') {
+      flushText()
+      // Flush previous pending tool (no result came)
+      if (pendingTool) {
+        toolGroup.push({ toolName: pendingTool.toolName, args: pendingTool.args })
+      }
+      pendingTool = { toolName: log.tool_name ?? '?', args: log.args }
+    } else if (log.type === 'tool_result') {
+      flushText()
+      const resultContent = typeof log.content === 'string' ? log.content : JSON.stringify(log.content)
+      if (pendingTool) {
+        toolGroup.push({ toolName: pendingTool.toolName, args: pendingTool.args, result: resultContent })
+        pendingTool = null
+      } else {
+        toolGroup.push({ toolName: log.tool_name ?? '?', result: resultContent })
+      }
+    } else if (log.type === 'error') {
+      flushText(); flushToolGroup()
+      blocks.push({ kind: 'error', content: log.content || log.error || '' })
+    } else if (log.type === 'status_change') {
+      flushText(); flushToolGroup()
+      blocks.push({ kind: 'status', status: log.status ?? 0 })
+    }
+    // skip user_message, compact, done, etc.
+  }
+  flushText(); flushToolGroup()
+  return blocks
+}
+
+function ToolGroupBlock({ tools }: { tools: ToolEntry[] }) {
+  const [open, setOpen] = useState(false)
+  const [expandedIdx, setExpandedIdx] = useState<number | null>(null)
+
+  // Summary: count tool calls and list unique tool names
+  const names = [...new Set(tools.map(t => t.toolName).filter(Boolean))]
+  const summary = `${tools.length} tool calls` + (names.length > 0 ? ` — ${names.join(', ')}` : '')
+
+  return (
+    <div className="log-collapsible">
+      <div className="log-collapsible-head" onClick={() => setOpen(o => !o)}>
+        <span className="log-chevron">{open ? '▾' : '▸'}</span>
+        <span className="log-label log-label-tool">{summary}</span>
+      </div>
+      {open && (
+        <div className="log-collapsible-body log-tool-group-body">
+          {tools.map((t, i) => {
+            const isExpanded = expandedIdx === i
+            const argsStr = t.args
+              ? (typeof t.args === 'string' ? t.args : JSON.stringify(t.args, null, 2))
+              : null
+            return (
+              <div key={i} className="log-tool-item">
+                <div
+                  className="log-tool-item-head"
+                  onClick={() => setExpandedIdx(isExpanded ? null : i)}
+                >
+                  <span className="log-chevron">{isExpanded ? '▾' : '▸'}</span>
+                  <span className="log-tool-item-name">{t.toolName || '?'}</span>
+                </div>
+                {isExpanded && (
+                  <div className="log-tool-item-detail">
+                    {argsStr && <code className="log-tool-args">{argsStr}</code>}
+                    {t.result && <div className="log-tool-result">{t.result}</div>}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function SessionLogModal({ sessionId, label, onClose }: { sessionId: string; label: string; onClose: () => void }) {
   const { status, logs, error } = useSession(sessionId)
   const { t } = useLocale()
   const STATUS_KEYS: TranslationKey[] = ['init.status.waiting', 'init.status.running', 'init.status.done', 'init.status.failed']
+
+  const blocks = useMemo(() => groupLogs(logs), [logs])
 
   return (
     <Modal open onClose={onClose} width={700}>
@@ -37,24 +155,24 @@ function SessionLogModal({ sessionId, label, onClose }: { sessionId: string; lab
       </div>
       {error && <div className="session-log-error">{error}</div>}
       <div className="session-log-container">
-        {logs.length === 0 ? (
+        {blocks.length === 0 ? (
           <div className="session-log-empty">{t('init.no_logs')}</div>
         ) : (
-          logs.map((log, i) => (
-            <div key={i} className={`session-log-entry session-log-${log.type}`}>
-              {log.type === 'text_delta' && <span className="log-text">{log.content}</span>}
-              {log.type === 'thinking' && <span className="log-thinking">{log.content}</span>}
-              {log.type === 'tool_call' && (
-                <span className="log-tool">
-                  <span className="log-tool-name">{log.tool_name}</span>
-                  {log.args && <code className="log-tool-args">{typeof log.args === 'string' ? log.args : JSON.stringify(log.args, null, 2)}</code>}
-                </span>
-              )}
-              {log.type === 'tool_result' && <span className="log-result">{typeof log.content === 'string' ? log.content : JSON.stringify(log.content)}</span>}
-              {log.type === 'error' && <span className="log-error">{log.content || log.error}</span>}
-              {log.type === 'status_change' && <span className="log-status">Status → {t(STATUS_KEYS[log.status ?? 0])}</span>}
-            </div>
-          ))
+          blocks.map((block, i) => {
+            if (block.kind === 'text') {
+              return <div key={i} className="log-block log-block-text">{block.content}</div>
+            }
+            if (block.kind === 'tool-group') {
+              return <ToolGroupBlock key={i} tools={block.tools} />
+            }
+            if (block.kind === 'error') {
+              return <div key={i} className="log-block log-block-error">{block.content}</div>
+            }
+            if (block.kind === 'status') {
+              return <div key={i} className="log-block log-block-status">Status → {t(STATUS_KEYS[block.status])}</div>
+            }
+            return null
+          })
         )}
       </div>
     </Modal>
@@ -75,6 +193,7 @@ export default function ProjectInit() {
   }, [projectId])
 
   const [retrying, setRetrying] = useState(false)
+  const [regenerating, setRegenerating] = useState(false)
   const [viewSession, setViewSession] = useState<{ id: string; label: string } | null>(null)
 
   const allSessions = Object.values(layers).flat()
@@ -95,6 +214,18 @@ export default function ProjectInit() {
     } catch (err) {
       console.error('Retry failed:', err)
       setRetrying(false)
+    }
+  }
+
+  const handleRegenerate = async () => {
+    if (!projectId || regenerating) return
+    setRegenerating(true)
+    try {
+      await initProject(projectId)
+      window.location.reload()
+    } catch (err) {
+      console.error('Regenerate failed:', err)
+      setRegenerating(false)
     }
   }
 
@@ -176,6 +307,15 @@ export default function ProjectInit() {
                   onClick={handleRetry}
                 >
                   {retrying ? t('init.retrying') : t('init.retry_failed').replace('{count}', String(failedCount))}
+                </button>
+              )}
+              {done && (
+                <button
+                  className="btn btn-ghost"
+                  disabled={regenerating}
+                  onClick={handleRegenerate}
+                >
+                  {regenerating ? t('init.regenerating') : t('init.regenerate')}
                 </button>
               )}
               <div style={{ flex: 1 }} />

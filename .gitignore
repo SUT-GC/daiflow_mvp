@@ -39,3 +39,6 @@ sessions/
 
 # Build output served by backend
 static/
+
+# claude
+.claude

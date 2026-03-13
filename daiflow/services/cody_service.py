@@ -42,6 +42,26 @@ async def build_cody_client(
     roots = [workdir]
     if allowed_roots:
         roots.extend(allowed_roots)
-    builder = builder.allowed_roots(roots)
+    builder = builder.allowed_roots(roots).strict_read_boundary(True)
 
     return builder.build()
+
+
+def append_path_boundary(prompt: str, workdir: str, allowed_roots: list[str]) -> str:
+    """Append path boundary instructions to a prompt.
+
+    Soft restriction via prompt to prevent Cody from accessing files
+    outside allowed_roots (complements strict_read_boundary in SDK).
+    """
+    all_roots = [workdir]
+    for r in (allowed_roots or []):
+        if r != workdir:
+            all_roots.append(r)
+    roots_list = "\n".join(f"- {r}" for r in all_roots)
+    return prompt + (
+        "\n\n## IMPORTANT: Path Boundary\n"
+        "You MUST ONLY access files within the following directories:\n"
+        f"{roots_list}\n"
+        "Do NOT explore parent directories, sibling directories, or any path outside the listed roots. "
+        "Do NOT use exec_command (ls, find, cat, etc.) to access files outside these directories."
+    )

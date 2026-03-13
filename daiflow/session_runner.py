@@ -124,6 +124,15 @@ class SessionRunner:
         )
         await db.commit()
 
+        # Notify extra channels (e.g. project init bus) that session started
+        if extra_channels:
+            for ch in extra_channels:
+                await ws_manager.publish(ch, {
+                    "type": "session_status",
+                    "session_id": session_id,
+                    "status": SessionStatus.RUNNING,
+                })
+
         # Log user message
         user_event = {"type": "user_message", "content": prompt, "ts": _now().isoformat()}
         await _append_log(session_id, user_event)

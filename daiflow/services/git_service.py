@@ -42,6 +42,24 @@ async def _run(cmd: list[str], cwd: str, timeout: int = 120) -> str:
     return stdout.decode().strip()
 
 
+async def clone_or_pull(git_url: str, target_dir: str, timeout: int = 300) -> str:
+    """Clone a repo if not yet cloned, otherwise pull latest.
+
+    Returns the absolute path to the cloned repo directory.
+    """
+    from pathlib import Path
+
+    target = Path(target_dir)
+    if (target / ".git").exists():
+        logger.info("Repo already cloned at %s, pulling latest...", target_dir)
+        await _run(["git", "pull", "--ff-only"], cwd=target_dir, timeout=timeout)
+    else:
+        target.mkdir(parents=True, exist_ok=True)
+        logger.info("Cloning %s into %s ...", git_url, target_dir)
+        await _run(["git", "clone", git_url, target_dir], cwd=str(target.parent), timeout=timeout)
+    return target_dir
+
+
 async def checkout_branch(local_path: str, branch: str):
     """Checkout or create a branch."""
     validate_branch_name(branch)

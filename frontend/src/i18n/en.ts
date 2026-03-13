@@ -77,6 +77,8 @@ const en = {
   'init.layer': 'Layer',
   'init.retrying': 'Retrying...',
   'init.retry_failed': 'Retry {count} failed',
+  'init.regenerate': 'Regenerate',
+  'init.regenerating': 'Regenerating...',
   'init.return_projects': 'Return to Projects',
   'init.enter_project': 'Enter Project',
   'init.no_logs': 'No logs available.',

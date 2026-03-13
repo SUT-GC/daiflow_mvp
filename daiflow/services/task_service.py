@@ -1,5 +1,6 @@
 import json
 import logging
+import shutil
 from pathlib import Path
 
 from sqlalchemy import select, update
@@ -8,9 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from daiflow.services.settings_service import get_language_setting
 from daiflow.database import get_background_db
 from daiflow.models import Project, ProjectRepo, Session, SessionStatus, Task, TaskStatus, Todo, TodoStatus
-from daiflow.services.cody_service import build_cody_client
+from daiflow.services.cody_service import append_path_boundary, build_cody_client
 from daiflow.services.git_service import checkout_branch
-from daiflow.services.skill_service import get_task_dir, sync_skills_to_task
+from daiflow.services.project_service import _repo_dir_name
+from daiflow.services.skill_service import get_project_dir, get_task_dir, sync_skills_to_task
 from daiflow.session_runner import SessionRunner, make_file_write_detector
 
 logger = logging.getLogger(__name__)
@@ -69,6 +71,43 @@ TODO_EXECUTE_PROMPT_TEMPLATE = (
 )
 
 
+def _copy_code_to_task(project_id: str, task_id: str, repos: list):
+    """Copy cloned code from project/code/ to task/code/ for git-only repos.
+
+    Only copies repos that have git_url but no local_path.
+    Repos with local_path are used in-place (user's working directory).
+    """
+    project_dir = get_project_dir(project_id)
+    task_dir = get_task_dir(task_id)
+
+    for r in repos:
+        if r.git_url and not r.local_path:
+            repo_name = _repo_dir_name(r.git_url)
+            src = project_dir / "code" / repo_name
+            dst = task_dir / "code" / repo_name
+            if src.exists():
+                if dst.exists():
+                    shutil.rmtree(dst)
+                shutil.copytree(src, dst)
+                logger.info("Copied code %s -> %s", src, dst)
+
+
+def _resolve_task_roots(task_id: str, repos: list) -> list[str]:
+    """Resolve allowed_roots for a task.
+
+    - Repos with local_path: use local_path directly (user's working directory)
+    - Repos with git_url only: use task/code/{repo_name} (isolated copy)
+    """
+    task_dir = get_task_dir(task_id)
+    roots = []
+    for r in repos:
+        if r.local_path:
+            roots.append(r.local_path)
+        elif r.git_url:
+            roots.append(str(task_dir / "code" / _repo_dir_name(r.git_url)))
+    return roots
+
+
 async def init_task(task_id: str):
     """Initialize a task: sync skills, checkout branch, then generate plan.
 
@@ -91,17 +130,31 @@ async def init_task(task_id: str):
             # Sync skills
             sync_skills_to_task(task.project_id, task_id)
 
-            # Checkout branch on all repos
+            # Fetch repos and prepare code directories
             result = await db.execute(
                 select(ProjectRepo).where(ProjectRepo.project_id == task.project_id)
             )
             repos = result.scalars().all()
-            for repo in repos:
-                if repo.local_path and task.branch:
-                    try:
-                        await checkout_branch(repo.local_path, task.branch)
-                    except Exception as e:
-                        logger.warning("Branch checkout for %s on %s: %s", task.branch, repo.local_path, e)
+
+            # Copy cloned code to task directory for git-only repos
+            _copy_code_to_task(task.project_id, task_id, repos)
+
+            # Checkout branch on all working directories
+            if task.branch:
+                for repo in repos:
+                    if repo.local_path:
+                        # User's local repo — checkout branch directly
+                        try:
+                            await checkout_branch(repo.local_path, task.branch)
+                        except Exception as e:
+                            logger.warning("Branch checkout for %s on %s: %s", task.branch, repo.local_path, e)
+                    elif repo.git_url:
+                        # Task's isolated copy — checkout branch there
+                        task_repo_path = str(get_task_dir(task_id) / "code" / _repo_dir_name(repo.git_url))
+                        try:
+                            await checkout_branch(task_repo_path, task.branch)
+                        except Exception as e:
+                            logger.warning("Branch checkout for %s on %s: %s", task.branch, task_repo_path, e)
 
             # Update status to planning
             task.status = TaskStatus.PLANNING
@@ -137,12 +190,12 @@ async def generate_plan(task_id: str):
         task_dir = get_task_dir(task_id)
         plan_path = task_dir / "plan.md"
 
-        # Get allowed roots from project repos
+        # Resolve allowed roots (local_path or task/code/ copy)
         result = await db.execute(
             select(ProjectRepo).where(ProjectRepo.project_id == task.project_id)
         )
         repos = result.scalars().all()
-        allowed_roots = [r.local_path for r in repos if r.local_path]
+        allowed_roots = _resolve_task_roots(task_id, repos)
 
         # Create session record (idempotent — skip if already exists)
         session_id = f"task:{task_id}:plan"
@@ -159,6 +212,7 @@ async def generate_plan(task_id: str):
             tech_plan=task.tech_plan or "",
             plan_path=str(plan_path),
         )
+        prompt = append_path_boundary(prompt, str(task_dir), allowed_roots)
 
         # Run Cody via SessionRunner
         lang = await get_language_setting(db)
@@ -202,7 +256,7 @@ async def generate_todos(task_id: str):
             select(ProjectRepo).where(ProjectRepo.project_id == task.project_id)
         )
         repos = result.scalars().all()
-        allowed_roots = [r.local_path for r in repos if r.local_path]
+        allowed_roots = _resolve_task_roots(task_id, repos)
 
         session_id = f"task:{task_id}:todo_split"
         existing_session = await db.get(Session, session_id)
@@ -212,6 +266,7 @@ async def generate_todos(task_id: str):
         await db.commit()
 
         prompt = TODO_PROMPT_TEMPLATE.format(todo_path=str(todo_path))
+        prompt = append_path_boundary(prompt, str(task_dir), allowed_roots)
 
         # Reuse plan's Cody session for context continuity
         lang = await get_language_setting(db)
@@ -345,7 +400,7 @@ async def execute_todo(todo_id: str):
             select(ProjectRepo).where(ProjectRepo.project_id == task.project_id)
         )
         repos = result.scalars().all()
-        allowed_roots = [r.local_path for r in repos if r.local_path]
+        allowed_roots = _resolve_task_roots(task.id, repos)
 
         session_id = f"task:{task.id}:todo:{todo_id}"
         existing_session = await db.get(Session, session_id)
@@ -360,6 +415,7 @@ async def execute_todo(todo_id: str):
             title=todo.title,
             description=todo.description,
         )
+        prompt = append_path_boundary(prompt, str(task_dir), allowed_roots)
 
         lang = await get_language_setting(db)
         client = await build_cody_client(db, str(task_dir), allowed_roots)
