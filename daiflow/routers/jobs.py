@@ -1,67 +1,157 @@
-"""Job tab API: monitor log history + manual trigger + config."""
+"""Job tab API: CRUD jobs, view run history, manual trigger."""
 
 import json
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from daiflow.database import get_db
-from daiflow.models import MonitorJobStatus, MonitorLog, Setting
-from daiflow.services.repo_monitor import check_all_projects
+from daiflow.models import Job, JobRun, JobRunStatus
+from daiflow.services.repo_monitor import run_all_jobs, run_job
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
 
-@router.get("")
-async def list_logs(limit: int = 50, db: AsyncSession = Depends(get_db)):
-    """List recent monitor job logs, newest first."""
-    result = await db.execute(
-        select(MonitorLog).order_by(MonitorLog.created_at.desc()).limit(limit)
-    )
-    logs = result.scalars().all()
-    return [
-        {
-            "id": log.id,
-            "project_id": log.project_id,
-            "project_name": log.project_name,
-            "status": MonitorJobStatus(log.status).name.lower(),
-            "repos_changed": json.loads(log.repos_changed) if log.repos_changed else [],
-            "error": log.error,
-            "created_at": log.created_at.isoformat() if log.created_at else None,
-            "finished_at": log.finished_at.isoformat() if log.finished_at else None,
-        }
-        for log in logs
-    ]
+# ── Request models ──
+
+class JobCreate(BaseModel):
+    project_id: str
+    type: str = "repo_monitor"
+    enabled: bool = True
+    interval: int = 300  # seconds
 
 
-@router.post("/check")
-async def trigger_check():
-    """Manually trigger a repo check across all projects."""
-    results = await check_all_projects()
-    return {"results": results}
+class JobUpdate(BaseModel):
+    enabled: bool | None = None
+    interval: int | None = None
 
 
-@router.get("/config")
-async def get_config(db: AsyncSession = Depends(get_db)):
-    """Get monitor config."""
-    setting = await db.get(Setting, "repo_monitor_interval")
+# ── Serialization helpers ──
+
+def _serialize_job(job: Job) -> dict:
     return {
-        "interval": int(setting.value) if setting and setting.value else 300,
+        "id": job.id,
+        "project_id": job.project_id,
+        "type": job.type,
+        "enabled": bool(job.enabled),
+        "interval": job.interval,
+        "config": json.loads(job.config) if job.config else {},
+        "created_at": job.created_at.isoformat() if job.created_at else None,
+        "updated_at": job.updated_at.isoformat() if job.updated_at else None,
     }
 
 
-@router.put("/config")
-async def update_config(data: dict, db: AsyncSession = Depends(get_db)):
-    """Update monitor config. Body: {"interval": 300}."""
-    interval = data.get("interval", 300)
-    interval = max(60, int(interval))
+def _serialize_run(run: JobRun) -> dict:
+    return {
+        "id": run.id,
+        "job_id": run.job_id,
+        "status": JobRunStatus(run.status).name.lower(),
+        "result": json.loads(run.result) if run.result else {},
+        "error": run.error,
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+    }
 
-    setting = await db.get(Setting, "repo_monitor_interval")
-    if setting:
-        setting.value = str(interval)
-    else:
-        db.add(Setting(key="repo_monitor_interval", value=str(interval)))
+
+# ── Job CRUD ──
+
+@router.get("")
+async def list_jobs(db: AsyncSession = Depends(get_db)):
+    """List all jobs."""
+    result = await db.execute(select(Job).order_by(Job.created_at.desc()))
+    return [_serialize_job(j) for j in result.scalars().all()]
+
+
+@router.post("")
+async def create_job(data: JobCreate, db: AsyncSession = Depends(get_db)):
+    """Create a new job."""
+    job = Job(
+        project_id=data.project_id,
+        type=data.type,
+        enabled=1 if data.enabled else 0,
+        interval=max(60, data.interval),
+    )
+    db.add(job)
     await db.commit()
+    await db.refresh(job)
+    return _serialize_job(job)
 
-    return {"interval": interval}
+
+@router.put("/{job_id}")
+async def update_job(job_id: str, data: JobUpdate, db: AsyncSession = Depends(get_db)):
+    """Update job config (enable/disable, interval)."""
+    job = await db.get(Job, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if data.enabled is not None:
+        job.enabled = 1 if data.enabled else 0
+    if data.interval is not None:
+        job.interval = max(60, data.interval)
+
+    await db.commit()
+    return _serialize_job(job)
+
+
+@router.delete("/{job_id}")
+async def delete_job(job_id: str, db: AsyncSession = Depends(get_db)):
+    """Delete a job and its run history."""
+    job = await db.get(Job, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    await db.delete(job)
+    await db.commit()
+    return {"ok": True}
+
+
+# ── Run history ──
+
+@router.get("/{job_id}/runs")
+async def list_runs(job_id: str, limit: int = 50, db: AsyncSession = Depends(get_db)):
+    """List recent runs for a job, newest first."""
+    result = await db.execute(
+        select(JobRun)
+        .where(JobRun.job_id == job_id)
+        .order_by(JobRun.started_at.desc())
+        .limit(limit)
+    )
+    return [_serialize_run(r) for r in result.scalars().all()]
+
+
+@router.get("/runs/recent")
+async def list_recent_runs(limit: int = 50, db: AsyncSession = Depends(get_db)):
+    """List recent runs across all jobs, newest first."""
+    result = await db.execute(
+        select(JobRun)
+        .options(selectinload(JobRun.job))
+        .order_by(JobRun.started_at.desc())
+        .limit(limit)
+    )
+    runs = result.scalars().all()
+    out = []
+    for r in runs:
+        d = _serialize_run(r)
+        if r.job:
+            d["project_id"] = r.job.project_id
+            d["job_type"] = r.job.type
+        out.append(d)
+    return out
+
+
+# ── Manual trigger ──
+
+@router.post("/{job_id}/trigger")
+async def trigger_job(job_id: str, background_tasks: BackgroundTasks):
+    """Manually trigger a single job."""
+    background_tasks.add_task(run_job, job_id)
+    return {"ok": True, "message": "Job triggered"}
+
+
+@router.post("/trigger-all")
+async def trigger_all(background_tasks: BackgroundTasks):
+    """Manually trigger all enabled jobs."""
+    background_tasks.add_task(run_all_jobs)
+    return {"ok": True, "message": "All jobs triggered"}

@@ -137,24 +137,42 @@ class Session(Base):
     created_at = Column(DateTime, default=_now)
 
 
-class MonitorJobStatus(IntEnum):
+class JobRunStatus(IntEnum):
     RUNNING = 0
-    UPDATED = 1     # found changes, pulled & triggered re-init
-    NO_CHANGE = 2   # checked, nothing new
-    FAILED = 3
+    SUCCESS = 1
+    FAILED = 2
 
 
-class MonitorLog(Base):
-    __tablename__ = "monitor_logs"
+class Job(Base):
+    """Job definition — what type of job, which project, config."""
+    __tablename__ = "jobs"
 
     id = Column(String, primary_key=True, default=_uuid)
     project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
-    project_name = Column(String, default="")
-    status = Column(Integer, default=0)  # MonitorJobStatus
-    repos_changed = Column(Text, default="[]")  # JSON: [{"repo_name": ..., "old": ..., "new": ...}]
-    error = Column(Text, nullable=True)
+    type = Column(String, nullable=False)       # "repo_monitor" (extensible)
+    enabled = Column(Integer, default=1)         # 1=enabled, 0=disabled
+    interval = Column(Integer, default=300)      # seconds between runs
+    config = Column(Text, default="{}")          # JSON: type-specific config
     created_at = Column(DateTime, default=_now)
+    updated_at = Column(DateTime, default=_now, onupdate=_now)
+
+    runs = relationship("JobRun", back_populates="job", cascade="all, delete-orphan")
+    project = relationship("Project")
+
+
+class JobRun(Base):
+    """Single execution record of a job."""
+    __tablename__ = "job_runs"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    job_id = Column(String, ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True)
+    status = Column(Integer, default=0)          # JobRunStatus
+    result = Column(Text, default="{}")          # JSON: type-specific output
+    error = Column(Text, nullable=True)
+    started_at = Column(DateTime, default=_now)
     finished_at = Column(DateTime, nullable=True)
+
+    job = relationship("Job", back_populates="runs")
 
 
 class Setting(Base):
