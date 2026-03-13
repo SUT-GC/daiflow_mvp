@@ -238,12 +238,15 @@ async def run_stage_chat(
     message: str,
     on_tool_result=None,
     language: str | None = None,
+    system_prefix: str | None = None,
 ):
     """
     Stage chat async generator. Yields raw event dicts.
 
     Used by WS handler. The caller sends events via ws.send_json.
     """
+    if system_prefix:
+        message = system_prefix + message
     if language:
         message = message + LANGUAGE_INSTRUCTIONS.get(language, "")
 

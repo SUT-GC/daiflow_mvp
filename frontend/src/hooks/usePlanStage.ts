@@ -21,23 +21,18 @@ export function usePlanStage(taskId: string | undefined) {
   const sessionId = taskId ? `task:${taskId}:plan` : null
   const { status, logs, error: sessionError } = useSession(sessionId)
 
-  // Derive plan content from logs in a single pass
+  // Derive plan content from logs — only use plan_updated events (actual plan.md content)
+  // Do NOT fall back to text_delta accumulation since that is the AI's streaming response,
+  // not the plan.md file content
   const logDerivedPlan = useMemo(() => {
     if (logs.length === 0) return ''
-    // Prefer the last plan_updated event
+    // Use the last plan_updated event which contains actual plan.md content
     for (let i = logs.length - 1; i >= 0; i--) {
       if (logs[i].type === 'plan_updated' && logs[i].content) {
         return logs[i].content!
       }
     }
-    // Fallback: reconstruct from text_delta
-    let text = ''
-    for (const event of logs) {
-      if (event.type === 'text_delta') {
-        text += event.content || ''
-      }
-    }
-    return text
+    return ''
   }, [logs])
 
   const planContent = chatPlanContent ?? (logDerivedPlan || initialPlan)
