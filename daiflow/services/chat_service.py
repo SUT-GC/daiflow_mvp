@@ -120,12 +120,29 @@ async def prepare_stage_chat(
 
         on_tool_result = make_file_write_detector("todo.json", "todo_updated", on_todo_match)
 
+        system_prefix = (
+            "You are a technical lead helping refine task decomposition.\n"
+            "Your primary task is to discuss and modify the todo list in `todo.json`.\n\n"
+            "## Context\n"
+            "- Read `project.md` in the current working directory for project knowledge.\n"
+            "- Read `plan.md` for the technical plan that the todos are based on.\n"
+            "- The current todo list is in `todo.json` — read it first if you haven't.\n"
+            f"- Todo file path: `{todo_path}`\n\n"
+            "## Important Rules\n"
+            "- When the user asks for changes, update `todo.json` directly by writing to the file.\n"
+            "- Keep the JSON format: an array of objects with `seq`, `title`, `description` fields.\n"
+            "- Each todo should be an independently executable unit of work.\n"
+            "- Focus solely on the todo decomposition — do not implement code or modify the plan.\n\n"
+            "## User Message\n"
+        )
+
         return StageChatContext(
             session_id=session_id,
             cody_client=client,
             cody_session_id=task.plan_cody_session_id,
             on_tool_result=on_tool_result,
             language=lang,
+            system_prefix=system_prefix,
         )
 
     elif stage == "todo_exec":
