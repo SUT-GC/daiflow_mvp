@@ -2,8 +2,10 @@ import { useState, useCallback, useRef, useEffect } from 'react'
 import { getSessionLogs } from '../api'
 import { wsClient, WSEvent } from '../ws'
 
-let _msgIdCounter = 0
-function nextMsgId() { return `msg_${++_msgIdCounter}_${Date.now()}` }
+/** Generate unique message IDs using crypto.randomUUID when available, with fallback. */
+const nextMsgId = typeof crypto !== 'undefined' && crypto.randomUUID
+  ? () => `msg_${crypto.randomUUID()}`
+  : (() => { let c = 0; return () => `msg_${++c}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}` })()
 
 export interface ChatMessage {
   id: string

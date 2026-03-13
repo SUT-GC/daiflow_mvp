@@ -260,6 +260,30 @@ async def _run_layer4(
             await runner.run(layer4_db, sid, prompt, extra_channels=[project_bus], language=lang)
 
 
+async def _finalize_init(db, project_id: str, project_bus: str):
+    """Mark remaining WAITING init sessions as FAILED and send final done event."""
+    result = await db.execute(
+        select(Session).where(
+            Session.ref_id == project_id,
+            Session.type == "init",
+            Session.status == SessionStatus.WAITING,
+        )
+    )
+    for s in result.scalars().all():
+        s.status = SessionStatus.FAILED
+        s.error = "Skipped due to earlier layer failures"
+        s.finished_at = datetime.now(timezone.utc)
+        await ws_manager.publish(project_bus, {
+            "type": "session_status",
+            "session_id": s.session_id,
+            "status": SessionStatus.FAILED,
+            "error": s.error,
+            "layer": s.layer,
+        })
+    await db.commit()
+    await ws_manager.publish(project_bus, {"type": "done"})
+
+
 async def run_init(project_id: str):
     """Execute the 4-layer project knowledge generation pipeline.
 
@@ -348,31 +372,7 @@ async def run_init(project_id: str):
         except Exception as e:
             logger.error("Layer 4 project.md generation failed: %s", e)
 
-        # Mark all remaining WAITING sessions as FAILED (they were skipped due to earlier failures)
-        result = await db.execute(
-            select(Session).where(
-                Session.ref_id == project_id,
-                Session.type == "init",
-                Session.status == SessionStatus.WAITING,
-            )
-        )
-        waiting_sessions = result.scalars().all()
-        for s in waiting_sessions:
-            s.status = SessionStatus.FAILED
-            s.error = "Skipped due to earlier layer failures"
-            s.finished_at = datetime.now(timezone.utc)
-            # Publish status update
-            await ws_manager.publish(project_bus, {
-                "type": "session_status",
-                "session_id": s.session_id,
-                "status": SessionStatus.FAILED,
-                "error": s.error,
-                "layer": s.layer,
-            })
-        await db.commit()
-
-        # Send final done event on project bus
-        await ws_manager.publish(project_bus, {"type": "done"})
+        await _finalize_init(db, project_id, project_bus)
 
 
 async def run_init_retry(project_id: str, failed_session_ids: list[str], from_layer: int):
@@ -414,26 +414,4 @@ async def run_init_retry(project_id: str, failed_session_ids: list[str], from_la
                 layer_sessions = layer_results.scalars().all()
                 await _run_layer(layer_sessions, layer_num, project_dir, allowed_roots, repos, project_bus, lang)
 
-        # Mark all remaining WAITING sessions as FAILED (they were skipped due to earlier failures)
-        result = await db.execute(
-            select(Session).where(
-                Session.ref_id == project_id,
-                Session.type == "init",
-                Session.status == SessionStatus.WAITING,
-            )
-        )
-        waiting_sessions = result.scalars().all()
-        for s in waiting_sessions:
-            s.status = SessionStatus.FAILED
-            s.error = "Skipped due to earlier layer failures"
-            s.finished_at = datetime.now(timezone.utc)
-            await ws_manager.publish(project_bus, {
-                "type": "session_status",
-                "session_id": s.session_id,
-                "status": SessionStatus.FAILED,
-                "error": s.error,
-                "layer": s.layer,
-            })
-        await db.commit()
-
-        await ws_manager.publish(project_bus, {"type": "done"})
+        await _finalize_init(db, project_id, project_bus)

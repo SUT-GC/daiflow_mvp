@@ -17,6 +17,15 @@ from daiflow.session_runner import SessionRunner, make_file_write_detector
 
 logger = logging.getLogger(__name__)
 
+
+async def fetch_project_repos(db: AsyncSession, project_id: str) -> list:
+    """Fetch all ProjectRepo records for a project. Shared by services and routers."""
+    result = await db.execute(
+        select(ProjectRepo).where(ProjectRepo.project_id == project_id)
+    )
+    return result.scalars().all()
+
+
 PLAN_PROMPT_TEMPLATE = (
     "You are a senior software architect. Your task is to generate a comprehensive technical plan.\n\n"
     "## Context\n"
@@ -131,10 +140,7 @@ async def init_task(task_id: str):
             sync_skills_to_task(task.project_id, task_id)
 
             # Fetch repos and prepare code directories
-            result = await db.execute(
-                select(ProjectRepo).where(ProjectRepo.project_id == task.project_id)
-            )
-            repos = result.scalars().all()
+            repos = await fetch_project_repos(db, task.project_id)
 
             # Copy cloned code to task directory for git-only repos
             _copy_code_to_task(task.project_id, task_id, repos)
@@ -191,10 +197,7 @@ async def generate_plan(task_id: str):
         plan_path = task_dir / "plan.md"
 
         # Resolve allowed roots (local_path or task/code/ copy)
-        result = await db.execute(
-            select(ProjectRepo).where(ProjectRepo.project_id == task.project_id)
-        )
-        repos = result.scalars().all()
+        repos = await fetch_project_repos(db, task.project_id)
         allowed_roots = _resolve_task_roots(task_id, repos)
 
         # Create session record (idempotent — skip if already exists)
@@ -252,10 +255,7 @@ async def generate_todos(task_id: str):
         task_dir = get_task_dir(task_id)
         todo_path = task_dir / "todo.json"
 
-        result = await db.execute(
-            select(ProjectRepo).where(ProjectRepo.project_id == task.project_id)
-        )
-        repos = result.scalars().all()
+        repos = await fetch_project_repos(db, task.project_id)
         allowed_roots = _resolve_task_roots(task_id, repos)
 
         session_id = f"task:{task_id}:todo_split"
@@ -288,15 +288,7 @@ async def generate_todos(task_id: str):
         # Parse todo.json and insert todos into DB
         if todo_path.exists():
             try:
-                todos_data = json.loads(todo_path.read_text(encoding="utf-8"))
-                for item in todos_data:
-                    todo = Todo(
-                        task_id=task_id,
-                        seq=item.get("seq", 0),
-                        title=item.get("title", ""),
-                        description=item.get("description", ""),
-                    )
-                    db.add(todo)
+                _insert_todos(db, task_id, _parse_todos_json(todo_path.read_text(encoding="utf-8")))
             except (json.JSONDecodeError, KeyError, TypeError) as e:
                 logger.error("Failed to parse todo.json for task %s: %s", task_id, e)
                 # Still transition to TODO_READY so user can retry via chat
@@ -345,6 +337,21 @@ async def sync_todos_from_file(db: AsyncSession, task_id: str, content: str):
     await db.commit()
 
 
+def _parse_todos_json(content: str) -> list[dict]:
+    """Parse todo.json content into a list of todo dicts. Raises on invalid JSON."""
+    data = json.loads(content)
+    return [
+        {"seq": item.get("seq", 0), "title": item.get("title", ""), "description": item.get("description", "")}
+        for item in data
+    ]
+
+
+def _insert_todos(db: AsyncSession, task_id: str, todos_data: list[dict]):
+    """Add parsed todo items to the DB session (does not commit)."""
+    for item in todos_data:
+        db.add(Todo(task_id=task_id, seq=item["seq"], title=item["title"], description=item["description"]))
+
+
 async def start_coding(task_id: str, db: AsyncSession):
     """Parse todo.json (if not already parsed), update task status to coding."""
     task = await db.get(Task, task_id)
@@ -364,15 +371,7 @@ async def start_coding(task_id: str, db: AsyncSession):
 
         if todo_path.exists():
             try:
-                todos_data = json.loads(todo_path.read_text(encoding="utf-8"))
-                for item in todos_data:
-                    todo = Todo(
-                        task_id=task_id,
-                        seq=item.get("seq", 0),
-                        title=item.get("title", ""),
-                        description=item.get("description", ""),
-                    )
-                    db.add(todo)
+                _insert_todos(db, task_id, _parse_todos_json(todo_path.read_text(encoding="utf-8")))
             except (json.JSONDecodeError, KeyError, TypeError) as e:
                 logger.error("Failed to parse todo.json for task %s: %s", task_id, e)
 
@@ -396,10 +395,7 @@ async def execute_todo(todo_id: str):
 
         task_dir = get_task_dir(task.id)
 
-        result = await db.execute(
-            select(ProjectRepo).where(ProjectRepo.project_id == task.project_id)
-        )
-        repos = result.scalars().all()
+        repos = await fetch_project_repos(db, task.project_id)
         allowed_roots = _resolve_task_roots(task.id, repos)
 
         session_id = f"task:{task.id}:todo:{todo_id}"

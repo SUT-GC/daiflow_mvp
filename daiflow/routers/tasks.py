@@ -3,17 +3,17 @@ import logging
 import shutil
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
-from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from daiflow.config import TASKS_DIR
 from daiflow.database import get_db
-from daiflow.models import ProjectRepo, Session, SessionStatus, Task, TaskStatus, Todo
-from daiflow.schemas import TaskResponse, TodoResponse
+from daiflow.models import Session, SessionStatus, Task, TaskStatus, Todo
+from daiflow.schemas import SubmitMR, TaskCreate, TaskResponse, TaskUpdate, TodoResponse
 from daiflow.services.git_service import commit, get_diff, push
 from daiflow.services.task_service import (
     execute_todo,
+    fetch_project_repos,
     generate_plan,
     generate_todos,
     init_task,
@@ -45,33 +45,13 @@ def _check_transition(task: Task, target: TaskStatus):
         )
 
 
-class TaskCreate(BaseModel):
-    name: str
-    project_id: str
-    description: str = ""
-    branch: str = ""
-    prd: str = ""
-    tech_plan: str = ""
-
-
-class TaskUpdate(BaseModel):
-    name: str | None = None
-    description: str | None = None
-    branch: str | None = None
-    prd: str | None = None
-    tech_plan: str | None = None
-
-
 def _task_to_dict(t: Task) -> dict:
     return TaskResponse.model_validate(t).model_dump()
 
 
 async def _get_task_repos(db: AsyncSession, project_id: str):
-    """Get repos and allowed_roots for a task's project."""
-    result = await db.execute(
-        select(ProjectRepo).where(ProjectRepo.project_id == project_id)
-    )
-    repos = result.scalars().all()
+    """Get repos and local allowed_roots for a task's project."""
+    repos = await fetch_project_repos(db, project_id)
     allowed_roots = [r.local_path for r in repos if r.local_path]
     return repos, allowed_roots
 
@@ -319,10 +299,6 @@ async def generate_commit_message(task_id: str, db: AsyncSession = Depends(get_d
     except Exception:
         logger.warning("AI commit message generation failed for task %s", task_id, exc_info=True)
         return {"commit_message": f"feat: {task.name}\n\n{task.description or ''}"}
-
-
-class SubmitMR(BaseModel):
-    commit_message: str = ""
 
 
 @router.post("/{task_id}/submit-mr")

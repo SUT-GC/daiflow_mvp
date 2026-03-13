@@ -32,6 +32,11 @@ interface ServerMessage {
 
 type EventHandler = (event: WSEvent) => void
 
+/** Interval (ms) between WebSocket keepalive pings. */
+const WS_PING_INTERVAL_MS = 25_000
+/** Maximum delay (ms) between reconnect attempts (exponential backoff cap). */
+const WS_MAX_RECONNECT_DELAY_MS = 30_000
+
 class WebSocketClient {
   private ws: WebSocket | null = null
   private subscriptions = new Map<string, Set<EventHandler>>()
@@ -219,7 +224,7 @@ class WebSocketClient {
     this.stopPing()
     this.pingInterval = setInterval(() => {
       this.send({ action: 'ping' })
-    }, 25000)
+    }, WS_PING_INTERVAL_MS)
   }
 
   private stopPing(): void {
@@ -235,7 +240,7 @@ class WebSocketClient {
       return
     }
 
-    const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000)
+    const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), WS_MAX_RECONNECT_DELAY_MS)
     this.reconnectAttempts++
 
     this.reconnectTimer = setTimeout(() => {

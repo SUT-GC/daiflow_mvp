@@ -3,28 +3,10 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import Topbar from '../../components/Shell/Topbar'
 import { listTasks, createTask, deleteTask, listProjects } from '../../api'
 import { useLocale } from '../../hooks/useLocale'
+import { STATUS_TAGS, getStageFromStatus, getDevFlowPath } from '../../utils/taskStages'
 import type { TaskData } from '../../api'
 import type { TranslationKey } from '../../i18n'
 import './Tasks.css'
-
-const STATUS_TAGS: Record<number, string> = {
-  0: 'tag-dim', 1: 'tag-amber', 2: 'tag-blue', 3: 'tag-blue',
-  4: 'tag-teal', 5: 'tag-amber', 6: 'tag-purple', 7: 'tag-green',
-}
-
-function getStageFromStatus(status: number): number {
-  if (status <= 2) return 1
-  if (status <= 3) return 2
-  if (status <= 5) return 3
-  return 4
-}
-
-function getDevFlowPath(taskId: string, status: number): string {
-  if (status <= 2) return `/devflow/${taskId}/plan`
-  if (status === 3) return `/devflow/${taskId}/todo`
-  if (status <= 5) return `/devflow/${taskId}/coding`
-  return `/devflow/${taskId}/review`
-}
 
 export default function Tasks() {
   const navigate = useNavigate()
@@ -47,8 +29,8 @@ export default function Tasks() {
   const [creating, setCreating] = useState(false)
 
   useEffect(() => {
-    listTasks(projectId).then(setTasks).catch(() => {})
-    listProjects().then(setProjects).catch(() => {})
+    listTasks(projectId).then(setTasks).catch(err => console.error('Failed to load tasks:', err))
+    listProjects().then(setProjects).catch(err => console.error('Failed to load projects:', err))
   }, [projectId])
 
   const filteredTasks = tasks.filter(t => {

@@ -7,14 +7,13 @@ This module provides prepare_stage_chat() to build that context from DB state.
 from dataclasses import dataclass
 from typing import Any, Callable, Coroutine
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from daiflow.services.settings_service import get_language_setting
-from daiflow.models import ProjectRepo, Task, TaskStatus, Todo, TodoStatus
+from daiflow.models import Task, TaskStatus, Todo
 from daiflow.services.cody_service import build_cody_client
 from daiflow.services.skill_service import get_task_dir
-from daiflow.services.task_service import sync_todos_from_file
+from daiflow.services.task_service import _resolve_task_roots, fetch_project_repos, sync_todos_from_file
 from daiflow.session_runner import make_file_write_detector
 
 
@@ -28,12 +27,10 @@ class StageChatContext:
     system_prefix: str | None = None  # Prepended to user message for context
 
 
-async def _get_allowed_roots(db: AsyncSession, project_id: str) -> list[str]:
-    result = await db.execute(
-        select(ProjectRepo).where(ProjectRepo.project_id == project_id)
-    )
-    repos = result.scalars().all()
-    return [r.local_path for r in repos if r.local_path]
+async def _get_task_allowed_roots(db: AsyncSession, task_id: str, project_id: str) -> list[str]:
+    """Get allowed_roots for a task, including both local repos and git-cloned copies."""
+    repos = await fetch_project_repos(db, project_id)
+    return _resolve_task_roots(task_id, repos)
 
 
 async def prepare_stage_chat(
@@ -64,7 +61,7 @@ async def prepare_stage_chat(
         session_id = f"task:{entity_id}:plan"
         task_dir = get_task_dir(entity_id)
         plan_path = task_dir / "plan.md"
-        allowed_roots = await _get_allowed_roots(db, task.project_id)
+        allowed_roots = await _get_task_allowed_roots(db, entity_id, task.project_id)
         client = await build_cody_client(db, str(task_dir), allowed_roots)
 
         async def on_plan_match(_file_path):
@@ -108,7 +105,7 @@ async def prepare_stage_chat(
         session_id = f"task:{entity_id}:todo_split"
         task_dir = get_task_dir(entity_id)
         todo_path = task_dir / "todo.json"
-        allowed_roots = await _get_allowed_roots(db, task.project_id)
+        allowed_roots = await _get_task_allowed_roots(db, entity_id, task.project_id)
         client = await build_cody_client(db, str(task_dir), allowed_roots)
 
         async def on_todo_match(_file_path):
@@ -158,7 +155,7 @@ async def prepare_stage_chat(
 
         session_id = f"task:{task.id}:todo:{entity_id}"
         task_dir = get_task_dir(task.id)
-        allowed_roots = await _get_allowed_roots(db, task.project_id)
+        allowed_roots = await _get_task_allowed_roots(db, task.id, task.project_id)
         client = await build_cody_client(db, str(task_dir), allowed_roots)
         on_tool_result = make_file_write_detector(None, "code_updated")
 
@@ -177,7 +174,7 @@ async def prepare_stage_chat(
 
         session_id = f"task:{entity_id}:review"
         task_dir = get_task_dir(entity_id)
-        allowed_roots = await _get_allowed_roots(db, task.project_id)
+        allowed_roots = await _get_task_allowed_roots(db, entity_id, task.project_id)
         client = await build_cody_client(db, str(task_dir), allowed_roots)
         on_tool_result = make_file_write_detector(None, "code_updated")
 

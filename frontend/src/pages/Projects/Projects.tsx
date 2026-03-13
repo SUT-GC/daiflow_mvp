@@ -45,7 +45,7 @@ export default function Projects() {
           .then(sessions => setInitStatuses(prev => ({ ...prev, [p.id]: computeInitStatus(sessions) })))
           .catch(() => setInitStatuses(prev => ({ ...prev, [p.id]: 'none' })))
       })
-    }).catch(() => {})
+    }).catch(err => console.error('Failed to load projects:', err))
   }, [])
 
   const handleDelete = async (id: string, e: React.MouseEvent) => {

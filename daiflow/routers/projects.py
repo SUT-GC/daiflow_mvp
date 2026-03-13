@@ -3,7 +3,6 @@ import json
 import shutil
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
-from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -11,45 +10,19 @@ from sqlalchemy.orm import selectinload
 from daiflow.config import PROJECTS_DIR, SESSIONS_DIR, safe_filename
 from daiflow.database import get_db
 from daiflow.models import Project, ProjectRepo, Session
-from daiflow.schemas import ProjectResponse
+from daiflow.schemas import ProjectCreate, ProjectResponse, ProjectUpdate
 from daiflow.services.project_service import compute_init_sessions, run_init, run_init_retry
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
 
-class RepoCreate(BaseModel):
-    git_url: str = ""
-    local_path: str = ""
-    repo_type: str = "custom"
-    repo_type_label: str = ""
-    description: str = ""
-
-
-class ProjectCreate(BaseModel):
-    name: str
-    description: str = ""
-    repos: list[RepoCreate] = []
-    skill_names: list[str] = []
-
-
-class ProjectUpdate(BaseModel):
-    name: str | None = None
-    description: str | None = None
-    repos: list[RepoCreate] | None = None
-    skill_names: list[str] | None = None
-
-
-def _project_to_dict(p: Project, repos: list[ProjectRepo] | None = None) -> dict:
-    data = {
-        "id": p.id,
-        "name": p.name,
-        "description": p.description,
-        "skill_names": p.skill_names,
-        "created_at": p.created_at,
-        "updated_at": p.updated_at,
-        "repos": repos or [],
-    }
-    return ProjectResponse.model_validate(data).model_dump()
+def _project_to_dict(p: Project, repos: list | None = None) -> dict:
+    """Serialize a Project + repos to dict. Repos must be passed explicitly to avoid lazy loading."""
+    return ProjectResponse.model_validate({
+        "id": p.id, "name": p.name, "description": p.description,
+        "skill_names": p.skill_names, "repos": repos or [],
+        "created_at": p.created_at, "updated_at": p.updated_at,
+    }).model_dump()
 
 
 @router.get("")
