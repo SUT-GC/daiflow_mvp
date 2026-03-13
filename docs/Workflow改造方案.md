@@ -56,9 +56,9 @@ todos 表：
 
 ## 二、改造目标
 
-1. **流程定义集中化** —— 一处定义全部状态 + 转换 + 回调，一目了然
-2. **自动流转** —— plan 完成 → 自动 lock → 自动拆 todo → 自动进 coding → 自动执行 todo 链
-3. **后端守卫** —— todo 顺序执行由后端强制，不依赖前端
+1. **流程定义集中化** —— 一处定义全部状态 + 转换 + 守卫条件，一目了然
+2. **状态校验规范化** —— transitions 自动校验合法转换，替代手写 `VALID_TRANSITIONS` + `_check_transition()`
+3. **后端守卫** —— todo 顺序执行由后端强制，不依赖前端；start_review 需所有 todo 完成
 4. **表结构归位** —— 业务数据和流程状态分离，关系用外键而非拼字符串
 
 ---
@@ -477,7 +477,7 @@ alembic revision --autogenerate -m "workflow refactor: sessions add task_id, tas
 
 ### 6.3 测试改动
 
-- `tests/test_api_tasks.py` —— 需要适配新的自动流转行为
+- `tests/test_api_tasks.py` —— 需要适配新的状态校验方式（MachineError 替代 HTTPException）
 - 新增 `tests/test_task_workflow.py` —— 单独测试状态机转换逻辑
 - 新增 `tests/test_todo_workflow.py` —— 单独测试 todo 顺序执行守卫
 
@@ -735,10 +735,59 @@ daiflow/
 
 ---
 
-## 八、待讨论
+## 八、设计决策（已确认）
 
-1. **自动流转的粒度** —— lock_plan 后是否一路自动到 coding？还是在 todo_ready 暂停等用户确认？
-2. **Todo 自动执行** —— todo 1 完成后自动开始 todo 2？还是保持手动触发（但加后端守卫）？
-3. **Review 自动触发** —— 所有 todo 完成后是否自动进入 review？
-4. **错误恢复策略** —— todo 执行失败后是阻断后续还是允许跳过继续？
-5. **Pipeline retry** —— `run_init_retry()` 是否也改为配置驱动？当前方案优先改 `run_init()`，retry 逻辑后续跟进。
+1. **所有阶段间流转都是用户按钮触发，不做自动链式流转**
+   - lock_plan → 自动拆 todo → todo_ready **暂停**，等用户点 start_coding
+   - todo_ready → coding 需要用户手动点
+   - 所有 todo 完成后 **不** 自动进 review，需要用户手动点 start_review
+   - transitions 的核心价值 = **状态校验规范化 + 后端守卫**，不是自动流转
+
+2. **Todo 手动逐个触发，但加后端守卫**
+   - 用户手动点按钮执行每个 todo
+   - `conditions: prev_todo_completed` 强制顺序，后端拒绝乱序执行
+   - 不做自动链式执行（todo 1 完成不会自动开始 todo 2）
+
+3. **Todo 失败策略：默认阻断 + 支持 skip**
+   - todo 3 失败 → todo 4 不能执行（`conditions` 守卫阻断）
+   - 用户可以选择 skip 跳过失败的 todo → 后续 todo 解除阻断
+   - 用户也可以 retry 失败的 todo
+
+4. **Pipeline retry** —— `run_init_retry()` 后续跟进，当前优先改 `run_init()`
+
+### 8.1 决策对代码的影响
+
+Task 状态机中删除所有 `after` 自动回调，只保留校验：
+
+```python
+transitions = [
+    # 每个 trigger 对应一个用户按钮，无 after 回调
+    {'trigger': 'initialize',      'source': 'created',      'dest': 'initializing'},
+    {'trigger': 'plan_ready',      'source': 'initializing',  'dest': 'planning'},
+    {'trigger': 'lock_plan',       'source': 'planning',      'dest': 'plan_locked'},
+    {'trigger': 'todos_ready',     'source': 'plan_locked',   'dest': 'todo_ready'},
+    {'trigger': 'start_coding',    'source': 'todo_ready',    'dest': 'coding',
+     'conditions': '_has_todos'},
+    {'trigger': 'start_review',    'source': 'coding',        'dest': 'reviewing',
+     'conditions': '_all_todos_done'},
+    {'trigger': 'finish',          'source': 'reviewing',     'dest': 'done'},
+    {'trigger': 'reset',           'source': ['initializing', 'planning'], 'dest': 'created'},
+
+    # 唯一保留的自动流转：lock_plan 内部自动拆 todo
+    # 在 router 里：await wf.lock_plan() → bg.add_task(generate_todos) → 完成后调 wf.todos_ready()
+]
+```
+
+Todo 状态机中删除 `_on_done` 自动触发，只保留守卫：
+
+```python
+transitions = [
+    {'trigger': 'execute',  'source': 'pending', 'dest': 'running',
+     'conditions': '_prev_todo_completed'},                    # 守卫：前一个必须完成
+    {'trigger': 'complete', 'source': 'running', 'dest': 'done'},     # 无 after，不自动触发下一个
+    {'trigger': 'fail',     'source': 'running', 'dest': 'failed'},
+    {'trigger': 'retry',    'source': 'failed',  'dest': 'running',
+     'conditions': '_prev_todo_completed'},
+    {'trigger': 'skip',     'source': ['pending', 'failed'], 'dest': 'skipped'},  # skip 解除阻断
+]
+```
