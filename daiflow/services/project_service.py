@@ -308,14 +308,16 @@ async def run_init(project_id: str):
         # Layer 1: skill_fetch + repo_clone (parallel)
         async def _run_skill_fetch():
             sid = f"init:{project_id}:skill_fetch"
+            skill_started = datetime.now(timezone.utc)
             await db.execute(
                 update(Session).where(Session.session_id == sid).values(
-                    status=SessionStatus.RUNNING, started_at=datetime.now(timezone.utc)
+                    status=SessionStatus.RUNNING, started_at=skill_started
                 )
             )
             await db.commit()
             await ws_manager.publish(project_bus, {
                 "type": "session_status", "session_id": sid, "status": SessionStatus.RUNNING, "layer": 1,
+                "started_at": skill_started.isoformat(),
             })
             # Placeholder — no external skill fetching yet
             await _append_log(sid, {"type": "text_delta", "ts": datetime.now(timezone.utc).isoformat(), "content": "Skill fetch: no external skills configured, skipping.\n"})
@@ -328,20 +330,23 @@ async def run_init(project_id: str):
             await db.commit()
             await ws_manager.publish(project_bus, {
                 "type": "session_status", "session_id": sid, "status": SessionStatus.DONE, "layer": 1,
+                "finished_at": datetime.now(timezone.utc).isoformat(),
             })
 
         async def _run_repo_clone():
             sid = f"init:{project_id}:repo_clone"
             # Use independent DB session to avoid contention with concurrent skill_fetch
             async with get_background_db() as clone_db:
+                clone_started = datetime.now(timezone.utc)
                 await clone_db.execute(
                     update(Session).where(Session.session_id == sid).values(
-                        status=SessionStatus.RUNNING, started_at=datetime.now(timezone.utc)
+                        status=SessionStatus.RUNNING, started_at=clone_started
                     )
                 )
                 await clone_db.commit()
                 await ws_manager.publish(project_bus, {
                     "type": "session_status", "session_id": sid, "status": SessionStatus.RUNNING, "layer": 1,
+                    "started_at": clone_started.isoformat(),
                 })
                 try:
                     git_repos = [r for r in repos if r.git_url and not r.local_path]
@@ -370,6 +375,7 @@ async def run_init(project_id: str):
                     await clone_db.commit()
                     await ws_manager.publish(project_bus, {
                         "type": "session_status", "session_id": sid, "status": SessionStatus.DONE, "layer": 1,
+                        "finished_at": datetime.now(timezone.utc).isoformat(),
                     })
                 except Exception as e:
                     logger.error("Layer 1 repo clone/pull failed: %s", e)
@@ -385,6 +391,7 @@ async def run_init(project_id: str):
                     await ws_manager.publish(project_bus, {
                         "type": "session_status", "session_id": sid,
                         "status": SessionStatus.FAILED, "error": str(e)[:500], "layer": 1,
+                        "finished_at": datetime.now(timezone.utc).isoformat(),
                     })
 
         await asyncio.gather(_run_skill_fetch(), _run_repo_clone())

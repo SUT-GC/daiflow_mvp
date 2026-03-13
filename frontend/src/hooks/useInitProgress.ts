@@ -57,7 +57,13 @@ export function useInitProgress(projectId: string | null) {
                 for (const [layer, sessions] of Object.entries(newLayers)) {
                   newLayers[Number(layer)] = (sessions as InitSession[]).map(s =>
                     s.session_id === event.session_id
-                      ? { ...s, status: event.status ?? s.status, error: event.error ?? s.error }
+                      ? {
+                          ...s,
+                          status: event.status ?? s.status,
+                          error: event.error ?? s.error,
+                          started_at: event.started_at ?? s.started_at,
+                          finished_at: event.finished_at ?? s.finished_at,
+                        }
                       : s
                   )
                 }

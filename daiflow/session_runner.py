@@ -154,10 +154,11 @@ class SessionRunner:
             log_file.unlink()
 
         # Update session status to running
+        run_started_at = _now()
         await db.execute(
             update(Session)
             .where(Session.session_id == session_id)
-            .values(status=SessionStatus.RUNNING, started_at=_now())
+            .values(status=SessionStatus.RUNNING, started_at=run_started_at)
         )
         await db.commit()
 
@@ -168,6 +169,7 @@ class SessionRunner:
                     "type": "session_status",
                     "session_id": session_id,
                     "status": SessionStatus.RUNNING,
+                    "started_at": run_started_at.isoformat(),
                 })
 
         # Log user message
@@ -199,11 +201,13 @@ class SessionRunner:
                         await _append_log(session_id, status_event)
 
                         if extra_channels:
+                            done_finished_at = _now().isoformat()
                             for ch in extra_channels:
                                 await ws_manager.publish(ch, {
                                     "type": "session_status",
                                     "session_id": session_id,
                                     "status": SessionStatus.DONE,
+                                    "finished_at": done_finished_at,
                                     "ts": event["ts"],
                                 })
                     else:
@@ -247,12 +251,14 @@ class SessionRunner:
             await ws_manager.publish(channel, status_event)
 
             if extra_channels:
+                failed_finished_at = _now().isoformat()
                 for ch in extra_channels:
                     await ws_manager.publish(ch, {
                         "type": "session_status",
                         "session_id": session_id,
                         "status": SessionStatus.FAILED,
                         "error": str(e),
+                        "finished_at": failed_finished_at,
                         "ts": _now().isoformat(),
                     })
 
