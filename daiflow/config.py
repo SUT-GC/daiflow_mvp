@@ -27,12 +27,6 @@ LANGUAGE_INSTRUCTIONS = {
 DEFAULT_LANGUAGE = "en"
 
 
-async def get_language_setting(db) -> str:
-    """Deprecated: use daiflow.services.settings_service.get_language_setting instead."""
-    from daiflow.services.settings_service import get_language_setting as _get
-    return await _get(db)
-
-
 def init_daiflow_dir():
     """Create the ~/.daiflow/ directory structure if it doesn't exist."""
     for d in [DAIFLOW_HOME, SESSIONS_DIR, PROJECTS_DIR, TASKS_DIR]:

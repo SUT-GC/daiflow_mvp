@@ -1,13 +1,36 @@
-"""Pydantic response models for API endpoints."""
+"""Pydantic response/request models for API endpoints."""
 
 import json
+from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
 
-class RepoResponse(BaseModel):
+def _serialize_dt(v):
+    """Convert datetime objects to ISO strings for JSON serialization."""
+    if v is None:
+        return None
+    if isinstance(v, datetime):
+        return v.isoformat()
+    return v
+
+
+def _parse_json_str(v, default):
+    """Parse a JSON string, returning default if empty."""
+    if isinstance(v, str):
+        return json.loads(v) if v else default
+    return v
+
+
+class _ORMBase(BaseModel):
+    """Base for ORM-backed response models with automatic datetime serialization."""
     model_config = ConfigDict(from_attributes=True)
 
+
+# ── Response Models ──
+
+
+class RepoResponse(_ORMBase):
     id: str
     git_url: str
     local_path: str
@@ -16,9 +39,7 @@ class RepoResponse(BaseModel):
     description: str
 
 
-class ProjectResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
+class ProjectResponse(_ORMBase):
     id: str
     name: str
     description: str
@@ -30,23 +51,15 @@ class ProjectResponse(BaseModel):
     @field_validator("skill_names", mode="before")
     @classmethod
     def parse_skill_names(cls, v):
-        if isinstance(v, str):
-            return json.loads(v) if v else []
-        return v
+        return _parse_json_str(v, [])
 
     @field_validator("created_at", "updated_at", mode="before")
     @classmethod
     def serialize_datetime(cls, v):
-        if v is None:
-            return None
-        if hasattr(v, "isoformat"):
-            return v.isoformat()
-        return v
+        return _serialize_dt(v)
 
 
-class TaskResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
+class TaskResponse(_ORMBase):
     id: str
     name: str
     project_id: str
@@ -62,23 +75,15 @@ class TaskResponse(BaseModel):
     @field_validator("mr_info", mode="before")
     @classmethod
     def parse_mr_info(cls, v):
-        if isinstance(v, str):
-            return json.loads(v) if v else {}
-        return v
+        return _parse_json_str(v, {})
 
     @field_validator("created_at", "updated_at", mode="before")
     @classmethod
     def serialize_datetime(cls, v):
-        if v is None:
-            return None
-        if hasattr(v, "isoformat"):
-            return v.isoformat()
-        return v
+        return _serialize_dt(v)
 
 
-class TodoResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
+class TodoResponse(_ORMBase):
     id: str
     seq: int
     title: str
@@ -87,9 +92,7 @@ class TodoResponse(BaseModel):
     cody_session_id: str | None = None
 
 
-class SessionStatusResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
+class SessionStatusResponse(_ORMBase):
     session_id: str
     cody_session_id: str | None = None
     type: str
@@ -103,8 +106,58 @@ class SessionStatusResponse(BaseModel):
     @field_validator("started_at", "finished_at", mode="before")
     @classmethod
     def serialize_datetime(cls, v):
-        if v is None:
-            return None
-        if hasattr(v, "isoformat"):
-            return v.isoformat()
-        return v
+        return _serialize_dt(v)
+
+
+# ── Request Models ──
+
+
+class RepoCreate(BaseModel):
+    git_url: str = ""
+    local_path: str = ""
+    repo_type: str = "custom"
+    repo_type_label: str = ""
+    description: str = ""
+
+
+class ProjectCreate(BaseModel):
+    name: str
+    description: str = ""
+    repos: list[RepoCreate] = []
+    skill_names: list[str] = []
+
+
+class ProjectUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    repos: list[RepoCreate] | None = None
+    skill_names: list[str] | None = None
+
+
+class TaskCreate(BaseModel):
+    name: str
+    project_id: str
+    description: str = ""
+    branch: str = ""
+    prd: str = ""
+    tech_plan: str = ""
+
+
+class TaskUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    branch: str | None = None
+    prd: str | None = None
+    tech_plan: str | None = None
+
+
+class SettingsUpdate(BaseModel):
+    cody_model: str | None = None
+    cody_base_url: str | None = None
+    cody_api_key: str | None = None
+    theme: str | None = None
+    language: str | None = None
+
+
+class SubmitMR(BaseModel):
+    commit_message: str = ""

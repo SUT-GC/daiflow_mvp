@@ -1,22 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from daiflow.database import get_db
 from daiflow.models import Setting
+from daiflow.schemas import SettingsUpdate
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 SETTING_KEYS = ["cody_model", "cody_base_url", "cody_api_key", "theme", "language"]
-
-
-class SettingsUpdate(BaseModel):
-    cody_model: str | None = None
-    cody_base_url: str | None = None
-    cody_api_key: str | None = None
-    theme: str | None = None
-    language: str | None = None
 
 
 @router.get("")

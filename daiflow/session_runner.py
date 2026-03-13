@@ -75,6 +75,30 @@ async def _append_log(session_id: str, event: dict):
     await asyncio.to_thread(_append_log_sync, path, data)
 
 
+class _ToolCallTracker:
+    """Tracks tool_call args and enriches tool_result events for file-write detection."""
+
+    def __init__(self, max_cached: int = MAX_TOOL_CALL_ARGS):
+        self._args: dict[str, dict] = {}
+        self._max = max_cached
+
+    def on_event(self, event: dict):
+        """Track a tool_call event's args for later enrichment."""
+        if event["type"] == "tool_call":
+            call_id = event.get("tool_call_id", "")
+            if call_id:
+                self._args[call_id] = event.get("args", {})
+                if len(self._args) > self._max:
+                    self._args.clear()
+
+    def enrich(self, event: dict):
+        """Enrich a tool_result event with cached args from its tool_call."""
+        if event["type"] == "tool_result":
+            call_id = event.get("tool_call_id", "")
+            if call_id and call_id in self._args:
+                event["args"] = self._args.pop(call_id)
+
+
 class SessionRunner:
     """Unified AI task executor that wraps a Cody client.
 
@@ -84,8 +108,7 @@ class SessionRunner:
     def __init__(self, cody_client):
         self.client = cody_client
         self._last_cody_session_id: str | None = None
-        self._tool_call_args: dict[str, dict] = {}  # tool_call_id -> args cache
-        self._call_id_counter = 0  # For generating tool_call_id when not provided
+        self._tracker = _ToolCallTracker()
 
     @property
     def last_cody_session_id(self) -> str | None:
@@ -172,20 +195,9 @@ class SessionRunner:
                     else:
                         await ws_manager.publish(channel, event)
 
-                        # Cache tool_call args for later association with tool_result
-                        if event["type"] == "tool_call":
-                            call_id = event.get("tool_call_id", "")
-                            if call_id:
-                                self._tool_call_args[call_id] = event.get("args", {})
-                                # Prevent unbounded growth
-                                if len(self._tool_call_args) > MAX_TOOL_CALL_ARGS:
-                                    self._tool_call_args.clear()
-
+                        self._tracker.on_event(event)
                         if event["type"] == "tool_result" and on_tool_result:
-                            # Enrich tool_result with cached args from tool_call
-                            call_id = event.get("tool_call_id", "")
-                            if call_id and call_id in self._tool_call_args:
-                                event["args"] = self._tool_call_args.pop(call_id)
+                            self._tracker.enrich(event)
                             extra_event = await on_tool_result(event)
                             if extra_event:
                                 await _append_log(session_id, extra_event)
@@ -254,8 +266,7 @@ async def run_stage_chat(
     user_event = {"type": "user_message", "content": message, "ts": _now().isoformat()}
     await _append_log(session_id, user_event)
 
-    # Cache tool_call args for association with tool_result
-    tool_call_args: dict[str, dict] = {}
+    tracker = _ToolCallTracker()
 
     try:
         stream_kwargs = {}
@@ -277,18 +288,9 @@ async def run_stage_chat(
 
                 yield event
 
-                # Cache tool_call args for later association with tool_result
-                if event["type"] == "tool_call":
-                    call_id = event.get("tool_call_id", "")
-                    if call_id:
-                        tool_call_args[call_id] = event.get("args", {})
-
-                # Detect file writes for *_updated events
+                tracker.on_event(event)
                 if event["type"] == "tool_result" and on_tool_result:
-                    # Enrich tool_result with cached args from tool_call
-                    call_id = event.get("tool_call_id", "")
-                    if call_id and call_id in tool_call_args:
-                        event["args"] = tool_call_args.pop(call_id)
+                    tracker.enrich(event)
                     updated_event = await on_tool_result(event)
                     if updated_event:
                         await _append_log(session_id, updated_event)
