@@ -4,6 +4,9 @@ import { SessionStatus, TodoStatus } from '../types/enums'
 import { useSession } from './useSession'
 import { useStageChat } from './useStageChat'
 
+/** Debounce delay (ms) before fetching diff after code_updated events. */
+const CODE_UPDATE_DEBOUNCE_MS = 500
+
 export function useCodingStage(taskId: string | undefined) {
   const [task, setTask] = useState<TaskData | null>(null)
   const [todos, setTodos] = useState<TodoData[]>([])
@@ -47,7 +50,7 @@ export function useCodingStage(taskId: string | undefined) {
         } catch (err: any) {
           setError(err.message || 'Failed to refresh diff')
         }
-      }, 500)
+      }, CODE_UPDATE_DEBOUNCE_MS)
     }
   }, [taskId])
 
