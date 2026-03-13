@@ -66,6 +66,7 @@ export function useCodingStage(taskId: string | undefined) {
     stage: 'todo_exec',
     entityId: currentTodo?.id || '',
     onUpdated,
+    sessionLogs: logs,
   })
 
   // Reload data when a todo execution completes

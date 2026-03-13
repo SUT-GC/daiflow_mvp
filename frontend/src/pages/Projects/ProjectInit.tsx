@@ -13,13 +13,14 @@ import './ProjectInit.css'
 
 const KNOWLEDGE_KEYS: Record<string, TranslationKey> = {
   skill_fetch: 'knowledge.skill_fetch',
-  frontend_structure: 'knowledge.frontend_structure',
-  backend_structure: 'knowledge.backend_structure',
-  business_flow: 'knowledge.business_flow',
-  component_usage: 'knowledge.component_usage',
-  module_overview: 'knowledge.module_overview',
-  api_interaction: 'knowledge.api_interaction',
-  data_entity: 'knowledge.data_entity',
+  repo_clone: 'knowledge.repo_clone',
+  'frontend-structure': 'knowledge.frontend_structure',
+  'backend-structure': 'knowledge.backend_structure',
+  'business-flow': 'knowledge.business_flow',
+  'component-usage': 'knowledge.component_usage',
+  'module-overview': 'knowledge.module_overview',
+  'api-interaction': 'knowledge.api_interaction',
+  'data-entity': 'knowledge.data_entity',
   dependencies: 'knowledge.dependencies',
   project_md: 'knowledge.project_md',
 }

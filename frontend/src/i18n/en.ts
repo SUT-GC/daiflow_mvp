@@ -89,6 +89,7 @@ const en = {
 
   // Knowledge labels
   'knowledge.skill_fetch': 'Skill Fetch',
+  'knowledge.repo_clone': 'Repo Clone',
   'knowledge.frontend_structure': 'Frontend Structure',
   'knowledge.backend_structure': 'Backend Structure',
   'knowledge.business_flow': 'Business Flow',

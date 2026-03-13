@@ -73,7 +73,7 @@ All AI interactions share a unified pattern: **SessionRunner** executes Cody →
 **WebSocket Protocol:** Single connection, channel-based pub/sub. Client sends `{"action": "subscribe", "channel": "session:task:42:plan"}` to receive events; sends `{"action": "chat", "id": "req_1", "chat_path": "plan", "entity_id": "abc", "message": "..."}` for bidirectional chat. Server pushes `{"channel": "...", "event": {...}}`.
 
 **Two IDs to distinguish:**
-- `session_id` — DaiFlow business ID (e.g. `task:42:plan`, `init:proj_1:frontend_structure`)
+- `session_id` — DaiFlow business ID (e.g. `task:42:plan`, `init:proj_1:frontend-structure`)
 - `cody_session_id` — Cody SDK's internal UUID (stored in sessions table for traceability)
 
 **Channel naming:**
@@ -94,8 +94,8 @@ All AI interactions share a unified pattern: **SessionRunner** executes Cody →
 Layers execute serially (await), tasks within each layer run concurrently (asyncio.gather):
 
 **Layer 1 (parallel):** Resource prep — Skill fetch + repo clone/pull
-**Layer 2 (parallel, per-repo):** `frontend_structure`, `backend_structure`, `business_flow`, `component_usage`
-**Layer 3 (parallel, cross-repo):** `module_overview`, `api_interaction`, `data_entity`, `dependencies`
+**Layer 2 (parallel, per-repo):** `frontend-structure`, `backend-structure`, `business-flow`, `component-usage`
+**Layer 3 (parallel, cross-repo):** `module-overview`, `api-interaction`, `data-entity`, `dependencies`
 **Layer 4:** Generate `project.md` index file
 
 Output: `~/.daiflow/projects/{project_id}/skills/{knowledge_type}/SKILL.md`
@@ -150,9 +150,9 @@ Defined in `daiflow/models.py`. All primary keys use UUID hex strings (`uuid.uui
 - Skill files use YAML frontmatter + Markdown body, with `user-invocable: false`
 - All AI tasks go through SessionRunner → WSManager → WebSocket push
 - Cody SDK StreamChunk types: `text_delta`, `thinking`, `tool_call`, `tool_result`, `done`, `compact`
-- DaiFlow event types: above + `status_change` (converted from done), `plan_updated` / `todo_updated` / `code_updated` (file write detection per stage), `session_status` (init bus)
+- DaiFlow event types: above + `status_change` (converted from done), `plan_updated` / `todo_updated` / `code_updated` (file write detection per stage), `skill_loaded` (read_skill detection), `session_status` (init bus)
 - All 4 stage chats go through `WS /api/ws` chat action, shared pattern: `useStageChat` hook + `chat_service.prepare_stage_chat()` + `run_stage_chat()` backend generator
-- Stage-specific updated events: `plan_updated` (push full content), `todo_updated` (push full content), `code_updated` (push null, frontend re-fetches diff)
+- Stage-specific updated events: `plan_updated` (push full content), `todo_updated` (push full content), `code_updated` (push null, frontend re-fetches diff), `skill_loaded` (push skill_name when Cody calls read_skill)
 - Session logs persisted to `~/.daiflow/sessions/{session_id}.jsonl` for replay after restart
 - Multi-repo support via `allowed_roots` in Cody client config
 - Frontend routing: settings guard checks `/api/settings/check` before allowing access to main app

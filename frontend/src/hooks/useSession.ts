@@ -61,8 +61,8 @@ export function useSession(sessionId: string | null) {
           setLogs(events)
         }
 
-        // 3. If running, subscribe via WebSocket
-        if (statusData.status === SessionStatus.RUNNING) {
+        // 3. Subscribe via WebSocket if not already finished
+        if (statusData.status !== SessionStatus.DONE && statusData.status !== SessionStatus.FAILED) {
           unsub = wsClient.subscribe(
             `session:${sessionId}`,
             (event) => {

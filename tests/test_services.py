@@ -22,8 +22,9 @@ class TestComputeInitSessions:
 
         session_ids = [s["session_id"] for s in sessions]
 
-        # Layer 1: skill_fetch
+        # Layer 1: skill_fetch + repo_clone
         assert "init:proj_1:skill_fetch" in session_ids
+        assert "init:proj_1:repo_clone" in session_ids
 
         # Layer 2: frontend types
         for kt in LAYER_2_TYPES["frontend"]:
@@ -40,15 +41,15 @@ class TestComputeInitSessions:
         repos = [SimpleNamespace(repo_type="backend")]
         sessions = compute_init_sessions("proj_1", repos)
         session_ids = [s["session_id"] for s in sessions]
-        assert "init:proj_1:backend_structure" in session_ids
+        assert "init:proj_1:backend-structure" in session_ids
 
     def test_custom_repo(self):
         repos = [SimpleNamespace(repo_type="custom")]
         sessions = compute_init_sessions("proj_1", repos)
         session_ids = [s["session_id"] for s in sessions]
-        # Custom should get backend_structure + business_flow
-        assert "init:proj_1:backend_structure" in session_ids
-        assert "init:proj_1:business_flow" in session_ids
+        # Custom should get backend-structure + business-flow
+        assert "init:proj_1:backend-structure" in session_ids
+        assert "init:proj_1:business-flow" in session_ids
 
     def test_multiple_repos(self):
         repos = [
@@ -58,8 +59,8 @@ class TestComputeInitSessions:
         sessions = compute_init_sessions("proj_1", repos)
         # Should have Layer 2 sessions for both repo types
         session_ids = [s["session_id"] for s in sessions]
-        assert "init:proj_1:frontend_structure" in session_ids
-        assert "init:proj_1:backend_structure" in session_ids
+        assert "init:proj_1:frontend-structure" in session_ids
+        assert "init:proj_1:backend-structure" in session_ids
 
     def test_unknown_repo_type_no_layer2(self):
         repos = [SimpleNamespace(repo_type="unknown")]

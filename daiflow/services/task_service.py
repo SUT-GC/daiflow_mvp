@@ -12,7 +12,7 @@ from daiflow.models import Project, ProjectRepo, Session, SessionStatus, Task, T
 from daiflow.services.cody_service import append_path_boundary, build_cody_client
 from daiflow.services.git_service import checkout_branch
 from daiflow.services.project_service import _repo_dir_name
-from daiflow.services.skill_service import get_project_dir, get_task_dir, sync_skills_to_task
+from daiflow.services.skill_service import get_project_dir, get_task_dir, get_task_skills_dir, sync_skills_to_task
 from daiflow.session_runner import SessionRunner, make_file_write_detector
 
 logger = logging.getLogger(__name__)
@@ -219,10 +219,22 @@ async def generate_plan(task_id: str):
 
         # Run Cody via SessionRunner
         lang = await get_language_setting(db)
-        client = await build_cody_client(db, str(task_dir), allowed_roots)
+        skill_dir = str(get_task_skills_dir(task_id))
+        client = await build_cody_client(db, str(task_dir), allowed_roots, skill_dir=skill_dir)
+
+        async def on_plan_match(_file_path):
+            if plan_path.exists():
+                content = plan_path.read_text(encoding="utf-8")
+                task.tech_plan = content
+                await db.commit()
+                return content
+            return None
+
+        on_tool_result = make_file_write_detector("plan.md", "plan_updated", on_plan_match)
+
         runner = SessionRunner(client)
         async with client:
-            await runner.run(db, session_id, prompt, language=lang)
+            await runner.run(db, session_id, prompt, language=lang, on_tool_result=on_tool_result)
 
         # Re-check task existence before updating (task may have been deleted)
         task = await db.get(Task, task_id)
@@ -270,13 +282,23 @@ async def generate_todos(task_id: str):
 
         # Reuse plan's Cody session for context continuity
         lang = await get_language_setting(db)
-        client = await build_cody_client(db, str(task_dir), allowed_roots)
+        skill_dir = str(get_task_skills_dir(task_id))
+        client = await build_cody_client(db, str(task_dir), allowed_roots, skill_dir=skill_dir)
+
+        async def on_todo_match(_file_path):
+            if todo_path.exists():
+                return todo_path.read_text(encoding="utf-8")
+            return None
+
+        on_tool_result = make_file_write_detector("todo.json", "todo_updated", on_todo_match)
+
         runner = SessionRunner(client)
         async with client:
             await runner.run(
                 db, session_id, prompt,
                 cody_session_id=task.plan_cody_session_id,
                 language=lang,
+                on_tool_result=on_tool_result,
             )
 
         # Re-check task existence before updating (task may have been deleted)
@@ -414,7 +436,8 @@ async def execute_todo(todo_id: str):
         prompt = append_path_boundary(prompt, str(task_dir), allowed_roots)
 
         lang = await get_language_setting(db)
-        client = await build_cody_client(db, str(task_dir), allowed_roots)
+        skill_dir = str(get_task_skills_dir(task.id))
+        client = await build_cody_client(db, str(task_dir), allowed_roots, skill_dir=skill_dir)
         runner = SessionRunner(client)
         on_tool_result = make_file_write_detector(None, "code_updated")
         async with client:

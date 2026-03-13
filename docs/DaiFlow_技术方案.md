@@ -485,10 +485,13 @@ Cody SDK 的 `run_stream()` 返回 `StreamChunk`，DaiFlow 进行透传或转换
 | `done` | `status_change` | 标记完成 | DaiFlow 转换：收到 done 后更新 DB 状态，推 status_change |
 | `compact` | （不推送） | — | 上下文压缩事件，仅后端记录日志 |
 | — | `user_message` | — | **DaiFlow 注入**：仅写入 .jsonl（重进页面还原用户消息） |
-| — | `plan_updated` | 左面刷新 plan 内容 | **DaiFlow 注入**：检测到文件写入后推送 |
+| — | `plan_updated` | 左面刷新 plan 内容 | **DaiFlow 注入**：检测到 plan.md 写入后推送全文 |
+| — | `todo_updated` | 左面刷新 todo 列表 | **DaiFlow 注入**：检测到 todo.json 写入后推送全文 |
+| — | `code_updated` | 前端 re-fetch diff | **DaiFlow 注入**：检测到代码文件写入后通知（content 为 null） |
+| — | `skill_loaded` | 显示技能加载提示 | **DaiFlow 注入**：检测到 Cody 调用 `read_skill` 时推送，含 `skill_name` |
 | — | `session_status` | 初始化进度面板 | **DaiFlow 注入**：项目级 WebSocket 总线专用 |
 
-> `plan_updated` 和 `session_status` 不是 Cody SDK 事件，是 DaiFlow 根据业务逻辑注入的自定义事件。
+> 以上 `plan_updated`、`todo_updated`、`code_updated`、`skill_loaded`、`session_status` 不是 Cody SDK 事件，是 DaiFlow 根据业务逻辑注入的自定义事件。其中 `skill_loaded` 通过检测 `tool_call` 中 `tool_name == "read_skill"` 触发，用于在前端展示 Cody 正在使用哪些项目知识技能。
 
 **WebSocket 事件格式：**
 
@@ -502,6 +505,10 @@ Cody SDK 的 `run_stream()` 返回 `StreamChunk`，DaiFlow 进行透传或转换
 {"channel": "session:task:42:plan", "event": {"type": "tool_call", "tool_name": "read_file", "args": {"path": "src/index.ts"}, "tool_call_id": "tc_1"}}
 
 {"channel": "session:task:42:plan", "event": {"type": "tool_result", "tool_name": "read_file", "content": "...文件内容...", "tool_call_id": "tc_1"}}
+
+{"channel": "session:task:42:plan", "event": {"type": "tool_call", "tool_name": "read_skill", "args": {"skill_name": "frontend-structure"}, "tool_call_id": "tc_2"}}
+
+{"channel": "session:task:42:plan", "event": {"type": "skill_loaded", "skill_name": "frontend-structure"}}
 
 {"channel": "session:task:42:plan", "event": {"type": "plan_updated", "content": "# 技术方案\n\n## 背景\n..."}}
 

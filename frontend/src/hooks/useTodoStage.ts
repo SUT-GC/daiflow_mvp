@@ -16,22 +16,27 @@ export function useTodoStage(taskId: string | undefined) {
     }
   }, [taskId])
 
-  useEffect(() => {
+  const refreshTask = useCallback(() => {
     if (taskId) {
       getTask(taskId).then(setTask).catch(err => setError(err.message || 'Failed to load task'))
-      refreshTodos()
     }
-  }, [taskId, refreshTodos])
+  }, [taskId])
+
+  useEffect(() => {
+    refreshTask()
+    refreshTodos()
+  }, [refreshTask, refreshTodos])
 
   const sessionId = taskId ? `task:${taskId}:todo_split` : null
   const { status, logs, error: sessionError } = useSession(sessionId)
 
-  // Refresh todos when session completes (DB is synced at that point)
+  // Refresh task and todos when session completes (DB is synced at that point)
   useEffect(() => {
     if (status === SessionStatus.DONE) {
+      refreshTask()
       refreshTodos()
     }
-  }, [status, refreshTodos])
+  }, [status, refreshTask, refreshTodos])
 
   const onUpdated = useCallback((event: WSEvent) => {
     if (event.type === 'todo_updated') {
@@ -45,6 +50,7 @@ export function useTodoStage(taskId: string | undefined) {
     stage: 'todo',
     entityId: taskId || '',
     onUpdated,
+    sessionLogs: logs,
   })
 
   return {

@@ -11,6 +11,8 @@ from daiflow.database import get_db
 from daiflow.models import Session, SessionStatus, Task, TaskStatus, Todo
 from daiflow.schemas import SubmitMR, TaskCreate, TaskResponse, TaskUpdate, TodoResponse
 from daiflow.services.git_service import commit, get_diff, push
+from daiflow.services.project_service import _repo_dir_name
+from daiflow.services.skill_service import get_task_dir
 from daiflow.services.task_service import (
     execute_todo,
     fetch_project_repos,
@@ -54,6 +56,19 @@ async def _get_task_repos(db: AsyncSession, project_id: str):
     repos = await fetch_project_repos(db, project_id)
     allowed_roots = [r.local_path for r in repos if r.local_path]
     return repos, allowed_roots
+
+
+def _resolve_repo_path(repo, task_id: str) -> str | None:
+    """Resolve the actual filesystem path for a repo in a task context.
+
+    - Repos with local_path: code lives in user's working directory
+    - Git-only repos: code lives in task/code/{repo_name} (isolated copy)
+    """
+    if repo.local_path:
+        return repo.local_path
+    elif repo.git_url:
+        return str(get_task_dir(task_id) / "code" / _repo_dir_name(repo.git_url))
+    return None
 
 
 # ── CRUD ──
@@ -236,13 +251,16 @@ async def get_task_diff(task_id: str, db: AsyncSession = Depends(get_db)):
 
     diffs = []
     for repo in repos:
-        if repo.local_path:
-            try:
-                diff = await get_diff(repo.local_path, task.branch)
-                if diff:
-                    diffs.append({"repo": repo.git_url, "repo_type": repo.repo_type, "diff": diff})
-            except Exception as e:
-                diffs.append({"repo": repo.git_url, "repo_type": repo.repo_type, "diff": "", "error": str(e)})
+        repo_path = _resolve_repo_path(repo, task_id)
+        if not repo_path:
+            continue
+        repo_label = repo.git_url or repo.local_path
+        try:
+            diff = await get_diff(repo_path, task.branch)
+            if diff:
+                diffs.append({"repo": repo_label, "repo_type": repo.repo_type, "diff": diff})
+        except Exception as e:
+            diffs.append({"repo": repo_label, "repo_type": repo.repo_type, "diff": "", "error": str(e)})
 
     return {"diffs": diffs}
 
@@ -259,13 +277,15 @@ async def generate_commit_message(task_id: str, db: AsyncSession = Depends(get_d
     # Collect diffs
     diff_texts = []
     for repo in repos:
-        if repo.local_path:
-            try:
-                d = await get_diff(repo.local_path, task.branch)
-                if d:
-                    diff_texts.append(d)
-            except Exception:
-                pass
+        repo_path = _resolve_repo_path(repo, task_id)
+        if not repo_path:
+            continue
+        try:
+            d = await get_diff(repo_path, task.branch)
+            if d:
+                diff_texts.append(d)
+        except Exception:
+            pass
 
     if not diff_texts:
         return {"commit_message": f"feat: {task.name}"}
@@ -313,27 +333,35 @@ async def submit_mr(
 
     commit_msg = data.commit_message or f"feat: {task.name}"
 
+    # Build list of (repo, resolved_path) for repos that have code
+    active_repos = []
+    for repo in repos:
+        repo_path = _resolve_repo_path(repo, task_id)
+        if repo_path:
+            active_repos.append((repo, repo_path))
+
     # Phase 1: commit all repos first (safer — all-or-nothing per phase)
     commit_results = []
-    active_repos = [r for r in repos if r.local_path]
-    for repo in active_repos:
+    for repo, repo_path in active_repos:
+        repo_label = repo.git_url or repo.local_path
         try:
-            await commit(repo.local_path, commit_msg)
-            commit_results.append({"repo": repo.git_url, "committed": True})
+            await commit(repo_path, commit_msg)
+            commit_results.append({"repo": repo_label, "committed": True})
         except Exception as e:
-            commit_results.append({"repo": repo.git_url, "committed": False, "error": str(e)})
+            commit_results.append({"repo": repo_label, "committed": False, "error": str(e)})
 
     # Phase 2: push only successfully committed repos
     results = []
-    for repo, cr in zip(active_repos, commit_results):
+    for (repo, repo_path), cr in zip(active_repos, commit_results):
+        repo_label = repo.git_url or repo.local_path
         if not cr.get("committed"):
-            results.append({"repo": repo.git_url, "status": "error", "error": cr.get("error", "commit failed")})
+            results.append({"repo": repo_label, "status": "error", "error": cr.get("error", "commit failed")})
             continue
         try:
-            await push(repo.local_path, task.branch)
-            results.append({"repo": repo.git_url, "status": "success"})
+            await push(repo_path, task.branch)
+            results.append({"repo": repo_label, "status": "success"})
         except Exception as e:
-            results.append({"repo": repo.git_url, "status": "error", "error": str(e)})
+            results.append({"repo": repo_label, "status": "error", "error": str(e)})
 
     # Only mark as DONE if at least one repo succeeded
     has_success = any(r["status"] == "success" for r in results)

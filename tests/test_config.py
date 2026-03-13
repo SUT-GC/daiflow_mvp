@@ -21,7 +21,7 @@ class TestSafeFilename:
         assert safe_filename("") == ""
 
     def test_init_session_id(self):
-        assert safe_filename("init:proj_1:frontend_structure") == "init_proj_1_frontend_structure"
+        assert safe_filename("init:proj_1:frontend-structure") == "init_proj_1_frontend-structure"
 
 
 class TestInitDaiflowDir:

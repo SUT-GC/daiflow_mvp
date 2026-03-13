@@ -136,18 +136,22 @@ class TestInitRetry:
                 session_id=f"init:{pid}:skill_fetch", type="init", ref_id=pid,
                 layer=1, status=SessionStatus.DONE,
             ))
+            db.add(Session(
+                session_id=f"init:{pid}:repo_clone", type="init", ref_id=pid,
+                layer=1, status=SessionStatus.DONE,
+            ))
             # Layer 2: done
             db.add(Session(
-                session_id=f"init:{pid}:frontend_structure", type="init", ref_id=pid,
+                session_id=f"init:{pid}:frontend-structure", type="init", ref_id=pid,
                 layer=2, status=SessionStatus.DONE,
             ))
             # Layer 3: one done, one failed
             db.add(Session(
-                session_id=f"init:{pid}:module_overview", type="init", ref_id=pid,
+                session_id=f"init:{pid}:module-overview", type="init", ref_id=pid,
                 layer=3, status=SessionStatus.DONE,
             ))
             db.add(Session(
-                session_id=f"init:{pid}:api_interaction", type="init", ref_id=pid,
+                session_id=f"init:{pid}:api-interaction", type="init", ref_id=pid,
                 layer=3, status=SessionStatus.FAILED, error="glob error",
             ))
             # Layer 4: done (but should be re-run on retry)
@@ -193,19 +197,19 @@ class TestInitRetry:
         data = resp.json()
         assert data["ok"] is True
         assert data["from_layer"] == 3
-        assert f"init:{pid}:api_interaction" in data["failed_session_ids"]
+        assert f"init:{pid}:api-interaction" in data["failed_session_ids"]
 
         # Verify DB state: failed layer 3 session reset, layer 4 reset
         from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
         session_factory = async_sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)
         async with session_factory() as db:
             # Layer 3 failed session should be reset to WAITING
-            s = await db.get(Session, f"init:{pid}:api_interaction")
+            s = await db.get(Session, f"init:{pid}:api-interaction")
             assert s.status == SessionStatus.WAITING
             assert s.error is None
 
             # Layer 3 done session should NOT be reset
-            s = await db.get(Session, f"init:{pid}:module_overview")
+            s = await db.get(Session, f"init:{pid}:module-overview")
             assert s.status == SessionStatus.DONE
 
             # Layer 4 should be reset to WAITING
@@ -215,7 +219,7 @@ class TestInitRetry:
             # Layer 1 & 2 should remain DONE
             s = await db.get(Session, f"init:{pid}:skill_fetch")
             assert s.status == SessionStatus.DONE
-            s = await db.get(Session, f"init:{pid}:frontend_structure")
+            s = await db.get(Session, f"init:{pid}:frontend-structure")
             assert s.status == SessionStatus.DONE
 
 
@@ -247,11 +251,11 @@ class TestProjectKnowledge:
         project_dir.mkdir(parents=True, exist_ok=True)
         (project_dir / "project.md").write_text("# Project Index\nOverview here.", encoding="utf-8")
 
-        skills_dir = project_dir / "skills" / "frontend_structure"
+        skills_dir = project_dir / "skills" / "frontend-structure"
         skills_dir.mkdir(parents=True, exist_ok=True)
         (skills_dir / "SKILL.md").write_text("# Frontend\nStructure details.", encoding="utf-8")
 
-        empty_skill = project_dir / "skills" / "api_interaction"
+        empty_skill = project_dir / "skills" / "api-interaction"
         empty_skill.mkdir(parents=True, exist_ok=True)
         # No SKILL.md — should show as empty content
 
@@ -262,19 +266,19 @@ class TestProjectKnowledge:
 
         names = [f["name"] for f in data["files"]]
         assert "project.md" in names
-        assert "frontend_structure" in names
-        assert "api_interaction" in names
+        assert "frontend-structure" in names
+        assert "api-interaction" in names
 
         # project.md is type index
         pm = next(f for f in data["files"] if f["name"] == "project.md")
         assert pm["type"] == "index"
         assert "Project Index" in pm["content"]
 
-        # frontend_structure has content
-        fs = next(f for f in data["files"] if f["name"] == "frontend_structure")
+        # frontend-structure has content
+        fs = next(f for f in data["files"] if f["name"] == "frontend-structure")
         assert fs["type"] == "skill"
         assert "Frontend" in fs["content"]
 
-        # api_interaction is empty (no SKILL.md)
-        ai = next(f for f in data["files"] if f["name"] == "api_interaction")
+        # api-interaction is empty (no SKILL.md)
+        ai = next(f for f in data["files"] if f["name"] == "api-interaction")
         assert ai["content"] == ""

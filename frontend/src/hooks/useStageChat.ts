@@ -21,6 +21,8 @@ interface UseStageChatOptions {
   /** Entity ID: task_id for plan/todo/review, todo_id for todo_exec */
   entityId: string
   onUpdated?: (event: any) => void
+  /** Real-time session logs from useSession — used to show initial generation progress */
+  sessionLogs?: any[]
 }
 
 function rebuildMessages(logs: any[]): ChatMessage[] {
@@ -56,9 +58,10 @@ function rebuildMessages(logs: any[]): ChatMessage[] {
   return messages
 }
 
-export function useStageChat({ sessionId, stage, entityId, onUpdated }: UseStageChatOptions) {
+export function useStageChat({ sessionId, stage, entityId, onUpdated, sessionLogs }: UseStageChatOptions) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [streaming, setStreaming] = useState(false)
+  const [userHasChatted, setUserHasChatted] = useState(false)
   const cancelRef = useRef<(() => void) | null>(null)
 
   // Refs for rAF-throttled streaming updates
@@ -84,23 +87,32 @@ export function useStageChat({ sessionId, stage, entityId, onUpdated }: UseStage
     }
   }, [flushAIMessage])
 
-  // Load history from logs
+  // Load history from logs on mount
   useEffect(() => {
     if (!sessionId) return
     getSessionLogs(sessionId)
       .then(logs => {
-        if (Array.isArray(logs)) {
+        if (Array.isArray(logs) && logs.length > 0) {
           setMessages(rebuildMessages(logs))
         }
       })
       .catch(err => console.error('Failed to load chat logs:', err))
   }, [sessionId])
 
+  // Rebuild messages from real-time session logs during initial generation
+  useEffect(() => {
+    if (!userHasChatted && sessionLogs && sessionLogs.length > 0) {
+      setMessages(rebuildMessages(sessionLogs))
+    }
+  }, [sessionLogs, userHasChatted])
+
   const sendMessage = useCallback((text: string) => {
     if (!text.trim() || streaming || !stage || !entityId) return
 
     // Cancel any previous stream
     cancelRef.current?.()
+
+    setUserHasChatted(true)
 
     // Add user message
     const userMsg: ChatMessage = { id: nextMsgId(), role: 'user', content: text }

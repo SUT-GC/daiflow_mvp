@@ -61,16 +61,13 @@ async def clone_or_pull(git_url: str, target_dir: str, timeout: int = 300) -> st
 
 
 async def checkout_branch(local_path: str, branch: str):
-    """Checkout or create a branch."""
+    """Checkout or create a branch. Creates if it doesn't exist."""
     validate_branch_name(branch)
     try:
+        await _run(["git", "checkout", "-b", branch], cwd=local_path)
+    except RuntimeError:
+        # Branch already exists — just switch to it
         await _run(["git", "checkout", branch], cwd=local_path)
-    except RuntimeError as e:
-        # Only create branch if the error is about it not existing
-        if "pathspec" in str(e) or "did not match" in str(e):
-            await _run(["git", "checkout", "-b", branch], cwd=local_path)
-        else:
-            raise
 
 
 async def get_diff(local_path: str, branch: str = "") -> str:

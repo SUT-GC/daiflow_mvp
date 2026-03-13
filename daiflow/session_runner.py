@@ -82,14 +82,23 @@ class _ToolCallTracker:
         self._args: dict[str, dict] = {}
         self._max = max_cached
 
-    def on_event(self, event: dict):
-        """Track a tool_call event's args for later enrichment."""
+    def on_event(self, event: dict) -> dict | None:
+        """Track a tool_call event's args for later enrichment.
+
+        Returns a skill_loaded event if this is a read_skill call, else None.
+        """
         if event["type"] == "tool_call":
             call_id = event.get("tool_call_id", "")
             if call_id:
                 self._args[call_id] = event.get("args", {})
                 if len(self._args) > self._max:
                     self._args.clear()
+            # Detect read_skill calls and emit skill_loaded event
+            if event.get("tool_name") == "read_skill":
+                skill_name = event.get("args", {}).get("skill_name", "")
+                if skill_name:
+                    return {"type": "skill_loaded", "skill_name": skill_name}
+        return None
 
     def enrich(self, event: dict):
         """Enrich a tool_result event with cached args from its tool_call."""
@@ -195,7 +204,14 @@ class SessionRunner:
                     else:
                         await ws_manager.publish(channel, event)
 
-                        self._tracker.on_event(event)
+                        skill_event = self._tracker.on_event(event)
+                        if skill_event:
+                            skill_event["ts"] = event["ts"]
+                            await _append_log(session_id, skill_event)
+                            await ws_manager.publish(channel, skill_event)
+                            if extra_channels:
+                                for ch in extra_channels:
+                                    await ws_manager.publish(ch, {**skill_event, "session_id": session_id})
                         if event["type"] == "tool_result" and on_tool_result:
                             self._tracker.enrich(event)
                             extra_event = await on_tool_result(event)
@@ -288,7 +304,11 @@ async def run_stage_chat(
 
                 yield event
 
-                tracker.on_event(event)
+                skill_event = tracker.on_event(event)
+                if skill_event:
+                    skill_event["ts"] = event["ts"]
+                    await _append_log(session_id, skill_event)
+                    yield skill_event
                 if event["type"] == "tool_result" and on_tool_result:
                     tracker.enrich(event)
                     updated_event = await on_tool_result(event)

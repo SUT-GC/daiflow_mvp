@@ -19,64 +19,64 @@ logger = logging.getLogger(__name__)
 
 # Knowledge types per layer
 LAYER_2_TYPES = {
-    "frontend": ["frontend_structure", "business_flow", "component_usage"],
-    "backend": ["backend_structure"],
-    "fullstack": ["frontend_structure", "backend_structure", "business_flow", "component_usage"],
-    "custom": ["backend_structure", "business_flow"],
+    "frontend": ["frontend-structure", "business-flow", "component-usage"],
+    "backend": ["backend-structure"],
+    "fullstack": ["frontend-structure", "backend-structure", "business-flow", "component-usage"],
+    "custom": ["backend-structure", "business-flow"],
 }
-LAYER_3_TYPES = ["module_overview", "api_interaction", "data_entity", "dependencies"]
+LAYER_3_TYPES = ["module-overview", "api-interaction", "data-entity", "dependencies"]
 
 # Prompt templates for each knowledge type
 # Available placeholders: {output_path}, {repos_context}
 KNOWLEDGE_PROMPTS = {
-    "frontend_structure": (
+    "frontend-structure": (
         "You have access to the following repositories:\n{repos_context}\n\n"
         "Analyze the frontend repositories and generate a comprehensive skill document about the frontend directory structure. "
         "Cover: directory organization, module responsibilities, naming conventions, and architectural patterns. "
         "Write the output to {output_path}/SKILL.md in Agent Skills format with YAML frontmatter "
-        "(name: frontend_structure, description: Frontend directory structure analysis, user-invocable: false)."
+        "(name: frontend-structure, description: Frontend directory structure analysis, user-invocable: false)."
     ),
-    "backend_structure": (
+    "backend-structure": (
         "You have access to the following repositories:\n{repos_context}\n\n"
         "Analyze the backend repositories and generate a comprehensive skill document about the backend directory structure. "
         "Cover: directory organization, module responsibilities, naming conventions, and architectural patterns. "
         "Write the output to {output_path}/SKILL.md in Agent Skills format with YAML frontmatter "
-        "(name: backend_structure, description: Backend directory structure analysis, user-invocable: false)."
+        "(name: backend-structure, description: Backend directory structure analysis, user-invocable: false)."
     ),
-    "business_flow": (
+    "business-flow": (
         "You have access to the following repositories:\n{repos_context}\n\n"
         "Analyze the repositories and generate a comprehensive skill document about business flows. "
         "Cover: key user flows per module, state transitions, and data flow patterns. "
         "Write the output to {output_path}/SKILL.md in Agent Skills format with YAML frontmatter "
-        "(name: business_flow, description: Business flow analysis per module, user-invocable: false)."
+        "(name: business-flow, description: Business flow analysis per module, user-invocable: false)."
     ),
-    "component_usage": (
+    "component-usage": (
         "You have access to the following repositories:\n{repos_context}\n\n"
         "Analyze the frontend repositories and generate a comprehensive skill document about component usage. "
         "Cover: shared components, usage patterns, props interfaces, and composition patterns. "
         "Write the output to {output_path}/SKILL.md in Agent Skills format with YAML frontmatter "
-        "(name: component_usage, description: Frontend component structure and reuse patterns, user-invocable: false)."
+        "(name: component-usage, description: Frontend component structure and reuse patterns, user-invocable: false)."
     ),
-    "module_overview": (
+    "module-overview": (
         "You have access to the following repositories:\n{repos_context}\n\n"
         "Analyze all repositories and generate a comprehensive skill document about module breakdown. "
         "Cover: all modules across frontend and backend, their responsibilities and boundaries. "
         "Write the output to {output_path}/SKILL.md in Agent Skills format with YAML frontmatter "
-        "(name: module_overview, description: Module breakdown and descriptions, user-invocable: false)."
+        "(name: module-overview, description: Module breakdown and descriptions, user-invocable: false)."
     ),
-    "api_interaction": (
+    "api-interaction": (
         "You have access to the following repositories:\n{repos_context}\n\n"
         "Analyze all repositories and generate a comprehensive skill document about API interactions. "
         "Cover: API endpoints, request/response patterns, frontend-backend integration points. "
         "Write the output to {output_path}/SKILL.md in Agent Skills format with YAML frontmatter "
-        "(name: api_interaction, description: Frontend-backend API interaction relationships, user-invocable: false)."
+        "(name: api-interaction, description: Frontend-backend API interaction relationships, user-invocable: false)."
     ),
-    "data_entity": (
+    "data-entity": (
         "You have access to the following repositories:\n{repos_context}\n\n"
         "Analyze all repositories and generate a comprehensive skill document about data entities. "
         "Cover: data models, database schemas, data flow patterns, and entity relationships. "
         "Write the output to {output_path}/SKILL.md in Agent Skills format with YAML frontmatter "
-        "(name: data_entity, description: Data entities and data flows per module, user-invocable: false)."
+        "(name: data-entity, description: Data entities and data flows per module, user-invocable: false)."
     ),
     "dependencies": (
         "You have access to the following repositories:\n{repos_context}\n\n"
@@ -145,9 +145,15 @@ def compute_init_sessions(project_id: str, repos: list) -> list[dict]:
     sessions = []
     seen_session_ids: set[str] = set()
 
-    # Layer 1: skill_fetch (placeholder for now)
+    # Layer 1: resource prep (skill_fetch + repo_clone, parallel)
     sessions.append({
         "session_id": f"init:{project_id}:skill_fetch",
+        "type": "init",
+        "ref_id": project_id,
+        "layer": 1,
+    })
+    sessions.append({
+        "session_id": f"init:{project_id}:repo_clone",
         "type": "init",
         "ref_id": project_id,
         "layer": 1,
@@ -298,24 +304,20 @@ async def run_init(project_id: str):
             select(ProjectRepo).where(ProjectRepo.project_id == project_id)
         )
         repos = result.scalars().all()
-        # Layer 1: Git clone/pull repos that have git_url
-        sid = f"init:{project_id}:skill_fetch"
-        await db.execute(
-            update(Session).where(Session.session_id == sid).values(
-                status=SessionStatus.RUNNING, started_at=datetime.now(timezone.utc)
+
+        # Layer 1: skill_fetch + repo_clone (parallel)
+        async def _run_skill_fetch():
+            sid = f"init:{project_id}:skill_fetch"
+            await db.execute(
+                update(Session).where(Session.session_id == sid).values(
+                    status=SessionStatus.RUNNING, started_at=datetime.now(timezone.utc)
+                )
             )
-        )
-        await db.commit()
-        await ws_manager.publish(project_bus, {
-            "type": "session_status", "session_id": sid, "status": SessionStatus.RUNNING, "layer": 1,
-        })
-
-        try:
-            git_repos = [r for r in repos if r.git_url]
-            for r in git_repos:
-                clone_dir = project_dir / "code" / _repo_dir_name(r.git_url)
-                await clone_or_pull(r.git_url, str(clone_dir))
-
+            await db.commit()
+            await ws_manager.publish(project_bus, {
+                "type": "session_status", "session_id": sid, "status": SessionStatus.RUNNING, "layer": 1,
+            })
+            # Placeholder — no external skill fetching yet
             await db.execute(
                 update(Session).where(Session.session_id == sid).values(
                     status=SessionStatus.DONE, finished_at=datetime.now(timezone.utc)
@@ -325,19 +327,61 @@ async def run_init(project_id: str):
             await ws_manager.publish(project_bus, {
                 "type": "session_status", "session_id": sid, "status": SessionStatus.DONE, "layer": 1,
             })
-        except Exception as e:
-            logger.error("Layer 1 git clone/pull failed: %s", e)
-            await db.execute(
-                update(Session).where(Session.session_id == sid).values(
-                    status=SessionStatus.FAILED, error=str(e)[:500],
-                    finished_at=datetime.now(timezone.utc),
+
+        async def _run_repo_clone():
+            sid = f"init:{project_id}:repo_clone"
+            # Use independent DB session to avoid contention with concurrent skill_fetch
+            async with get_background_db() as clone_db:
+                await clone_db.execute(
+                    update(Session).where(Session.session_id == sid).values(
+                        status=SessionStatus.RUNNING, started_at=datetime.now(timezone.utc)
+                    )
                 )
-            )
-            await db.commit()
-            await ws_manager.publish(project_bus, {
-                "type": "session_status", "session_id": sid,
-                "status": SessionStatus.FAILED, "error": str(e)[:500], "layer": 1,
-            })
+                await clone_db.commit()
+                await ws_manager.publish(project_bus, {
+                    "type": "session_status", "session_id": sid, "status": SessionStatus.RUNNING, "layer": 1,
+                })
+                try:
+                    git_repos = [r for r in repos if r.git_url and not r.local_path]
+                    for r in git_repos:
+                        clone_dir = project_dir / "code" / _repo_dir_name(r.git_url)
+                        await clone_or_pull(r.git_url, str(clone_dir))
+
+                    await clone_db.execute(
+                        update(Session).where(Session.session_id == sid).values(
+                            status=SessionStatus.DONE, finished_at=datetime.now(timezone.utc)
+                        )
+                    )
+                    await clone_db.commit()
+                    await ws_manager.publish(project_bus, {
+                        "type": "session_status", "session_id": sid, "status": SessionStatus.DONE, "layer": 1,
+                    })
+                except Exception as e:
+                    logger.error("Layer 1 repo clone/pull failed: %s", e)
+                    await clone_db.execute(
+                        update(Session).where(Session.session_id == sid).values(
+                            status=SessionStatus.FAILED, error=str(e)[:500],
+                            finished_at=datetime.now(timezone.utc),
+                        )
+                    )
+                    await clone_db.commit()
+                    await ws_manager.publish(project_bus, {
+                        "type": "session_status", "session_id": sid,
+                        "status": SessionStatus.FAILED, "error": str(e)[:500], "layer": 1,
+                    })
+
+        await asyncio.gather(_run_skill_fetch(), _run_repo_clone())
+
+        # Check if Layer 1 had critical failures (repo_clone failure = no code to analyze)
+        layer1_sessions = await db.execute(
+            select(Session).where(Session.ref_id == project_id, Session.layer == 1)
+        )
+        layer1_failed = [s for s in layer1_sessions.scalars().all() if s.status == SessionStatus.FAILED]
+        if layer1_failed:
+            failed_names = ", ".join(s.session_id for s in layer1_failed)
+            logger.error("Layer 1 failed (%s), aborting init for project %s", failed_names, project_id)
+            await ws_manager.publish(project_bus, {"type": "done"})
+            return
 
         # Resolve allowed_roots: git-cloned paths take priority over local_path
         allowed_roots = await _resolve_allowed_roots(project_dir, repos)

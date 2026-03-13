@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import Topbar from '../../../components/Shell/Topbar'
 import StageProgress from '../../../components/StageProgress/StageProgress'
@@ -7,6 +8,7 @@ import Loading from '../../../components/Loading/Loading'
 import { useTodoStage } from '../../../hooks/useTodoStage'
 import { startCoding, triggerTodo } from '../../../api'
 import { useLocale } from '../../../hooks/useLocale'
+import type { TodoData } from '../../../api'
 import '../DevFlow.css'
 import './TodoStage.css'
 
@@ -15,6 +17,7 @@ export default function TodoStage() {
   const navigate = useNavigate()
   const { t } = useLocale()
   const { task, todos, status, messages, sendMessage, streaming } = useTodoStage(taskId)
+  const [selectedTodo, setSelectedTodo] = useState<TodoData | null>(null)
 
   const handleRedecompose = async () => {
     if (!taskId) return
@@ -65,12 +68,13 @@ export default function TodoStage() {
           {todos.length > 0 ? (
             <div className="todo-items">
               {todos.map((todo, i) => (
-                <div key={i} className="card todo-item">
+                <div
+                  key={i}
+                  className="card todo-item"
+                  onClick={() => setSelectedTodo(todo)}
+                >
                   <div className="todo-seq">{String(todo.seq || i + 1).padStart(2, '0')}</div>
-                  <div className="todo-body">
-                    <div className="todo-title">{todo.title}</div>
-                    <div className="todo-desc">{todo.description}</div>
-                  </div>
+                  <div className="todo-title">{todo.title}</div>
                 </div>
               ))}
             </div>
@@ -87,6 +91,23 @@ export default function TodoStage() {
           <button className="btn btn-ghost" onClick={handleRedecompose} disabled={redecomposeDisabled}>{t('todo.redecompose')}</button>
         </div>
       </ResizableSplitPane>
+
+      {/* Todo Detail Modal */}
+      {selectedTodo && (
+        <>
+          <div className="overlay" onClick={() => setSelectedTodo(null)} />
+          <div className="todo-modal">
+            <div className="todo-modal-header">
+              <span className="todo-modal-seq">{String(selectedTodo.seq || '').padStart(2, '0')}</span>
+              <span className="todo-modal-title">{selectedTodo.title}</span>
+              <button className="todo-modal-close" onClick={() => setSelectedTodo(null)}>×</button>
+            </div>
+            <div className="todo-modal-body">
+              {selectedTodo.description}
+            </div>
+          </div>
+        </>
+      )}
     </div>
   )
 }

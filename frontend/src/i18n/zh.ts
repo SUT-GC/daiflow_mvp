@@ -91,6 +91,7 @@ const zh: Record<TranslationKey, string> = {
 
   // Knowledge labels
   'knowledge.skill_fetch': 'Skill 获取',
+  'knowledge.repo_clone': '代码获取',
   'knowledge.frontend_structure': '前端结构',
   'knowledge.backend_structure': '后端结构',
   'knowledge.business_flow': '业务流程',

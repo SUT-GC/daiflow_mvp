@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { getTask, TaskData } from '../api'
+import { SessionStatus } from '../types/enums'
 import { useSession } from './useSession'
 import { useStageChat } from './useStageChat'
 
@@ -9,7 +10,7 @@ export function usePlanStage(taskId: string | undefined) {
   const [chatPlanContent, setChatPlanContent] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
+  const refreshTask = useCallback(() => {
     if (taskId) {
       getTask(taskId).then(t => {
         setTask(t)
@@ -18,8 +19,17 @@ export function usePlanStage(taskId: string | undefined) {
     }
   }, [taskId])
 
+  useEffect(() => { refreshTask() }, [refreshTask])
+
   const sessionId = taskId ? `task:${taskId}:plan` : null
   const { status, logs, error: sessionError } = useSession(sessionId)
+
+  // Refresh task when session completes (tech_plan is synced to DB at that point)
+  useEffect(() => {
+    if (status === SessionStatus.DONE) {
+      refreshTask()
+    }
+  }, [status, refreshTask])
 
   // Derive plan content from logs — only use plan_updated events (actual plan.md content)
   // Do NOT fall back to text_delta accumulation since that is the AI's streaming response,
@@ -48,6 +58,7 @@ export function usePlanStage(taskId: string | undefined) {
     stage: 'plan',
     entityId: taskId || '',
     onUpdated,
+    sessionLogs: logs,
   })
 
   return {
