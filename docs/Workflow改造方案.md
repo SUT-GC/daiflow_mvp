@@ -1,7 +1,9 @@
-# Task & Todo Workflow 改造方案
+# Workflow 改造方案
 
 > 版本：v0.1 草案
 > 更新时间：2026-03-13
+>
+> 涵盖：Task/Todo 状态机改造 + Project Init Pipeline 改造
 
 ---
 
@@ -481,9 +483,262 @@ alembic revision --autogenerate -m "workflow refactor: sessions add task_id, tas
 
 ---
 
-## 七、待讨论
+## 七、Project Init Pipeline 改造
+
+### 7.1 现状问题
+
+Project Init 是 4 层 pipeline（层间串行、层内并行），和 Task/Todo 的状态机是**不同类型的问题**：
+
+| | Task / Todo | Project Init |
+|---|---|---|
+| **本质** | 状态机 —— 一个实体在多个状态间流转 | Pipeline —— 一批任务按依赖关系执行 |
+| **并发** | 单线程，一次一个状态 | 层内多任务并行 |
+| **适合 transitions？** | ✅ 完美匹配 | ❌ 不匹配 |
+
+**不用 transitions 的原因**：Layer 1 → Layer 2 不是"状态转换"，是"前置任务完成了，启动下一批"。如果硬用 transitions 建模 `layer1 → layer2 → layer3 → layer4`，它只帮你做了一个 `if layer1_ok: run_layer2()` 的事，但 `asyncio.gather` 层内并行还得自己写，多一层抽象没有收益。
+
+**真正的痛点是：**
+
+#### 7.1.1 模板代码太多
+
+Layer 1 的 `_run_skill_fetch()` 和 `_run_repo_clone()` 各 40~50 行，80% 是手动管 Session 状态 + 写日志 + 发 WebSocket。真正的业务逻辑就几行。每个非 AI 任务都在重复：
+
+```python
+# 每个 Layer 1 task 里都在重复这个模式：
+await db.execute(update(Session)...values(status=RUNNING, started_at=...))
+await db.commit()
+await ws_manager.publish(project_bus, {...})
+# ... 2~3 行真正干活的代码 ...
+await db.execute(update(Session)...values(status=DONE, finished_at=...))
+await db.commit()
+await ws_manager.publish(project_bus, {...})
+```
+
+如果以后 Layer 1 加新任务（比如拉 CI 配置、检查环境），又要抄一遍这坨模板代码。
+
+#### 7.1.2 编排逻辑硬编码
+
+`run_init()` 是一个 200 行的大函数，4 层编排全部硬编码在里面。加一层得改这个函数，改层间依赖关系也得改这个函数。
+
+### 7.2 改造方案
+
+#### 7.2.1 抽出通用的 `run_simple_task()` 执行器
+
+Layer 1 的非 AI 任务和 Layer 2/3 用 SessionRunner 的 AI 任务，在 Session 状态管理上是同一件事。抽一个轻量包装器，消灭模板代码：
+
+```python
+# daiflow/workflow/pipeline.py
+
+async def run_simple_task(
+    session_id: str,
+    project_bus: str,
+    fn: Callable[[AsyncSession, str], Awaitable[None]],
+):
+    """非 AI 任务的执行包装器。
+
+    统一管理：Session 状态变更 + 日志写入 + WebSocket 推送。
+    与 SessionRunner 对齐，只是不走 Cody。
+    """
+    async with get_background_db() as db:
+        session = await db.get(Session, session_id)
+        started = datetime.now(timezone.utc)
+        session.status = SessionStatus.RUNNING
+        session.started_at = started
+        await db.commit()
+        await ws_manager.publish(project_bus, {
+            "type": "session_status",
+            "session_id": session_id,
+            "status": SessionStatus.RUNNING,
+            "layer": session.layer,
+            "started_at": started.isoformat(),
+        })
+
+        try:
+            await fn(db, session_id)    # ← 真正的业务逻辑，只需要关心干活
+
+            finished = datetime.now(timezone.utc)
+            session.status = SessionStatus.DONE
+            session.finished_at = finished
+            await db.commit()
+            await _append_log(session_id, {"type": "done", "ts": finished.isoformat()})
+            await ws_manager.publish(project_bus, {
+                "type": "session_status",
+                "session_id": session_id,
+                "status": SessionStatus.DONE,
+                "layer": session.layer,
+                "finished_at": finished.isoformat(),
+            })
+
+        except Exception as e:
+            failed_at = datetime.now(timezone.utc)
+            session.status = SessionStatus.FAILED
+            session.error = str(e)[:500]
+            session.finished_at = failed_at
+            await db.commit()
+            await _append_log(session_id, {"type": "done", "ts": failed_at.isoformat()})
+            await ws_manager.publish(project_bus, {
+                "type": "session_status",
+                "session_id": session_id,
+                "status": SessionStatus.FAILED,
+                "error": str(e)[:500],
+                "layer": session.layer,
+                "finished_at": failed_at.isoformat(),
+            })
+```
+
+改造后 Layer 1 变成：
+
+```python
+# 改造前：_run_skill_fetch() 40行 + _run_repo_clone() 50行 = 90行
+# 改造后：
+
+async def _do_skill_fetch(db, session_id):
+    """纯业务逻辑：获取技能文件。"""
+    await _append_log(session_id, {"type": "text_delta", "ts": _now(), "content": "No external skills configured, skipping.\n"})
+
+async def _do_repo_clone(db, session_id):
+    """纯业务逻辑：克隆/拉取仓库。"""
+    git_repos = [r for r in repos if r.git_url and not r.local_path]
+    for r in git_repos:
+        clone_dir = project_dir / "code" / repo_dir_name(r.git_url)
+        await _append_log(session_id, {"type": "text_delta", "ts": _now(), "content": f"Cloning {r.git_url} ...\n"})
+        await clone_or_pull(r.git_url, str(clone_dir))
+
+# 调用：
+await asyncio.gather(
+    run_simple_task(skill_sid, bus, _do_skill_fetch),
+    run_simple_task(clone_sid, bus, _do_repo_clone),
+)
+```
+
+#### 7.2.2 Pipeline 配置 + 通用执行器
+
+把层编排从 200 行大函数变成**配置驱动**：
+
+```python
+# daiflow/workflow/pipeline.py
+
+INIT_PIPELINE = [
+    {
+        'layer': 1,
+        'tasks': ['skill_fetch', 'repo_clone'],
+        'runner': 'simple',                      # 非 AI 任务，用 run_simple_task
+        'fail_strategy': 'abort_if_critical',    # 只有 critical 任务失败才终止
+        'critical': ['repo_clone'],              # repo_clone 失败 → 没代码可分析 → 终止
+    },
+    {
+        'layer': 2,
+        'tasks': 'dynamic',                      # 根据 repo_type 动态生成（LAYER_2_TYPES）
+        'runner': 'cody',                        # AI 任务，走 SessionRunner
+        'fail_strategy': 'abort',                # 任何失败 → 终止后续层
+    },
+    {
+        'layer': 3,
+        'tasks': LAYER_3_TYPES,                  # ['module-overview', 'api-interaction', ...]
+        'runner': 'cody',
+        'fail_strategy': 'abort',
+    },
+    {
+        'layer': 4,
+        'tasks': ['project_md'],
+        'runner': 'cody',
+        'fail_strategy': 'continue',             # 即使失败也完成 init
+    },
+]
+
+
+async def run_pipeline(project_id: str, pipeline: list[dict]):
+    """通用 pipeline 执行器：按层顺序执行，层内并行。"""
+    project_dir = get_project_dir(project_id)
+    project_bus = f"project:init:{project_id}"
+
+    async with get_background_db() as db:
+        repos = await _fetch_repos(db, project_id)
+        allowed_roots = await _resolve_allowed_roots(project_dir, repos)
+        lang = await get_language_setting(db)
+
+    for layer_def in pipeline:
+        # 1. 解析该层要执行的任务列表
+        tasks = resolve_layer_tasks(layer_def, project_id, repos)
+
+        # 2. 层内并行执行
+        results = await asyncio.gather(
+            *[run_task(t, project_dir, allowed_roots, repos, project_bus, lang) for t in tasks],
+            return_exceptions=True,
+        )
+
+        # 3. 检查是否需要终止
+        if should_abort(layer_def, results):
+            await _finalize_init(db, project_id, project_bus)
+            return
+
+    await _finalize_init(db, project_id, project_bus)
+
+
+def should_abort(layer_def: dict, results: list) -> bool:
+    """根据 fail_strategy 判断是否终止 pipeline。"""
+    failures = [r for r in results if isinstance(r, Exception)]
+    if not failures:
+        return False
+
+    strategy = layer_def.get('fail_strategy', 'abort')
+
+    if strategy == 'continue':
+        return False
+    elif strategy == 'abort':
+        return True
+    elif strategy == 'abort_if_critical':
+        # 只有 critical 任务失败才终止（需要 task 标记信息，此处简化）
+        return True  # 实际实现需要匹配失败的 task 是否在 critical 列表中
+    return False
+```
+
+改造后 `run_init()` 变成一行调用：
+
+```python
+# 改造前：200 行大函数
+# 改造后：
+async def run_init(project_id: str):
+    await run_pipeline(project_id, INIT_PIPELINE)
+```
+
+### 7.3 改造收益
+
+| 维度 | 改造前 | 改造后 |
+|------|-------|-------|
+| **加新 Layer 1 任务** | 抄 50 行模板代码 | 写一个纯业务函数 + 配置里加一行 |
+| **加新层** | 改 `run_init()` 大函数 | `INIT_PIPELINE` 加一个 dict |
+| **改失败策略** | 改 if/else 逻辑 | 改配置里的 `fail_strategy` |
+| **Layer 1 代码量** | ~90 行（状态管理 + 业务混在一起） | ~15 行（纯业务逻辑） |
+| **`run_init()` 代码量** | ~200 行 | ~1 行调用 |
+
+### 7.4 文件结构
+
+```
+daiflow/
+  workflow/
+    __init__.py
+    task_machine.py       ← Task 状态机（已有）
+    todo_machine.py       ← Todo 状态机（已有）
+    pipeline.py           ← 新增：run_simple_task + INIT_PIPELINE + run_pipeline
+    helpers.py            ← 通用工具函数
+  services/
+    project_service.py    ← 精简：删除模板代码，保留纯业务函数 + prompt 模板
+```
+
+### 7.5 不动的部分
+
+- `SessionRunner` —— AI 任务（Layer 2/3/4）的执行逻辑不变
+- `_run_knowledge_task()` —— Layer 2/3 的 Cody 调用逻辑不变，只是被 `run_pipeline` 统一调度
+- `compute_init_sessions()` —— Session 记录的计算逻辑不变
+- WebSocket 推送协议 —— 事件格式不变
+
+---
+
+## 八、待讨论
 
 1. **自动流转的粒度** —— lock_plan 后是否一路自动到 coding？还是在 todo_ready 暂停等用户确认？
 2. **Todo 自动执行** —— todo 1 完成后自动开始 todo 2？还是保持手动触发（但加后端守卫）？
 3. **Review 自动触发** —— 所有 todo 完成后是否自动进入 review？
 4. **错误恢复策略** —— todo 执行失败后是阻断后续还是允许跳过继续？
+5. **Pipeline retry** —— `run_init_retry()` 是否也改为配置驱动？当前方案优先改 `run_init()`，retry 逻辑后续跟进。
