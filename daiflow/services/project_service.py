@@ -94,7 +94,7 @@ PROJECT_MD_PROMPT = (
 )
 
 
-def _repo_dir_name(git_url: str) -> str:
+def repo_dir_name(git_url: str) -> str:
     """Extract a safe directory name from a git URL.
 
     e.g. 'https://github.com/org/my-repo.git' -> 'my-repo'
@@ -119,7 +119,7 @@ async def _resolve_allowed_roots(project_dir: Path, repos: list) -> list[str]:
     roots = []
     for r in repos:
         if r.git_url:
-            clone_dir = project_dir / "code" / _repo_dir_name(r.git_url)
+            clone_dir = project_dir / "code" / repo_dir_name(r.git_url)
             roots.append(str(clone_dir))
         elif r.local_path:
             roots.append(r.local_path)
@@ -348,16 +348,18 @@ async def run_init(project_id: str):
                     if not git_repos:
                         await _append_log(sid, {"type": "text_delta", "content": "No remote repos to clone, skipping.\n"})
                     for r in git_repos:
-                        clone_dir = project_dir / "code" / _repo_dir_name(r.git_url)
+                        clone_dir = project_dir / "code" / repo_dir_name(r.git_url)
                         await _append_log(sid, {"type": "text_delta", "content": f"Cloning/pulling {r.git_url} → {clone_dir} ...\n"})
                         await clone_or_pull(r.git_url, str(clone_dir))
-                        # Seed master_hash for repo monitor
+                        # Seed master_hash for repo monitor (use clone_db, not outer db)
                         try:
                             head = await get_head_hash(str(clone_dir))
-                            r.master_hash = head
+                            await clone_db.execute(
+                                update(ProjectRepo).where(ProjectRepo.id == r.id).values(master_hash=head)
+                            )
                         except Exception:
                             pass
-                        await _append_log(sid, {"type": "text_delta", "content": f"✓ {_repo_dir_name(r.git_url)} ready.\n"})
+                        await _append_log(sid, {"type": "text_delta", "content": f"✓ {repo_dir_name(r.git_url)} ready.\n"})
 
                     await _append_log(sid, {"type": "done"})
                     await clone_db.execute(

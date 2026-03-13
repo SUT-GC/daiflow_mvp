@@ -11,7 +11,7 @@ from daiflow.database import get_background_db
 from daiflow.models import Project, ProjectRepo, Session, SessionStatus, Task, TaskStatus, Todo, TodoStatus
 from daiflow.services.cody_service import append_path_boundary, build_cody_client
 from daiflow.services.git_service import checkout_branch, get_head_hash
-from daiflow.services.project_service import _repo_dir_name
+from daiflow.services.project_service import repo_dir_name
 from daiflow.services.skill_service import get_project_dir, get_task_dir, get_task_skills_dir, sync_skills_to_task
 from daiflow.session_runner import SessionRunner, make_file_write_detector
 
@@ -91,7 +91,7 @@ def _copy_code_to_task(project_id: str, task_id: str, repos: list):
 
     for r in repos:
         if r.git_url and not r.local_path:
-            repo_name = _repo_dir_name(r.git_url)
+            repo_name = repo_dir_name(r.git_url)
             src = project_dir / "code" / repo_name
             dst = task_dir / "code" / repo_name
             if src.exists():
@@ -113,7 +113,7 @@ def _resolve_task_roots(task_id: str, repos: list) -> list[str]:
         if r.local_path:
             roots.append(r.local_path)
         elif r.git_url:
-            roots.append(str(task_dir / "code" / _repo_dir_name(r.git_url)))
+            roots.append(str(task_dir / "code" / repo_dir_name(r.git_url)))
     return roots
 
 
@@ -156,7 +156,7 @@ async def init_task(task_id: str):
                             logger.warning("Branch checkout for %s on %s: %s", task.branch, repo.local_path, e)
                     elif repo.git_url:
                         # Task's isolated copy — checkout branch there
-                        task_repo_path = str(get_task_dir(task_id) / "code" / _repo_dir_name(repo.git_url))
+                        task_repo_path = str(get_task_dir(task_id) / "code" / repo_dir_name(repo.git_url))
                         try:
                             await checkout_branch(task_repo_path, task.branch)
                         except Exception as e:

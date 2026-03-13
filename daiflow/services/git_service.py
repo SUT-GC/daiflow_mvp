@@ -128,16 +128,22 @@ async def fetch_remote(local_path: str, timeout: int = 120) -> None:
     await _run(["git", "fetch", "origin"], cwd=local_path, timeout=timeout)
 
 
-async def get_remote_head(local_path: str, branch: str = "") -> str | None:
-    """Get the commit hash of a remote branch (origin/<branch>).
+async def get_remote_head(local_path: str, branch: str = "") -> tuple[str | None, str | None]:
+    """Get the commit hash and branch name of a remote branch (origin/<branch>).
 
     Tries origin/main then origin/master if branch is not specified.
-    Returns None if no remote branch is found.
+    Returns (hash, branch_name) or (None, None) if no remote branch found.
     """
     candidates = [branch] if branch else ["main", "master"]
     for b in candidates:
         try:
-            return await _run(["git", "rev-parse", f"origin/{b}"], cwd=local_path)
+            h = await _run(["git", "rev-parse", f"origin/{b}"], cwd=local_path)
+            return h, b
         except RuntimeError:
             continue
-    return None
+    return None, None
+
+
+async def merge_ff_only(local_path: str, remote_branch: str) -> None:
+    """Fast-forward merge from a remote tracking branch. Use after fetch_remote()."""
+    await _run(["git", "merge", "--ff-only", f"origin/{remote_branch}"], cwd=local_path)

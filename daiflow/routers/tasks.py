@@ -11,7 +11,7 @@ from daiflow.database import get_db
 from daiflow.models import Session, SessionStatus, Task, TaskStatus, Todo
 from daiflow.schemas import SubmitMR, TaskCreate, TaskResponse, TaskUpdate, TodoResponse
 from daiflow.services.git_service import commit, get_diff, push
-from daiflow.services.project_service import _repo_dir_name
+from daiflow.services.project_service import repo_dir_name
 from daiflow.services.skill_service import get_task_dir
 from daiflow.services.task_service import (
     execute_todo,
@@ -67,7 +67,7 @@ def _resolve_repo_path(repo, task_id: str) -> str | None:
     if repo.local_path:
         return repo.local_path
     elif repo.git_url:
-        return str(get_task_dir(task_id) / "code" / _repo_dir_name(repo.git_url))
+        return str(get_task_dir(task_id) / "code" / repo_dir_name(repo.git_url))
     return None
 
 

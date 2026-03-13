@@ -67,7 +67,16 @@ async def list_jobs(db: AsyncSession = Depends(get_db)):
 
 @router.post("")
 async def create_job(data: JobCreate, db: AsyncSession = Depends(get_db)):
-    """Create a new job."""
+    """Create a new job. Rejects duplicates (same project + type)."""
+    existing = await db.execute(
+        select(Job).where(Job.project_id == data.project_id, Job.type == data.type)
+    )
+    if existing.scalars().first():
+        raise HTTPException(
+            status_code=409,
+            detail=f"A {data.type} job already exists for this project",
+        )
+
     job = Job(
         project_id=data.project_id,
         type=data.type,
