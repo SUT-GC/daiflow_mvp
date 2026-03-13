@@ -146,4 +146,5 @@ async def get_remote_head(local_path: str, branch: str = "") -> tuple[str | None
 
 async def merge_ff_only(local_path: str, remote_branch: str) -> None:
     """Fast-forward merge from a remote tracking branch. Use after fetch_remote()."""
+    validate_branch_name(remote_branch)
     await _run(["git", "merge", "--ff-only", f"origin/{remote_branch}"], cwd=local_path)
