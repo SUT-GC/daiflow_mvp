@@ -318,8 +318,8 @@ async def run_init(project_id: str):
                 "type": "session_status", "session_id": sid, "status": SessionStatus.RUNNING, "layer": 1,
             })
             # Placeholder — no external skill fetching yet
-            await _append_log(sid, {"type": "text_delta", "content": "Skill fetch: no external skills configured, skipping.\n"})
-            await _append_log(sid, {"type": "done"})
+            await _append_log(sid, {"type": "text_delta", "ts": datetime.now(timezone.utc).isoformat(), "content": "Skill fetch: no external skills configured, skipping.\n"})
+            await _append_log(sid, {"type": "done", "ts": datetime.now(timezone.utc).isoformat()})
             await db.execute(
                 update(Session).where(Session.session_id == sid).values(
                     status=SessionStatus.DONE, finished_at=datetime.now(timezone.utc)
@@ -346,10 +346,10 @@ async def run_init(project_id: str):
                 try:
                     git_repos = [r for r in repos if r.git_url and not r.local_path]
                     if not git_repos:
-                        await _append_log(sid, {"type": "text_delta", "content": "No remote repos to clone, skipping.\n"})
+                        await _append_log(sid, {"type": "text_delta", "ts": datetime.now(timezone.utc).isoformat(), "content": "No remote repos to clone, skipping.\n"})
                     for r in git_repos:
                         clone_dir = project_dir / "code" / repo_dir_name(r.git_url)
-                        await _append_log(sid, {"type": "text_delta", "content": f"Cloning/pulling {r.git_url} → {clone_dir} ...\n"})
+                        await _append_log(sid, {"type": "text_delta", "ts": datetime.now(timezone.utc).isoformat(), "content": f"Cloning/pulling {r.git_url} → {clone_dir} ...\n"})
                         await clone_or_pull(r.git_url, str(clone_dir))
                         # Seed master_hash for repo monitor (use clone_db, not outer db)
                         try:
@@ -359,9 +359,9 @@ async def run_init(project_id: str):
                             )
                         except Exception:
                             pass
-                        await _append_log(sid, {"type": "text_delta", "content": f"✓ {repo_dir_name(r.git_url)} ready.\n"})
+                        await _append_log(sid, {"type": "text_delta", "ts": datetime.now(timezone.utc).isoformat(), "content": f"✓ {repo_dir_name(r.git_url)} ready.\n"})
 
-                    await _append_log(sid, {"type": "done"})
+                    await _append_log(sid, {"type": "done", "ts": datetime.now(timezone.utc).isoformat()})
                     await clone_db.execute(
                         update(Session).where(Session.session_id == sid).values(
                             status=SessionStatus.DONE, finished_at=datetime.now(timezone.utc)
@@ -373,8 +373,8 @@ async def run_init(project_id: str):
                     })
                 except Exception as e:
                     logger.error("Layer 1 repo clone/pull failed: %s", e)
-                    await _append_log(sid, {"type": "text_delta", "content": f"✗ Clone failed: {e}\n"})
-                    await _append_log(sid, {"type": "done"})
+                    await _append_log(sid, {"type": "text_delta", "ts": datetime.now(timezone.utc).isoformat(), "content": f"✗ Clone failed: {e}\n"})
+                    await _append_log(sid, {"type": "done", "ts": datetime.now(timezone.utc).isoformat()})
                     await clone_db.execute(
                         update(Session).where(Session.session_id == sid).values(
                             status=SessionStatus.FAILED, error=str(e)[:500],

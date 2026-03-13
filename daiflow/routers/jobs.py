@@ -2,7 +2,9 @@
 
 import json
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from typing import Optional
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -59,9 +61,15 @@ def _serialize_run(run: JobRun) -> dict:
 # ── Job CRUD ──
 
 @router.get("")
-async def list_jobs(db: AsyncSession = Depends(get_db)):
-    """List all jobs."""
-    result = await db.execute(select(Job).order_by(Job.created_at.desc()))
+async def list_jobs(
+    project_id: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """List jobs, optionally filtered by project_id."""
+    query = select(Job).order_by(Job.created_at.desc())
+    if project_id:
+        query = query.where(Job.project_id == project_id)
+    result = await db.execute(query)
     return [_serialize_job(j) for j in result.scalars().all()]
 
 

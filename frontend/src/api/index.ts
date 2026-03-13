@@ -202,6 +202,7 @@ export interface JobRunData {
   job_type?: string
 }
 
-export const listJobs = () => request<JobData[]>('/jobs')
+export const listJobs = (projectId?: string) =>
+  request<JobData[]>(`/jobs${projectId ? `?project_id=${projectId}` : ''}`)
 export const getJobRuns = (jobId: string, limit = 50) =>
   request<JobRunData[]>(`/jobs/${jobId}/runs?limit=${limit}`)

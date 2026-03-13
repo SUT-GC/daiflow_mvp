@@ -71,9 +71,7 @@ export default function Debug() {
     setLogSearch('')
     if (!selectedProject) return
     listTasks(selectedProject).then(setTasks).catch(() => {})
-    listJobs().then(allJobs => {
-      setJobs(allJobs.filter(j => j.project_id === selectedProject))
-    }).catch(() => {})
+    listJobs(selectedProject).then(setJobs).catch(() => {})
   }, [selectedProject])
 
   // Load sessions/job runs when scope changes
