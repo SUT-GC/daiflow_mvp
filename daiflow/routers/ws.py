@@ -60,6 +60,7 @@ async def _handle_chat(ws: WebSocket, data: dict):
                 async for event in run_stage_chat(
                     ctx.session_id, ctx.cody_client, ctx.cody_session_id,
                     message, ctx.on_tool_result, language=ctx.language,
+                    system_prefix=ctx.system_prefix,
                 ):
                     if ws.client_state != WebSocketState.CONNECTED:
                         return

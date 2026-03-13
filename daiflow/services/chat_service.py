@@ -25,6 +25,7 @@ class StageChatContext:
     cody_session_id: str | None
     on_tool_result: Callable | None
     language: str | None
+    system_prefix: str | None = None  # Prepended to user message for context
 
 
 async def _get_allowed_roots(db: AsyncSession, project_id: str) -> list[str]:
@@ -76,12 +77,27 @@ async def prepare_stage_chat(
 
         on_tool_result = make_file_write_detector("plan.md", "plan_updated", on_plan_match)
 
+        system_prefix = (
+            "You are a senior software architect helping refine a technical plan.\n"
+            "Your primary task is to discuss and modify the technical plan in `plan.md`.\n\n"
+            "## Context\n"
+            "- Read `project.md` in the current working directory for project knowledge.\n"
+            "- The current technical plan is in `plan.md` — read it first if you haven't.\n"
+            f"- Plan file path: `{plan_path}`\n\n"
+            "## Important Rules\n"
+            "- When the user asks for changes, update `plan.md` directly by writing to the file.\n"
+            "- Keep the plan in proper Markdown format with clear headings and bullet points.\n"
+            "- Focus solely on the technical plan — do not implement code or make other changes.\n\n"
+            "## User Message\n"
+        )
+
         return StageChatContext(
             session_id=session_id,
             cody_client=client,
             cody_session_id=task.plan_cody_session_id,
             on_tool_result=on_tool_result,
             language=lang,
+            system_prefix=system_prefix,
         )
 
     elif stage == "todo":
