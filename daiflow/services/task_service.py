@@ -4,7 +4,7 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from daiflow.database import get_background_db
@@ -64,7 +64,7 @@ def resolve_repo_path(repo, task_id: str) -> str | None:
     return None
 
 
-def _resolve_task_roots(task_id: str, repos: list) -> list[str]:
+def resolve_task_roots(task_id: str, repos: list) -> list[str]:
     """Resolve allowed_roots for a task.
 
     - Repos with local_path: use local_path directly (user's working directory)
@@ -85,21 +85,16 @@ async def _do_fetch_code(db: AsyncSession, session_id: str, *, task_id: str, pro
 
     if branch:
         for repo in repos:
-            if repo.local_path:
-                try:
-                    await checkout_branch(repo.local_path, branch)
-                    await _append_log(session_id, {"type": "text_delta", "ts": now_iso(), "content": f"✓ Checked out branch '{branch}' on {repo.local_path}\n"})
-                except Exception as e:
-                    logger.warning("Branch checkout for %s on %s: %s", branch, repo.local_path, e)
-                    await _append_log(session_id, {"type": "text_delta", "ts": now_iso(), "content": f"⚠ Branch checkout failed on {repo.local_path}: {e}\n"})
-            elif repo.git_url:
-                task_repo_path = str(get_task_dir(task_id) / "code" / repo_dir_name(repo.git_url))
-                try:
-                    await checkout_branch(task_repo_path, branch)
-                    await _append_log(session_id, {"type": "text_delta", "ts": now_iso(), "content": f"✓ Checked out branch '{branch}' on {repo_dir_name(repo.git_url)}\n"})
-                except Exception as e:
-                    logger.warning("Branch checkout for %s on %s: %s", branch, task_repo_path, e)
-                    await _append_log(session_id, {"type": "text_delta", "ts": now_iso(), "content": f"⚠ Branch checkout failed on {repo_dir_name(repo.git_url)}: {e}\n"})
+            repo_path = resolve_repo_path(repo, task_id)
+            if not repo_path:
+                continue
+            label = repo.local_path or repo_dir_name(repo.git_url)
+            try:
+                await checkout_branch(repo_path, branch)
+                await _append_log(session_id, {"type": "text_delta", "ts": now_iso(), "content": f"✓ Checked out branch '{branch}' on {label}\n"})
+            except Exception as e:
+                logger.warning("Branch checkout for %s on %s: %s", branch, repo_path, e)
+                await _append_log(session_id, {"type": "text_delta", "ts": now_iso(), "content": f"⚠ Branch checkout failed on {label}: {e}\n"})
 
 
 async def _do_sync_skills(db: AsyncSession, session_id: str, *, task_id: str, project_id: str):
@@ -188,7 +183,7 @@ async def generate_plan(task_id: str):
 
         # Resolve allowed roots (local_path or task/code/ copy)
         repos = await fetch_project_repos(db, task.project_id)
-        allowed_roots = _resolve_task_roots(task_id, repos)
+        allowed_roots = resolve_task_roots(task_id, repos)
 
         # Create or reset session record
         session_id = f"task:{task_id}:plan"
@@ -261,7 +256,7 @@ async def generate_todos(task_id: str):
         todo_path = task_dir / "todo.json"
 
         repos = await fetch_project_repos(db, task.project_id)
-        allowed_roots = _resolve_task_roots(task_id, repos)
+        allowed_roots = resolve_task_roots(task_id, repos)
 
         session_id = f"task:{task_id}:todo_split"
         existing_session = await db.get(Session, session_id)
@@ -431,7 +426,7 @@ async def execute_todo(todo_id: str):
         task_dir = get_task_dir(task.id)
 
         repos = await fetch_project_repos(db, task.project_id)
-        allowed_roots = _resolve_task_roots(task.id, repos)
+        allowed_roots = resolve_task_roots(task.id, repos)
 
         session_id = f"task:{task.id}:todo:{todo_id}"
         existing_session = await db.get(Session, session_id)

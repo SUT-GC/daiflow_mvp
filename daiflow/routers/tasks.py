@@ -1,3 +1,4 @@
+import json
 import logging
 import shutil
 
@@ -352,4 +353,16 @@ async def submit_mr_route(
         raise HTTPException(status_code=404, detail="Task not found")
 
     results = await review_service.submit_mr(db, task, data.commit_message)
+
+    # State transition: REVIEWING → DONE (consistent with other transitions in router)
+    has_success = any(r["status"] == "success" for r in results)
+    if has_success:
+        wf = TaskWorkflow(task, db)
+        try:
+            await wf.finish()
+        except MachineError:
+            logger.warning("Could not transition task %s to DONE", task_id)
+    task.mr_info = json.dumps(results)
+    await db.commit()
+
     return {"ok": True, "results": results}
