@@ -32,3 +32,28 @@
   pointer-events: none;
   opacity: 0.5;
 }
+
+.stage-stale-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 20px;
+  background: var(--yellow-bg, #fef3cd);
+  color: var(--yellow-text, #856404);
+  font-size: 13px;
+  border-bottom: 1px solid var(--border);
+}
+
+.stage-stale-retry {
+  padding: 3px 12px;
+  font-size: 12px;
+  border-radius: 4px;
+  border: 1px solid currentColor;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.stage-stale-retry:hover {
+  background: rgba(0, 0, 0, 0.05);
+}

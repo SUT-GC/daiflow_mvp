@@ -254,6 +254,10 @@ const en = {
   'error.title': 'Something went wrong',
   'error.try_again': 'Try Again',
   'error.back_to_tasks': 'Return to Tasks',
+
+  // Stale session
+  'stale.message': 'Session may have been interrupted — no activity for 60 seconds.',
+  'stale.retry': 'Retry',
 } as const
 
 export type TranslationKey = keyof typeof en

@@ -37,6 +37,10 @@ interface StageLayoutProps {
   chatMessages: ChatMessage[]
   chatOnSend: (msg: string) => void
   chatStreaming: boolean
+  /** Whether the session appears stale (no events for 60s while RUNNING) */
+  isStale?: boolean
+  /** Called when user clicks retry on the stale banner */
+  onRetry?: () => void
 }
 
 export default function StageLayout({
@@ -49,6 +53,8 @@ export default function StageLayout({
   chatMessages,
   chatOnSend,
   chatStreaming,
+  isStale,
+  onRetry,
 }: StageLayoutProps) {
   const { t } = useLocale()
 
@@ -66,6 +72,12 @@ export default function StageLayout({
         backLabel={t('nav.tasks')}
       />
       <StageProgress taskId={taskId} currentStage={currentStage} taskStatus={task.status} />
+      {isStale && (
+        <div className="stage-stale-banner">
+          <span>{t('stale.message')}</span>
+          {onRetry && <button className="stage-stale-retry" onClick={onRetry}>{t('stale.retry')}</button>}
+        </div>
+      )}
       <div className="stage-body">
         <ResizableSplitPane
           right={

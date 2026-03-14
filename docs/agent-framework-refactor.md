@@ -886,3 +886,76 @@ async def get_agent_type_config(agent_type: str):
 | 日志追加模式导致文件过大 | 低 | 单个 session 通常只重跑 1-2 次 |
 | Init retry 引入并发问题 | 低 | 同层 session 由 asyncio.gather 管理，无竞争 |
 | 前端 hook 重构影响页面 | 低 | stage hook 对外接口不变，页面无需修改 |
+
+---
+
+## 八、实施结果与方案偏差
+
+> 本节记录实际实施中与上述设计方案的偏差，作为代码 review 参考。
+
+### 8.1 后端 Agent 抽象（对应第三章）
+
+#### AgentConfig 基类偏差
+
+| 设计 | 实际 | 原因 |
+|------|------|------|
+| 字段名 `type` | 字段名 `agent_type` | 避免遮蔽 Python 内置 `type()` |
+| `@dataclass` 修饰 | 普通 class | 子类仅设置类属性，不需要 `__init__` |
+| 有 `build_cody_config()` 方法 | 无此方法 | Cody 客户端配置统一在 `agent_executor` 中通过 `build_task_cody_client()` 构建，无需每个 agent 单独实现 |
+| `AgentContext` 有 `repos` 字段 | 无 `repos` 字段 | 实际只需 `allowed_roots`，`repos` 列表不被 agent 使用 |
+| Init agent 访问 `ctx.knowledge_type` | `AgentContext` 无此字段 | Init agent 是占位符，其 prompt 由 `project_service` 独立构建，不走 `AgentConfig.build_prompt()` |
+
+#### AgentExecutor 偏差
+
+| 设计 | 实际 | 原因 |
+|------|------|------|
+| `class AgentExecutor` | 模块级函数 `run_agent()` / `prepare_chat()` | 无状态实例无意义，函数更简洁 |
+| DB 由 executor 内部创建 | DB 由调用方传入 `run_agent(db, ...)` | `execute_todo` 等需要在调用 `run_agent` 前做预处理（如记录 `commit_before`），共享同一 DB session 更安全 |
+| 先构建上下文，后创建 session | 先创建 session，后构建上下文 | 若 `_build_context` 抛异常（如 entity 不存在），session 不存在会导致客户端永远 404 |
+| 一行调用 `executor.run(...)` | 仍有 5~20 行前置逻辑 | `execute_todo` 需要记录 `commit_before` git hashes；所有函数需要验证 entity 存在性 |
+
+#### 额外实现（设计文档未提及）
+
+- **`_auto_register()` 机制** — `agents/__init__.py` 模块加载时自动导入所有 agent 子模块触发注册
+- **`append_path_boundary()` 调用** — 所有 task 相关 agent 的 `build_prompt()` 都会调用此函数追加路径上下文
+- **`on_complete` 防御性重载** — 所有 agent 的 `on_complete` 都会从 DB 重新加载 entity，防止长时间执行期间 entity 被删
+- **`prepare_chat()` chattable 校验** — 非 chattable agent 尝试 chat 时抛出 `InvalidStateError`
+- **`append_log()` 改名** — 原 `_append_log()` 被多个模块引用，重命名为公开 API `append_log()`
+
+### 8.2 崩溃恢复（对应 3.3）
+
+| 设计 | 实际 | 原因 |
+|------|------|------|
+| 独立 `recovery.py` 模块 | 内联在 `main.py` 的 `_recover_interrupted_sessions()` | 逻辑较简单，不值得独立模块 |
+| `@app.on_event("startup")` | `lifespan` 上下文管理器 | FastAPI 推荐用 lifespan 替代已废弃的 on_event |
+| 恢复后推送 WS 事件 | 未推送 | 启动时通常还没有前端连接，推送无意义 |
+| `run_boundary` 含 `attempt` 计数 | 无 `attempt` 字段 | 简化实现，查询时只关心最后一个 boundary 的位置 |
+| 恢复范围：仅 RUNNING session | 额外恢复 RUNNING 的 todo + 自动重试 init pipeline | 实际需求比设计更广 |
+
+### 8.3 前端 Hook（对应第四章）
+
+| 设计 | 实际 | 原因 |
+|------|------|------|
+| Stage hooks 基于 `useAgent` 重构 | Stage hooks 独立组合 `useSession` + `useStageChat` + `useStaleDetection` | 三个 hook 的产出物加载逻辑差异较大（plan: 从 logs 推导 / todo: re-fetch API / coding: debounced diff），强行用 `useAgent` 反而增加复杂度 |
+| `useStaleDetection(status, logs: SessionEvent[])` | `useStaleDetection(status, logsLength: number, thresholdMs?)` | 只需 length 触发 effect，无需传整个数组；增加可配置阈值 |
+| `useAgent` 选项中 `agentType` | `stage` (union type) | 更精确的类型约束 |
+| `useAgent` 返回 `retry` | 返回 `refreshSession` + `sessionRefreshKey` | 命名更语义化 |
+| `/api/agents/config` 接口 | 未实现（前端硬编码） | Agent type 是有限已知集合，无需运行时查询 |
+
+### 8.4 Init 层管理（对应 3.4）
+
+| 设计 | 实际 | 差异说明 |
+|------|------|---------|
+| Session 预创建下沉到 service 层 | 仍在 router 层（`projects.py`） | 待后续重构，当前保持稳定 |
+| `get_init_layer_status()` 聚合函数 | 仅有 `get_init_sessions` 端点返回原始数据 | 前端自行聚合，后续可优化 |
+| retry 接收 `layer` 参数 | 自动检测最早失败层并级联重试后续层 | 实际需求比逐层重试更实用 |
+| Init re-run 删除 log 文件 | 改为追加 `run_boundary` 标记 | 与崩溃恢复方案一致 |
+
+### 8.5 实施状态汇总
+
+| 阶段 | 状态 | 说明 |
+|------|------|------|
+| 第一阶段：后端 Agent 抽象 | ✅ 完成 | AgentConfig 注册表 + `run_agent()` / `prepare_chat()` + task_service 简化 + chat_service `_STAGE_MAP` |
+| 第二阶段：崩溃恢复 | ✅ 完成 | 日志追加 + run_boundary 过滤 + cody_session_id 即时存储 + 启动恢复 |
+| 第三阶段：前端统一 Hook | ✅ 完成 | `useAgent` + `useStaleDetection` + stage hooks 集成 + StageLayout stale banner |
+| 第四阶段：Agent Dashboard | 🔲 未开始 | 可选，待需求明确后实施 |

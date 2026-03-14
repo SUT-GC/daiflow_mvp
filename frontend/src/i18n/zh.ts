@@ -256,6 +256,10 @@ const zh: Record<TranslationKey, string> = {
   'error.title': '出现错误',
   'error.try_again': '重试',
   'error.back_to_tasks': '返回任务列表',
+
+  // Stale session
+  'stale.message': '会话可能已中断 — 超过 60 秒无活动。',
+  'stale.retry': '重试',
 }
 
 export default zh
