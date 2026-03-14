@@ -1,13 +1,14 @@
 import asyncio
 import json
 import shutil
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from daiflow.config import PROJECTS_DIR, SESSIONS_DIR, safe_filename
+from daiflow.config import PROJECTS_DIR
 from daiflow.database import get_db
 from daiflow.models import Project, ProjectRepo, Session
 from daiflow.schemas import ProjectCreate, ProjectResponse, ProjectUpdate
@@ -179,10 +180,12 @@ async def init_project(
             existing.error = None
             existing.started_at = None
             existing.finished_at = None
-            # Clear old log file so fresh run starts clean
-            log_file = SESSIONS_DIR / f"{safe_filename(sd['session_id'])}.jsonl"
-            if log_file.exists():
-                log_file.unlink()
+            # Append run_boundary marker instead of deleting log file
+            from daiflow.session_runner import append_log
+            await append_log(sd["session_id"], {
+                "type": "run_boundary",
+                "ts": datetime.now(timezone.utc).isoformat(),
+            })
         else:
             session = Session(**sd, status=0)
             db.add(session)

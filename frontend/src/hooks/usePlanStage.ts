@@ -4,6 +4,7 @@ import { SessionStatus } from '../types/enums'
 import { sessionIds } from '../utils/sessionIds'
 import { useSession } from './useSession'
 import { useStageChat } from './useStageChat'
+import { useStaleDetection } from './useStaleDetection'
 
 export function usePlanStage(taskId: string | undefined) {
   const [task, setTask] = useState<TaskData | null>(null)
@@ -26,6 +27,7 @@ export function usePlanStage(taskId: string | undefined) {
 
   const sessionId = taskId ? sessionIds.plan(taskId) : null
   const { status, logs, error: sessionError } = useSession(sessionId, sessionRefreshKey)
+  const isStale = useStaleDetection(status, logs.length)
 
   // Refresh task when session completes (tech_plan is synced to DB at that point)
   useEffect(() => {
@@ -79,6 +81,7 @@ export function usePlanStage(taskId: string | undefined) {
     error: error || sessionError,
     refreshSession,
     regenerating,
+    isStale,
     ...chat,
   }
 }

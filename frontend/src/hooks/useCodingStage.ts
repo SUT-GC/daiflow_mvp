@@ -4,6 +4,7 @@ import { SessionStatus, TodoStatus } from '../types/enums'
 import { sessionIds } from '../utils/sessionIds'
 import { useSession } from './useSession'
 import { useStageChat } from './useStageChat'
+import { useStaleDetection } from './useStaleDetection'
 
 /** Debounce delay (ms) before fetching diff after code_updated events. */
 const CODE_UPDATE_DEBOUNCE_MS = 500
@@ -36,6 +37,7 @@ export function useCodingStage(taskId: string | undefined) {
   const sessionId = currentTodo && taskId ? sessionIds.todoExec(taskId, currentTodo.id) : null
 
   const { status: todoSessionStatus, logs, error: sessionError } = useSession(sessionId)
+  const isStale = useStaleDetection(todoSessionStatus, logs.length)
 
   // Fetch per-todo diff when selecting a completed/failed todo
   const fetchTodoDiff = useCallback(async (todoId: string) => {
@@ -129,6 +131,7 @@ export function useCodingStage(taskId: string | undefined) {
     logs,
     loadData,
     allDone,
+    isStale,
     error: error || sessionError,
     ...chat,
   }

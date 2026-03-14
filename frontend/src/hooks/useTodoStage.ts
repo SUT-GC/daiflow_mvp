@@ -5,6 +5,7 @@ import { sessionIds } from '../utils/sessionIds'
 import type { WSEvent } from '../ws'
 import { useSession } from './useSession'
 import { useStageChat } from './useStageChat'
+import { useStaleDetection } from './useStaleDetection'
 
 export function useTodoStage(taskId: string | undefined) {
   const [task, setTask] = useState<TaskData | null>(null)
@@ -31,6 +32,7 @@ export function useTodoStage(taskId: string | undefined) {
 
   const sessionId = taskId ? sessionIds.todoSplit(taskId) : null
   const { status, logs, error: sessionError } = useSession(sessionId, sessionRefreshKey)
+  const isStale = useStaleDetection(status, logs.length)
 
   // Refresh task and todos when session completes (DB is synced at that point)
   useEffect(() => {
@@ -67,6 +69,7 @@ export function useTodoStage(taskId: string | undefined) {
     logs,
     error: error || sessionError,
     refreshSession,
+    isStale,
     ...chat,
   }
 }

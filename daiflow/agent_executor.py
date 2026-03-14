@@ -165,8 +165,11 @@ async def prepare_chat(
         StageChatContext with all fields populated.
     """
     from daiflow.services.chat_service import StageChatContext
+    from daiflow.exceptions import InvalidStateError
 
     config = get_agent_config(agent_type)
+    if not config.chattable:
+        raise InvalidStateError(f"Agent type {agent_type!r} does not support chat")
 
     # Build context
     ctx = await _build_context(db, entity_id, agent_type)

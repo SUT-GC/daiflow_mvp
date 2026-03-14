@@ -101,13 +101,13 @@ async def get_task_context(db: AsyncSession, task_id: str, project_id: str) -> t
 
 async def _do_fetch_code(db: AsyncSession, session_id: str, *, task_id: str, project_id: str, branch: str | None):
     """Subtask: copy code repos and checkout branch."""
-    from daiflow.session_runner import _append_log
+    from daiflow.session_runner import append_log
 
     repos = await fetch_project_repos(db, project_id)
     _copy_code_to_task(project_id, task_id, repos)
 
     now_iso = lambda: datetime.now(timezone.utc).isoformat()
-    await _append_log(session_id, {"type": "text_delta", "ts": now_iso(), "content": f"Copied {len(repos)} repo(s) to task directory\n"})
+    await append_log(session_id, {"type": "text_delta", "ts": now_iso(), "content": f"Copied {len(repos)} repo(s) to task directory\n"})
 
     if branch:
         for repo in repos:
@@ -117,18 +117,18 @@ async def _do_fetch_code(db: AsyncSession, session_id: str, *, task_id: str, pro
             label = repo.local_path or repo_dir_name(repo.git_url)
             try:
                 await checkout_branch(repo_path, branch)
-                await _append_log(session_id, {"type": "text_delta", "ts": now_iso(), "content": f"✓ Checked out branch '{branch}' on {label}\n"})
+                await append_log(session_id, {"type": "text_delta", "ts": now_iso(), "content": f"✓ Checked out branch '{branch}' on {label}\n"})
             except Exception as e:
                 logger.warning("Branch checkout for %s on %s: %s", branch, repo_path, e)
-                await _append_log(session_id, {"type": "text_delta", "ts": now_iso(), "content": f"⚠ Branch checkout failed on {label}: {e}\n"})
+                await append_log(session_id, {"type": "text_delta", "ts": now_iso(), "content": f"⚠ Branch checkout failed on {label}: {e}\n"})
 
 
 async def _do_sync_skills(db: AsyncSession, session_id: str, *, task_id: str, project_id: str):
     """Subtask: sync project skills to task directory."""
-    from daiflow.session_runner import _append_log
+    from daiflow.session_runner import append_log
 
     sync_skills_to_task(project_id, task_id)
-    await _append_log(session_id, {"type": "text_delta", "ts": datetime.now(timezone.utc).isoformat(), "content": "✓ Synced project skills to task\n"})
+    await append_log(session_id, {"type": "text_delta", "ts": datetime.now(timezone.utc).isoformat(), "content": "✓ Synced project skills to task\n"})
 
 
 async def init_task(task_id: str, ws_manager: WSManager | None = None):

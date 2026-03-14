@@ -48,9 +48,8 @@ class TodoSplitAgent(AgentConfig):
         return make_file_write_detector("todo.json", "todo_updated", on_todo_match)
 
     async def on_complete(self, ctx: AgentContext) -> None:
-        import json
         import logging
-        from daiflow.services.task_service import _parse_todos_json, _insert_todos
+        from daiflow.services.task_service import sync_todos_from_file
         from daiflow.workflow import TaskWorkflow
 
         logger = logging.getLogger(__name__)
@@ -61,13 +60,14 @@ class TodoSplitAgent(AgentConfig):
         if not task:
             return
 
-        # Parse todo.json and insert todos into DB
+        # Final sync of todos from todo.json (idempotent: delete-then-insert)
         todo_path = Path(ctx.task_dir) / "todo.json"
         if todo_path.exists():
             try:
-                _insert_todos(ctx.db, task.id, _parse_todos_json(todo_path.read_text(encoding="utf-8")))
-            except (json.JSONDecodeError, KeyError, TypeError) as e:
-                logger.error("Failed to parse todo.json for task %s: %s", task.id, e)
+                content = todo_path.read_text(encoding="utf-8")
+                await sync_todos_from_file(ctx.db, ctx.entity_id, content)
+            except Exception as e:
+                logger.error("Failed to sync todo.json for task %s: %s", task.id, e)
         else:
             logger.warning("todo.json not found for task %s after generation", task.id)
 

@@ -13,7 +13,7 @@ from daiflow.services.cody_service import append_path_boundary, build_cody_clien
 from daiflow.services.git_service import clone_or_pull, get_head_hash
 from daiflow.services.settings_service import get_language_setting
 from daiflow.services.skill_service import get_project_dir
-from daiflow.session_runner import SessionRunner, _append_log
+from daiflow.session_runner import SessionRunner, append_log
 from daiflow.workflow.pipeline import run_simple_task
 from daiflow.session_ids import project_init as _init_sid, project_init_bus as _init_bus
 from daiflow.ws_manager import WSManager, ws_manager as _default_ws_manager
@@ -240,7 +240,7 @@ async def run_init(project_id: str, ws_manager: WSManager | None = None):
 
         # Layer 1: skill_fetch + repo_clone (parallel via run_simple_task)
         async def _do_skill_fetch(task_db, session_id):
-            await _append_log(session_id, {
+            await append_log(session_id, {
                 "type": "text_delta", "ts": datetime.now(timezone.utc).isoformat(),
                 "content": "Skill fetch: no external skills configured, skipping.\n",
             })
@@ -248,14 +248,14 @@ async def run_init(project_id: str, ws_manager: WSManager | None = None):
         async def _do_repo_clone(task_db, session_id):
             git_repos = [r for r in repos if r.git_url and not r.local_path]
             if not git_repos:
-                await _append_log(session_id, {
+                await append_log(session_id, {
                     "type": "text_delta", "ts": datetime.now(timezone.utc).isoformat(),
                     "content": "No remote repos to clone, skipping.\n",
                 })
                 return
             for r in git_repos:
                 clone_dir = project_dir / "code" / repo_dir_name(r.git_url)
-                await _append_log(session_id, {
+                await append_log(session_id, {
                     "type": "text_delta", "ts": datetime.now(timezone.utc).isoformat(),
                     "content": f"Cloning/pulling {r.git_url} → {clone_dir} ...\n",
                 })
@@ -268,7 +268,7 @@ async def run_init(project_id: str, ws_manager: WSManager | None = None):
                     )
                 except Exception:
                     pass
-                await _append_log(session_id, {
+                await append_log(session_id, {
                     "type": "text_delta", "ts": datetime.now(timezone.utc).isoformat(),
                     "content": f"✓ {repo_dir_name(r.git_url)} ready.\n",
                 })
