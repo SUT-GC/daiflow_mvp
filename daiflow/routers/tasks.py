@@ -12,12 +12,9 @@ from daiflow.config import TASKS_DIR
 from daiflow.database import get_db
 from daiflow.models import Session, SessionStatus, Task, TaskStatus, Todo
 from daiflow.schemas import SubmitMR, TaskCreate, TaskResponse, TaskUpdate, TodoResponse
-from daiflow.services.git_service import commit, get_diff, push
-from daiflow.services.project_service import repo_dir_name
-from daiflow.services.skill_service import get_task_dir
+from daiflow.services import review_service
 from daiflow.services.task_service import (
     execute_todo,
-    fetch_project_repos,
     generate_plan,
     generate_todos,
     init_task,
@@ -32,26 +29,6 @@ router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
 def _task_to_dict(t: Task) -> dict:
     return TaskResponse.model_validate(t).model_dump()
-
-
-async def _get_task_repos(db: AsyncSession, project_id: str):
-    """Get repos and local allowed_roots for a task's project."""
-    repos = await fetch_project_repos(db, project_id)
-    allowed_roots = [r.local_path for r in repos if r.local_path]
-    return repos, allowed_roots
-
-
-def _resolve_repo_path(repo, task_id: str) -> str | None:
-    """Resolve the actual filesystem path for a repo in a task context.
-
-    - Repos with local_path: code lives in user's working directory
-    - Git-only repos: code lives in task/code/{repo_name} (isolated copy)
-    """
-    if repo.local_path:
-        return repo.local_path
-    elif repo.git_url:
-        return str(get_task_dir(task_id) / "code" / repo_dir_name(repo.git_url))
-    return None
 
 
 # ── CRUD ──
@@ -353,130 +330,29 @@ async def get_task_diff(task_id: str, db: AsyncSession = Depends(get_db)):
     task = await db.get(Task, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-
-    repos, _ = await _get_task_repos(db, task.project_id)
-
-    diffs = []
-    for repo in repos:
-        repo_path = _resolve_repo_path(repo, task_id)
-        if not repo_path:
-            continue
-        repo_label = repo.git_url or repo.local_path
-        try:
-            diff = await get_diff(repo_path, task.branch)
-            if diff:
-                diffs.append({"repo": repo_label, "repo_type": repo.repo_type, "diff": diff})
-        except Exception as e:
-            diffs.append({"repo": repo_label, "repo_type": repo.repo_type, "diff": "", "error": str(e)})
-
+    diffs = await review_service.get_task_diffs(db, task)
     return {"diffs": diffs}
 
 
 @router.post("/{task_id}/generate-commit-message")
-async def generate_commit_message(task_id: str, db: AsyncSession = Depends(get_db)):
+async def generate_commit_message_route(task_id: str, db: AsyncSession = Depends(get_db)):
     """Generate a commit message from the task's diff using AI."""
     task = await db.get(Task, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-
-    repos, allowed_roots = await _get_task_repos(db, task.project_id)
-
-    # Collect diffs
-    diff_texts = []
-    for repo in repos:
-        repo_path = _resolve_repo_path(repo, task_id)
-        if not repo_path:
-            continue
-        try:
-            d = await get_diff(repo_path, task.branch)
-            if d:
-                diff_texts.append(d)
-        except Exception:
-            pass
-
-    if not diff_texts:
-        return {"commit_message": f"feat: {task.name}"}
-
-    # Truncate diff if too large (keep first 8000 chars)
-    combined_diff = "\n".join(diff_texts)
-    if len(combined_diff) > 8000:
-        combined_diff = combined_diff[:8000] + "\n... (truncated)"
-
-    prompt = (
-        "Generate a concise git commit message for the following changes.\n"
-        "Use conventional commit format (feat/fix/refactor/docs/chore).\n"
-        "Include a short subject line and a brief body with bullet points.\n\n"
-        f"Task: {task.name}\n"
-        f"Description: {task.description or 'N/A'}\n\n"
-        f"Diff:\n```\n{combined_diff}\n```\n\n"
-        "Output ONLY the commit message, nothing else."
-    )
-
-    try:
-        from daiflow.services.cody_service import build_cody_client
-        # Resolve workdir: prefer first allowed_root, fallback to resolved repo path or task dir
-        if allowed_roots:
-            workdir = allowed_roots[0]
-        else:
-            resolved = [_resolve_repo_path(r, task_id) for r in repos]
-            resolved = [p for p in resolved if p]
-            workdir = resolved[0] if resolved else str(get_task_dir(task_id))
-            allowed_roots = resolved or [workdir]
-        client = await build_cody_client(db, workdir, allowed_roots)
-        result_text = ""
-        async with client:
-            async for chunk in client.stream(prompt):
-                if chunk.type == "text_delta":
-                    result_text += chunk.content
-                elif chunk.type == "done":
-                    break
-        return {"commit_message": result_text.strip() or f"feat: {task.name}"}
-    except Exception:
-        logger.warning("AI commit message generation failed for task %s", task_id, exc_info=True)
-        return {"commit_message": f"feat: {task.name}\n\n{task.description or ''}"}
+    msg = await review_service.generate_commit_message(db, task)
+    return {"commit_message": msg}
 
 
 @router.post("/{task_id}/submit-mr")
-async def submit_mr(
+async def submit_mr_route(
     task_id: str, data: SubmitMR, db: AsyncSession = Depends(get_db)
 ):
     task = await db.get(Task, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    repos, _ = await _get_task_repos(db, task.project_id)
-
-    commit_msg = data.commit_message or f"feat: {task.name}"
-
-    # Build list of (repo, resolved_path) for repos that have code
-    active_repos = []
-    for repo in repos:
-        repo_path = _resolve_repo_path(repo, task_id)
-        if repo_path:
-            active_repos.append((repo, repo_path))
-
-    # Phase 1: commit all repos first (safer — all-or-nothing per phase)
-    commit_results = []
-    for repo, repo_path in active_repos:
-        repo_label = repo.git_url or repo.local_path
-        try:
-            await commit(repo_path, commit_msg)
-            commit_results.append({"repo": repo_label, "committed": True})
-        except Exception as e:
-            commit_results.append({"repo": repo_label, "committed": False, "error": str(e)})
-
-    # Phase 2: push only successfully committed repos
-    results = []
-    for (repo, repo_path), cr in zip(active_repos, commit_results):
-        repo_label = repo.git_url or repo.local_path
-        if not cr.get("committed"):
-            results.append({"repo": repo_label, "status": "error", "error": cr.get("error", "commit failed")})
-            continue
-        try:
-            await push(repo_path, task.branch)
-            results.append({"repo": repo_label, "status": "success"})
-        except Exception as e:
-            results.append({"repo": repo_label, "status": "error", "error": str(e)})
+    results = await review_service.submit_mr(db, task, data.commit_message)
 
     # Only mark as DONE if at least one repo succeeded
     has_success = any(r["status"] == "success" for r in results)

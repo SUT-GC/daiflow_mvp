@@ -10,9 +10,10 @@ from typing import Any, Callable, Coroutine
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from daiflow.services.settings_service import get_language_setting
 from daiflow.models import Session, Task, TaskStatus, Todo
+from daiflow.prompts import PLAN_CHAT_PREFIX, TODO_CHAT_PREFIX
 from daiflow.services.cody_service import build_cody_client
+from daiflow.services.settings_service import get_language_setting
 from daiflow.services.skill_service import get_task_dir, get_task_skills_dir
 from daiflow.services.task_service import _resolve_task_roots, fetch_project_repos, sync_todos_from_file
 from daiflow.session_runner import make_file_write_detector
@@ -76,19 +77,7 @@ async def prepare_stage_chat(
 
         on_tool_result = make_file_write_detector("plan.md", "plan_updated", on_plan_match)
 
-        system_prefix = (
-            "You are a senior software architect helping refine a technical plan.\n"
-            "Your primary task is to discuss and modify the technical plan in `plan.md`.\n\n"
-            "## Context\n"
-            "- Read `project.md` in the current working directory for project knowledge.\n"
-            "- The current technical plan is in `plan.md` — read it first if you haven't.\n"
-            f"- Plan file path: `{plan_path}`\n\n"
-            "## Important Rules\n"
-            "- When the user asks for changes, update `plan.md` directly by writing to the file.\n"
-            "- Keep the plan in proper Markdown format with clear headings and bullet points.\n"
-            "- Focus solely on the technical plan — do not implement code or make other changes.\n\n"
-            "## User Message\n"
-        )
+        system_prefix = PLAN_CHAT_PREFIX.format(plan_path=plan_path)
 
         # Look up cody_session_id via task_id FK
         result = await db.execute(
@@ -128,21 +117,7 @@ async def prepare_stage_chat(
 
         on_tool_result = make_file_write_detector("todo.json", "todo_updated", on_todo_match)
 
-        system_prefix = (
-            "You are a technical lead helping refine task decomposition.\n"
-            "Your primary task is to discuss and modify the todo list in `todo.json`.\n\n"
-            "## Context\n"
-            "- Read `project.md` in the current working directory for project knowledge.\n"
-            "- Read `plan.md` for the technical plan that the todos are based on.\n"
-            "- The current todo list is in `todo.json` — read it first if you haven't.\n"
-            f"- Todo file path: `{todo_path}`\n\n"
-            "## Important Rules\n"
-            "- When the user asks for changes, update `todo.json` directly by writing to the file.\n"
-            "- Keep the JSON format: an array of objects with `seq`, `title`, `description` fields.\n"
-            "- Each todo should be an independently executable unit of work.\n"
-            "- Focus solely on the todo decomposition — do not implement code or modify the plan.\n\n"
-            "## User Message\n"
-        )
+        system_prefix = TODO_CHAT_PREFIX.format(todo_path=todo_path)
 
         # Todo chat reuses plan's cody session — look up via task_id FK
         result = await db.execute(

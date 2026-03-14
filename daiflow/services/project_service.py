@@ -6,11 +6,12 @@ from pathlib import Path
 
 from sqlalchemy import select, update
 
-from daiflow.services.settings_service import get_language_setting
 from daiflow.database import get_background_db
 from daiflow.models import ProjectRepo, Session, SessionStatus
+from daiflow.prompts import KNOWLEDGE_PROMPTS, PROJECT_MD_PROMPT
 from daiflow.services.cody_service import append_path_boundary, build_cody_client
 from daiflow.services.git_service import clone_or_pull, get_head_hash
+from daiflow.services.settings_service import get_language_setting
 from daiflow.services.skill_service import get_project_dir
 from daiflow.session_runner import SessionRunner, _append_log
 from daiflow.workflow.pipeline import run_simple_task
@@ -26,73 +27,6 @@ LAYER_2_TYPES = {
     "custom": ["backend-structure", "business-flow"],
 }
 LAYER_3_TYPES = ["module-overview", "api-interaction", "data-entity", "dependencies"]
-
-# Prompt templates for each knowledge type
-# Available placeholders: {output_path}, {repos_context}
-KNOWLEDGE_PROMPTS = {
-    "frontend-structure": (
-        "You have access to the following repositories:\n{repos_context}\n\n"
-        "Analyze the frontend repositories and generate a comprehensive skill document about the frontend directory structure. "
-        "Cover: directory organization, module responsibilities, naming conventions, and architectural patterns. "
-        "Write the output to {output_path}/SKILL.md in Agent Skills format with YAML frontmatter "
-        "(name: frontend-structure, description: Frontend directory structure analysis, user-invocable: false)."
-    ),
-    "backend-structure": (
-        "You have access to the following repositories:\n{repos_context}\n\n"
-        "Analyze the backend repositories and generate a comprehensive skill document about the backend directory structure. "
-        "Cover: directory organization, module responsibilities, naming conventions, and architectural patterns. "
-        "Write the output to {output_path}/SKILL.md in Agent Skills format with YAML frontmatter "
-        "(name: backend-structure, description: Backend directory structure analysis, user-invocable: false)."
-    ),
-    "business-flow": (
-        "You have access to the following repositories:\n{repos_context}\n\n"
-        "Analyze the repositories and generate a comprehensive skill document about business flows. "
-        "Cover: key user flows per module, state transitions, and data flow patterns. "
-        "Write the output to {output_path}/SKILL.md in Agent Skills format with YAML frontmatter "
-        "(name: business-flow, description: Business flow analysis per module, user-invocable: false)."
-    ),
-    "component-usage": (
-        "You have access to the following repositories:\n{repos_context}\n\n"
-        "Analyze the frontend repositories and generate a comprehensive skill document about component usage. "
-        "Cover: shared components, usage patterns, props interfaces, and composition patterns. "
-        "Write the output to {output_path}/SKILL.md in Agent Skills format with YAML frontmatter "
-        "(name: component-usage, description: Frontend component structure and reuse patterns, user-invocable: false)."
-    ),
-    "module-overview": (
-        "You have access to the following repositories:\n{repos_context}\n\n"
-        "Analyze all repositories and generate a comprehensive skill document about module breakdown. "
-        "Cover: all modules across frontend and backend, their responsibilities and boundaries. "
-        "Write the output to {output_path}/SKILL.md in Agent Skills format with YAML frontmatter "
-        "(name: module-overview, description: Module breakdown and descriptions, user-invocable: false)."
-    ),
-    "api-interaction": (
-        "You have access to the following repositories:\n{repos_context}\n\n"
-        "Analyze all repositories and generate a comprehensive skill document about API interactions. "
-        "Cover: API endpoints, request/response patterns, frontend-backend integration points. "
-        "Write the output to {output_path}/SKILL.md in Agent Skills format with YAML frontmatter "
-        "(name: api-interaction, description: Frontend-backend API interaction relationships, user-invocable: false)."
-    ),
-    "data-entity": (
-        "You have access to the following repositories:\n{repos_context}\n\n"
-        "Analyze all repositories and generate a comprehensive skill document about data entities. "
-        "Cover: data models, database schemas, data flow patterns, and entity relationships. "
-        "Write the output to {output_path}/SKILL.md in Agent Skills format with YAML frontmatter "
-        "(name: data-entity, description: Data entities and data flows per module, user-invocable: false)."
-    ),
-    "dependencies": (
-        "You have access to the following repositories:\n{repos_context}\n\n"
-        "Analyze all repositories and generate a comprehensive skill document about dependencies. "
-        "Cover: external dependencies, internal module dependencies, version requirements. "
-        "Write the output to {output_path}/SKILL.md in Agent Skills format with YAML frontmatter "
-        "(name: dependencies, description: Downstream dependencies per module, user-invocable: false)."
-    ),
-}
-
-PROJECT_MD_PROMPT = (
-    "Read all SKILL.md files under {output_path}/skills/ directory (each subdirectory contains one SKILL.md). "
-    "Generate a project.md index file that summarizes all skills and serves as a knowledge base entry point. "
-    "Write the output to {output_path}/project.md."
-)
 
 
 def repo_dir_name(git_url: str) -> str:

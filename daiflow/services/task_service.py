@@ -7,12 +7,13 @@ from pathlib import Path
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from daiflow.services.settings_service import get_language_setting
 from daiflow.database import get_background_db
 from daiflow.models import Project, ProjectRepo, Session, SessionStatus, Task, TaskStatus, Todo, TodoStatus
+from daiflow.prompts import PLAN_PROMPT_TEMPLATE, TODO_EXECUTE_PROMPT_TEMPLATE, TODO_PROMPT_TEMPLATE
 from daiflow.services.cody_service import append_path_boundary, build_cody_client
 from daiflow.services.git_service import checkout_branch, get_head_hash
 from daiflow.services.project_service import repo_dir_name
+from daiflow.services.settings_service import get_language_setting
 from daiflow.services.skill_service import get_project_dir, get_task_dir, get_task_skills_dir, sync_skills_to_task
 from daiflow.session_runner import SessionRunner, make_file_write_detector
 from daiflow.workflow import TaskWorkflow, TodoWorkflow
@@ -27,60 +28,6 @@ async def fetch_project_repos(db: AsyncSession, project_id: str) -> list:
         select(ProjectRepo).where(ProjectRepo.project_id == project_id)
     )
     return result.scalars().all()
-
-
-PLAN_PROMPT_TEMPLATE = (
-    "You are a senior software architect. Your task is to generate a comprehensive technical plan.\n\n"
-    "## Context\n"
-    "1. First, read `project.md` in the current working directory for project knowledge.\n"
-    "2. Then, read the relevant skill files in `.cody/skills/` for detailed module understanding.\n\n"
-    "## Task Description\n{description}\n\n"
-    "## PRD (Product Requirements)\n{prd}\n\n"
-    "## Existing Technical Ideas\n{tech_plan}\n\n"
-    "## Instructions\n"
-    "Write a complete technical plan to `{plan_path}`. The plan MUST include:\n"
-    "1. **Background & Goals** — What problem this solves\n"
-    "2. **Backend Changes** — API endpoints, services, models to add/modify\n"
-    "3. **Frontend Changes** — Components, pages, hooks to add/modify\n"
-    "4. **Data Changes** — Database schema, migration needs\n"
-    "5. **Impact Scope** — What existing features may be affected\n"
-    "6. **Implementation Order** — Recommended sequence of development\n\n"
-    "Use Markdown format with clear headings and bullet points."
-)
-
-TODO_PROMPT_TEMPLATE = (
-    "You are a technical lead decomposing a plan into actionable tasks.\n\n"
-    "## Context\n"
-    "1. Read `project.md` for project knowledge.\n"
-    "2. Read `plan.md` for the technical plan to decompose.\n\n"
-    "## Instructions\n"
-    "Based on the technical plan in `plan.md`, decompose the implementation into an ordered list of TODO items.\n"
-    "Each TODO should be an independently executable unit of work (one API endpoint, one component, etc.).\n\n"
-    "Write the result as a JSON array to `{todo_path}` with this exact format:\n"
-    "```json\n"
-    '[{{"seq": 1, "title": "Short title", "description": "Detailed description of what to implement and how"}}]\n'
-    "```\n\n"
-    "Guidelines:\n"
-    "- Order todos by dependency (implement foundations first)\n"
-    "- Each todo should be completable in a single coding session\n"
-    "- Include both backend and frontend tasks\n"
-    "- Be specific about files to create/modify"
-)
-
-TODO_EXECUTE_PROMPT_TEMPLATE = (
-    "You are a senior developer implementing a specific TODO item.\n\n"
-    "## Context\n"
-    "1. Read `project.md` for project knowledge.\n"
-    "2. Read `plan.md` for the overall technical plan.\n\n"
-    "## TODO #{seq}: {title}\n"
-    "{description}\n\n"
-    "## Instructions\n"
-    "Implement the changes described in this TODO item. Follow the technical plan in `plan.md`.\n"
-    "- Write clean, production-quality code\n"
-    "- Follow existing code conventions in the project\n"
-    "- Include necessary imports and type annotations\n"
-    "- Do NOT modify files outside the scope of this TODO"
-)
 
 
 def _copy_code_to_task(project_id: str, task_id: str, repos: list):
@@ -104,20 +51,26 @@ def _copy_code_to_task(project_id: str, task_id: str, repos: list):
                 logger.info("Copied code %s -> %s", src, dst)
 
 
+def resolve_repo_path(repo, task_id: str) -> str | None:
+    """Resolve the actual filesystem path for a repo in a task context.
+
+    - Repos with local_path: code lives in user's working directory
+    - Git-only repos: code lives in task/code/{repo_name} (isolated copy)
+    """
+    if repo.local_path:
+        return repo.local_path
+    elif repo.git_url:
+        return str(get_task_dir(task_id) / "code" / repo_dir_name(repo.git_url))
+    return None
+
+
 def _resolve_task_roots(task_id: str, repos: list) -> list[str]:
     """Resolve allowed_roots for a task.
 
     - Repos with local_path: use local_path directly (user's working directory)
     - Repos with git_url only: use task/code/{repo_name} (isolated copy)
     """
-    task_dir = get_task_dir(task_id)
-    roots = []
-    for r in repos:
-        if r.local_path:
-            roots.append(r.local_path)
-        elif r.git_url:
-            roots.append(str(task_dir / "code" / repo_dir_name(r.git_url)))
-    return roots
+    return [p for r in repos if (p := resolve_repo_path(r, task_id))]
 
 
 async def _do_fetch_code(db: AsyncSession, session_id: str, *, task_id: str, project_id: str, branch: str | None):
