@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react'
 import { useSession, SessionEvent } from './useSession'
 import { useStageChat, ChatMessage } from './useStageChat'
 import { useStaleDetection } from './useStaleDetection'
+import type { WSEvent } from '../ws'
 
 export interface UseAgentOptions {
   sessionId: string | null
@@ -11,7 +12,7 @@ export interface UseAgentOptions {
   /** Whether to enable chat functionality */
   chattable?: boolean
   /** Callback when an artifact-updated event arrives via chat */
-  onUpdated?: (event: any) => void
+  onUpdated?: (event: WSEvent) => void
 }
 
 export interface UseAgentReturn {

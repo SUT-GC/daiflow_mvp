@@ -5,7 +5,7 @@ import StageProgress from '../../../components/StageProgress/StageProgress'
 import { getTask, getTaskInitSessions, confirmInit, retryTaskInit, type TaskData, type InitSessionData } from '../../../api'
 import { useLocale } from '../../../hooks/useLocale'
 import { sessionIds } from '../../../utils/sessionIds'
-import { wsClient } from '../../../ws'
+import { wsClient, type WSEvent } from '../../../ws'
 import type { TranslationKey } from '../../../i18n'
 import '../../Projects/ProjectInit.css'
 
@@ -41,7 +41,7 @@ export default function InitStage() {
   useEffect(() => {
     if (!taskId) return
     const channel = sessionIds.taskInitBus(taskId)
-    const unsub = wsClient.subscribe(channel, (event: any) => {
+    const unsub = wsClient.subscribe(channel, (event: WSEvent) => {
       if (event.type === 'session_status') {
         setSessions(prev => prev.map(s =>
           s.session_id === event.session_id

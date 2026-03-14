@@ -115,6 +115,15 @@ class WebSocketClient {
 
     this.ws.onclose = () => {
       this.stopPing()
+      // Clear pending chat handlers — the WS is dead so responses will never arrive.
+      // Each handler receives an error event so callers can clean up.
+      for (const [channel, handler] of this.chatHandlers) {
+        try {
+          handler({ type: 'error', content: 'WebSocket disconnected' })
+        } catch { /* handler may throw, ignore */ }
+      }
+      this.chatHandlers.clear()
+
       if (!this.intentionalClose) {
         this.scheduleReconnect()
       }

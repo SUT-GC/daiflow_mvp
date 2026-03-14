@@ -92,7 +92,10 @@ class _ToolCallTracker:
             if call_id:
                 self._args[call_id] = event.get("args", {})
                 if len(self._args) > self._max:
-                    self._args.clear()
+                    # Evict oldest half instead of clearing all
+                    keys = list(self._args.keys())
+                    for k in keys[:len(keys) // 2]:
+                        del self._args[k]
             # Detect read_skill calls and emit skill_loaded event
             if event.get("tool_name") == "read_skill":
                 skill_name = event.get("args", {}).get("skill_name", "")
