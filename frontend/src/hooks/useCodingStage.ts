@@ -2,8 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { getTask, getTodos, getTaskDiff, getTodoDiff, joinDiffs, TaskData, TodoData } from '../api'
 import { SessionStatus, TodoStatus } from '../types/enums'
 import { sessionIds } from '../utils/sessionIds'
-import { useSession } from './useSession'
-import { useStageChat } from './useStageChat'
+import { useAgent } from './useAgent'
 
 /** Debounce delay (ms) before fetching diff after code_updated events. */
 const CODE_UPDATE_DEBOUNCE_MS = 500
@@ -13,7 +12,7 @@ export function useCodingStage(taskId: string | undefined) {
   const [todos, setTodos] = useState<TodoData[]>([])
   const [selectedTodo, setSelectedTodo] = useState<string | null>(null)
   const [diff, setDiff] = useState('')
-  const [error, setError] = useState<string | null>(null)
+  const [localError, setLocalError] = useState<string | null>(null)
 
   // Debounce timer for code_updated events
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -26,7 +25,7 @@ export function useCodingStage(taskId: string | undefined) {
       const td = await getTodos(taskId)
       setTodos(td)
     } catch (err: any) {
-      setError(err.message || 'Failed to load coding stage data')
+      setLocalError(err.message || 'Failed to load coding stage data')
     }
   }, [taskId])
 
@@ -34,8 +33,6 @@ export function useCodingStage(taskId: string | undefined) {
 
   const currentTodo = todos.find(t => t.id === selectedTodo)
   const sessionId = currentTodo && taskId ? sessionIds.todoExec(taskId, currentTodo.id) : null
-
-  const { status: todoSessionStatus, logs, error: sessionError } = useSession(sessionId)
 
   // Fetch per-todo diff when selecting a completed/failed todo
   const fetchTodoDiff = useCallback(async (todoId: string) => {
@@ -85,7 +82,7 @@ export function useCodingStage(taskId: string | undefined) {
           const td = await getTodos(taskId)
           setTodos(td)
         } catch (err: any) {
-          setError(err.message || 'Failed to refresh diff')
+          setLocalError(err.message || 'Failed to refresh diff')
         }
       }, CODE_UPDATE_DEBOUNCE_MS)
     }
@@ -98,24 +95,23 @@ export function useCodingStage(taskId: string | undefined) {
     }
   }, [])
 
-  const chat = useStageChat({
+  const agent = useAgent({
     sessionId,
     stage: 'todo_exec',
     entityId: currentTodo?.id || '',
     onUpdated,
-    sessionLogs: logs,
   })
 
   // Reload data when a todo execution completes, then fetch per-todo diff
   useEffect(() => {
-    if (todoSessionStatus === SessionStatus.DONE || todoSessionStatus === SessionStatus.FAILED) {
+    if (agent.status === SessionStatus.DONE || agent.status === SessionStatus.FAILED) {
       loadData()
       if (selectedTodo) {
         // Small delay to let backend commit the HEAD hash
         setTimeout(() => fetchTodoDiff(selectedTodo), 300)
       }
     }
-  }, [todoSessionStatus, loadData, selectedTodo, fetchTodoDiff])
+  }, [agent.status, loadData, selectedTodo, fetchTodoDiff])
 
   const allDone = todos.length > 0 && todos.every(t => t.status === TodoStatus.DONE || t.status === TodoStatus.SKIPPED)
 
@@ -125,11 +121,14 @@ export function useCodingStage(taskId: string | undefined) {
     selectedTodo,
     setSelectedTodo,
     diff,
-    todoSessionStatus,
-    logs,
+    todoSessionStatus: agent.status,
+    logs: agent.logs,
     loadData,
     allDone,
-    error: error || sessionError,
-    ...chat,
+    isStale: agent.isStale,
+    error: localError || agent.error,
+    messages: agent.messages,
+    sendMessage: agent.sendMessage,
+    streaming: agent.streaming,
   }
 }

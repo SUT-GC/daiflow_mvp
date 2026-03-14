@@ -42,31 +42,48 @@ async def get_session_status(session_id: str, db: AsyncSession = Depends(get_db)
     return SessionStatusResponse.model_validate(session).model_dump()
 
 
-def _read_logs_sync(log_path, limit: int, offset: int) -> list:
-    """Read JSONL logs from disk (sync, runs in thread pool)."""
-    logs = []
-    line_num = 0
+def _read_logs_sync(log_path, limit: int, offset: int, all_attempts: bool) -> list:
+    """Read JSONL logs from disk (sync, runs in thread pool).
+
+    By default, returns only logs from the latest run attempt
+    (everything after the last run_boundary marker). Set all_attempts=True
+    to return the full log history across all attempts.
+    """
+    all_logs: list[tuple[int, dict]] = []  # (index, parsed_event)
+    last_boundary = -1
+    idx = 0
     with open(log_path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
-            if line_num < offset:
-                line_num += 1
-                continue
-            if len(logs) >= limit:
-                break
             try:
-                logs.append(json.loads(line))
+                event = json.loads(line)
             except json.JSONDecodeError:
-                pass
-            line_num += 1
-    return logs
+                continue
+            all_logs.append((idx, event))
+            if event.get("type") == "run_boundary":
+                last_boundary = idx
+            idx += 1
+
+    # Filter to latest attempt unless all_attempts requested
+    if not all_attempts and last_boundary >= 0:
+        logs = [ev for (i, ev) in all_logs if i > last_boundary]
+    else:
+        logs = [ev for (_, ev) in all_logs]
+
+    # Apply offset + limit
+    return logs[offset : offset + limit]
 
 
 @router.get("/{session_id:path}/logs")
-async def get_session_logs(session_id: str, limit: int = 5000, offset: int = 0):
+async def get_session_logs(
+    session_id: str,
+    limit: int = 5000,
+    offset: int = 0,
+    all_attempts: bool = False,
+):
     log_path = SESSIONS_DIR / f"{safe_filename(session_id)}.jsonl"
     if not log_path.exists():
         return []
-    return await asyncio.to_thread(_read_logs_sync, log_path, limit, offset)
+    return await asyncio.to_thread(_read_logs_sync, log_path, limit, offset, all_attempts)

@@ -3,24 +3,22 @@ import { getTask, getTodos, TaskData, TodoData } from '../api'
 import { SessionStatus } from '../types/enums'
 import { sessionIds } from '../utils/sessionIds'
 import type { WSEvent } from '../ws'
-import { useSession } from './useSession'
-import { useStageChat } from './useStageChat'
+import { useAgent } from './useAgent'
 
 export function useTodoStage(taskId: string | undefined) {
   const [task, setTask] = useState<TaskData | null>(null)
   const [todos, setTodos] = useState<TodoData[]>([])
-  const [error, setError] = useState<string | null>(null)
-  const [sessionRefreshKey, setSessionRefreshKey] = useState(0)
+  const [localError, setLocalError] = useState<string | null>(null)
 
   const refreshTodos = useCallback(() => {
     if (taskId) {
-      getTodos(taskId).then(setTodos).catch(err => setError(err.message || 'Failed to load todos'))
+      getTodos(taskId).then(setTodos).catch(err => setLocalError(err.message || 'Failed to load todos'))
     }
   }, [taskId])
 
   const refreshTask = useCallback(() => {
     if (taskId) {
-      getTask(taskId).then(setTask).catch(err => setError(err.message || 'Failed to load task'))
+      getTask(taskId).then(setTask).catch(err => setLocalError(err.message || 'Failed to load task'))
     }
   }, [taskId])
 
@@ -30,43 +28,39 @@ export function useTodoStage(taskId: string | undefined) {
   }, [refreshTask, refreshTodos])
 
   const sessionId = taskId ? sessionIds.todoSplit(taskId) : null
-  const { status, logs, error: sessionError } = useSession(sessionId, sessionRefreshKey)
-
-  // Refresh task and todos when session completes (DB is synced at that point)
-  useEffect(() => {
-    if (status === SessionStatus.DONE) {
-      refreshTask()
-      refreshTodos()
-    }
-  }, [status, refreshTask, refreshTodos])
 
   const onUpdated = useCallback((event: WSEvent) => {
     if (event.type === 'todo_updated') {
-      // Re-fetch from DB to get full todo records with ids
       refreshTodos()
     }
   }, [refreshTodos])
 
-  const chat = useStageChat({
+  const agent = useAgent({
     sessionId,
     stage: 'todo',
     entityId: taskId || '',
     onUpdated,
-    sessionLogs: logs,
   })
 
-  const refreshSession = useCallback(() => {
-    setSessionRefreshKey(k => k + 1)
-  }, [])
+  // Refresh task and todos when session completes (DB is synced at that point)
+  useEffect(() => {
+    if (agent.status === SessionStatus.DONE) {
+      refreshTask()
+      refreshTodos()
+    }
+  }, [agent.status, refreshTask, refreshTodos])
 
   return {
     task,
     todos,
     setTodos,
-    status,
-    logs,
-    error: error || sessionError,
-    refreshSession,
-    ...chat,
+    status: agent.status,
+    logs: agent.logs,
+    error: localError || agent.error,
+    refreshSession: agent.refreshSession,
+    isStale: agent.isStale,
+    messages: agent.messages,
+    sendMessage: agent.sendMessage,
+    streaming: agent.streaming,
   }
 }

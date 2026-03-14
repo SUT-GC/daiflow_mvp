@@ -2,22 +2,16 @@ import json
 import logging
 import shutil
 from datetime import datetime, timezone
-from pathlib import Path
-
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from daiflow.database import get_background_db
 from daiflow.exceptions import InvalidStateError
 from daiflow.models import Project, ProjectRepo, Session, SessionStatus, Task, TaskStatus, Todo, TodoStatus
-from daiflow.prompts import PLAN_PROMPT_TEMPLATE, TODO_EXECUTE_PROMPT_TEMPLATE, TODO_PROMPT_TEMPLATE
-from daiflow.services.cody_service import append_path_boundary, build_task_cody_client
 from daiflow.services.git_service import checkout_branch, get_head_hash
 from daiflow.services.project_service import repo_dir_name
-from daiflow.services.settings_service import get_language_setting
 from daiflow.services.skill_service import get_project_dir, get_task_dir, sync_skills_to_task
-from daiflow.session_runner import SessionRunner, make_file_write_detector
-from daiflow.workflow import TaskWorkflow, TodoWorkflow
+from daiflow.workflow import TaskWorkflow
 from daiflow.session_ids import (
     task_init_bus,
     task_init_fetch,
@@ -102,34 +96,16 @@ async def get_task_context(db: AsyncSession, task_id: str, project_id: str) -> t
     return repos, allowed_roots
 
 
-async def _reset_or_create_session(
-    db: AsyncSession, session_id: str, session_type: str, ref_id: str, task_id: str,
-):
-    """Create a new Session record or reset an existing one to WAITING.
-
-    Used by generate_plan/generate_todos to ensure a clean session before each run.
-    """
-    existing = await db.get(Session, session_id)
-    if existing:
-        existing.status = SessionStatus.WAITING
-        existing.error = None
-        existing.cody_session_id = None
-        existing.started_at = None
-        existing.finished_at = None
-    else:
-        db.add(Session(session_id=session_id, type=session_type, ref_id=ref_id, task_id=task_id))
-    await db.commit()
-
 
 async def _do_fetch_code(db: AsyncSession, session_id: str, *, task_id: str, project_id: str, branch: str | None):
     """Subtask: copy code repos and checkout branch."""
-    from daiflow.session_runner import _append_log
+    from daiflow.session_runner import append_log
 
     repos = await fetch_project_repos(db, project_id)
     _copy_code_to_task(project_id, task_id, repos)
 
     now_iso = lambda: datetime.now(timezone.utc).isoformat()
-    await _append_log(session_id, {"type": "text_delta", "ts": now_iso(), "content": f"Copied {len(repos)} repo(s) to task directory\n"})
+    await append_log(session_id, {"type": "text_delta", "ts": now_iso(), "content": f"Copied {len(repos)} repo(s) to task directory\n"})
 
     if branch:
         for repo in repos:
@@ -139,18 +115,18 @@ async def _do_fetch_code(db: AsyncSession, session_id: str, *, task_id: str, pro
             label = repo.local_path or repo_dir_name(repo.git_url)
             try:
                 await checkout_branch(repo_path, branch)
-                await _append_log(session_id, {"type": "text_delta", "ts": now_iso(), "content": f"✓ Checked out branch '{branch}' on {label}\n"})
+                await append_log(session_id, {"type": "text_delta", "ts": now_iso(), "content": f"✓ Checked out branch '{branch}' on {label}\n"})
             except Exception as e:
                 logger.warning("Branch checkout for %s on %s: %s", branch, repo_path, e)
-                await _append_log(session_id, {"type": "text_delta", "ts": now_iso(), "content": f"⚠ Branch checkout failed on {label}: {e}\n"})
+                await append_log(session_id, {"type": "text_delta", "ts": now_iso(), "content": f"⚠ Branch checkout failed on {label}: {e}\n"})
 
 
 async def _do_sync_skills(db: AsyncSession, session_id: str, *, task_id: str, project_id: str):
     """Subtask: sync project skills to task directory."""
-    from daiflow.session_runner import _append_log
+    from daiflow.session_runner import append_log
 
     sync_skills_to_task(project_id, task_id)
-    await _append_log(session_id, {"type": "text_delta", "ts": datetime.now(timezone.utc).isoformat(), "content": "✓ Synced project skills to task\n"})
+    await append_log(session_id, {"type": "text_delta", "ts": datetime.now(timezone.utc).isoformat(), "content": "✓ Synced project skills to task\n"})
 
 
 async def init_task(task_id: str, ws_manager: WSManager | None = None):
@@ -220,129 +196,36 @@ async def generate_plan(task_id: str):
     """Generate technical plan for a task.
 
     Uses an independent DB session for background execution.
+    Delegates to AgentExecutor with the "plan" agent config.
     """
+    from daiflow.agent_executor import run_agent
+
     async with get_background_db() as db:
         task = await db.get(Task, task_id)
         if not task:
             logger.debug("Task %s deleted before plan generation started", task_id)
             return
 
-        task_dir = get_task_dir(task_id)
-        plan_path = task_dir / "plan.md"
-
         session_id = task_plan(task_id)
-        await _reset_or_create_session(db, session_id, "plan", task_id, task_id)
-
-        # Build prompt
-        repos, allowed_roots = await get_task_context(db, task_id, task.project_id)
-        prompt = PLAN_PROMPT_TEMPLATE.format(
-            description=task.description or "",
-            prd=task.prd or "",
-            tech_plan=task.tech_plan or "",
-            plan_path=str(plan_path),
-        )
-        prompt = append_path_boundary(prompt, str(task_dir), allowed_roots)
-
-        # Run Cody via SessionRunner
-        lang = await get_language_setting(db)
-        client = await build_task_cody_client(db, task_id, task.project_id)
-
-        async def on_plan_match(_file_path):
-            if plan_path.exists():
-                content = plan_path.read_text(encoding="utf-8")
-                task.tech_plan = content
-                await db.commit()
-                return content
-            return None
-
-        on_tool_result = make_file_write_detector("plan.md", "plan_updated", on_plan_match)
-
-        runner = SessionRunner(client)
-        async with client:
-            await runner.run(db, session_id, prompt, language=lang, on_tool_result=on_tool_result)
-
-        # Re-check task existence before updating (task may have been deleted)
-        task = await db.get(Task, task_id)
-        if not task:
-            logger.debug("Task %s deleted before plan write", task_id)
-            return
-
-        # Read plan.md and store in task
-        if plan_path.exists():
-            task.tech_plan = plan_path.read_text(encoding="utf-8")
-        await db.commit()
+        await run_agent(db, "plan", entity_id=task_id, session_id=session_id)
 
 
 async def generate_todos(task_id: str):
     """Generate todo decomposition from the plan.
 
     Reuses the plan's Cody session for context continuity.
-    Uses an independent DB session for background execution.
+    Delegates to AgentExecutor with the "todo_split" agent config.
     """
+    from daiflow.agent_executor import run_agent
+
     async with get_background_db() as db:
         task = await db.get(Task, task_id)
         if not task:
             logger.debug("Task %s deleted before todo generation started", task_id)
             return
 
-        task_dir = get_task_dir(task_id)
-        todo_path = task_dir / "todo.json"
-
         session_id = task_todo_split(task_id)
-        await _reset_or_create_session(db, session_id, "todo_split", task_id, task_id)
-
-        repos, allowed_roots = await get_task_context(db, task_id, task.project_id)
-        prompt = TODO_PROMPT_TEMPLATE.format(todo_path=str(todo_path))
-        prompt = append_path_boundary(prompt, str(task_dir), allowed_roots)
-
-        # Reuse plan's Cody session for context continuity
-        lang = await get_language_setting(db)
-        client = await build_task_cody_client(db, task_id, task.project_id)
-
-        # Look up plan's cody_session_id via task_id FK
-        result = await db.execute(
-            select(Session.cody_session_id).where(
-                Session.task_id == task_id, Session.type == "plan",
-            )
-        )
-        plan_cody_sid = result.scalar()
-
-        async def on_todo_match(_file_path):
-            if todo_path.exists():
-                return todo_path.read_text(encoding="utf-8")
-            return None
-
-        on_tool_result = make_file_write_detector("todo.json", "todo_updated", on_todo_match)
-
-        runner = SessionRunner(client)
-        async with client:
-            await runner.run(
-                db, session_id, prompt,
-                cody_session_id=plan_cody_sid,
-                language=lang,
-                on_tool_result=on_tool_result,
-            )
-
-        # Re-check task existence before updating (task may have been deleted)
-        task = await db.get(Task, task_id)
-        if not task:
-            logger.debug("Task %s deleted before todo write", task_id)
-            return
-
-        # Parse todo.json and insert todos into DB
-        if todo_path.exists():
-            try:
-                _insert_todos(db, task_id, _parse_todos_json(todo_path.read_text(encoding="utf-8")))
-            except (json.JSONDecodeError, KeyError, TypeError) as e:
-                logger.error("Failed to parse todo.json for task %s: %s", task_id, e)
-                # Still transition to TODO_READY so user can retry via chat
-        else:
-            logger.warning("todo.json not found for task %s after generation", task_id)
-
-        # Transition: plan_locked → todo_ready
-        wf = TaskWorkflow(task, db)
-        await wf.todos_ready()
-        await db.commit()
+        await run_agent(db, "todo_split", entity_id=task_id, session_id=session_id)
 
 
 async def sync_todos_from_file(db: AsyncSession, task_id: str, content: str):
@@ -437,8 +320,10 @@ async def execute_todo(todo_id: str):
 
     The router has already transitioned the todo to RUNNING.
     This function runs Cody and transitions to done/failed.
-    Uses an independent DB session for background execution.
+    Delegates to AgentExecutor with the "todo_exec" agent config.
     """
+    from daiflow.agent_executor import run_agent
+
     async with get_background_db() as db:
         todo = await db.get(Todo, todo_id)
         if not todo:
@@ -448,15 +333,7 @@ async def execute_todo(todo_id: str):
         if not task:
             return
 
-        task_dir = get_task_dir(task.id)
-
-        repos, allowed_roots = await get_task_context(db, task.id, task.project_id)
-
-        session_id = task_todo_exec(task.id, todo_id)
-        existing_session = await db.get(Session, session_id)
-        if not existing_session:
-            session = Session(session_id=session_id, type="todo_exec", ref_id=todo_id, task_id=task.id)
-            db.add(session)
+        _, allowed_roots = await get_task_context(db, task.id, task.project_id)
 
         # Record HEAD hash of each repo before execution
         head_before: dict[str, str] = {}
@@ -468,39 +345,5 @@ async def execute_todo(todo_id: str):
         todo.commit_before = json.dumps(head_before)
         await db.commit()
 
-        prompt = TODO_EXECUTE_PROMPT_TEMPLATE.format(
-            seq=todo.seq,
-            title=todo.title,
-            description=todo.description,
-        )
-        prompt = append_path_boundary(prompt, str(task_dir), allowed_roots)
-
-        lang = await get_language_setting(db)
-        client = await build_task_cody_client(db, task.id, task.project_id)
-        runner = SessionRunner(client)
-        on_tool_result = make_file_write_detector(None, "code_updated")
-        async with client:
-            await runner.run(db, session_id, prompt, on_tool_result=on_tool_result, language=lang)
-
-        # Record HEAD hash of each repo after execution
-        head_after: dict[str, str] = {}
-        for root in allowed_roots:
-            try:
-                head_after[root] = await get_head_hash(root)
-            except Exception:
-                pass
-        todo.commit_after = json.dumps(head_after)
-
-        # Update todo status
-        if runner.last_cody_session_id:
-            todo.cody_session_id = runner.last_cody_session_id
-
-        # Transition: running → done or running → failed
-        session_rec = await db.get(Session, session_id)
-        succeeded = session_rec and session_rec.status == SessionStatus.DONE
-        todo_wf = TodoWorkflow(todo, db)
-        if succeeded:
-            await todo_wf.complete()
-        else:
-            await todo_wf.fail()
-        await db.commit()
+        session_id = task_todo_exec(task.id, todo_id)
+        await run_agent(db, "todo_exec", entity_id=todo_id, session_id=session_id, task_id=task.id)

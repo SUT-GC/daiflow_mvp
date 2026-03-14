@@ -11,7 +11,7 @@ export default function TodoStage() {
   const { taskId } = useParams()
   const navigate = useNavigate()
   const { t } = useLocale()
-  const { task, todos, status, messages, sendMessage, streaming, refreshSession } = useTodoStage(taskId)
+  const { task, todos, status, messages, sendMessage, streaming, refreshSession, isStale } = useTodoStage(taskId)
   const [selectedTodo, setSelectedTodo] = useState<TodoData | null>(null)
 
   const handleRedecompose = async () => {
@@ -82,6 +82,8 @@ export default function TodoStage() {
         chatMessages={messages}
         chatOnSend={sendMessage}
         chatStreaming={streaming}
+        isStale={isStale}
+        onRetry={refreshSession}
       />
 
       {/* Todo Detail Modal */}

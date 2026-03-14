@@ -69,7 +69,7 @@ def _append_log_sync(path: Path, data: str):
         f.write(data)
 
 
-async def _append_log(session_id: str, event: dict):
+async def append_log(session_id: str, event: dict):
     path = _log_path(session_id)
     data = json.dumps(event, ensure_ascii=False) + "\n"
     await asyncio.to_thread(_append_log_sync, path, data)
@@ -154,17 +154,20 @@ class SessionRunner:
             prompt = prompt + LANGUAGE_INSTRUCTIONS.get(language, "")
         channel = f"session:{session_id}"
 
-        # Clear previous log file (for regenerate scenarios)
+        # Append run_boundary marker instead of deleting (preserves previous attempts)
         log_file = _log_path(session_id)
         if log_file.exists():
-            log_file.unlink()
+            await append_log(session_id, {"type": "run_boundary", "ts": _now().isoformat()})
 
-        # Update session status to running
+        # Update session status to running; store cody_session_id immediately if reusing
         run_started_at = _now()
+        run_values = {"status": SessionStatus.RUNNING, "started_at": run_started_at}
+        if cody_session_id:
+            run_values["cody_session_id"] = cody_session_id
         await db.execute(
             update(Session)
             .where(Session.session_id == session_id)
-            .values(status=SessionStatus.RUNNING, started_at=run_started_at)
+            .values(**run_values)
         )
         await db.commit()
 
@@ -180,7 +183,7 @@ class SessionRunner:
 
         # Log user message
         user_event = {"type": "user_message", "content": prompt, "ts": _now().isoformat()}
-        await _append_log(session_id, user_event)
+        await append_log(session_id, user_event)
 
         try:
             result_cody_session_id = None
@@ -193,11 +196,11 @@ class SessionRunner:
                 async for chunk in self.client.stream(prompt, **stream_kwargs):
                     event = _chunk_to_event(chunk)
                     if event is None:
-                        await _append_log(session_id, {"type": "compact", "ts": _now().isoformat()})
+                        await append_log(session_id, {"type": "compact", "ts": _now().isoformat()})
                         continue
 
                     event["ts"] = _now().isoformat()
-                    await _append_log(session_id, event)
+                    await append_log(session_id, event)
 
                     if event["type"] == "done":
                         if hasattr(chunk, "session_id"):
@@ -205,7 +208,7 @@ class SessionRunner:
 
                         status_event = {"type": "status_change", "status": SessionStatus.DONE, "ts": event["ts"]}
                         await self._ws.publish(channel, status_event)
-                        await _append_log(session_id, status_event)
+                        await append_log(session_id, status_event)
 
                         done_finished_at = _now()
                         if extra_channels:
@@ -223,7 +226,7 @@ class SessionRunner:
                         skill_event = self._tracker.on_event(event)
                         if skill_event:
                             skill_event["ts"] = event["ts"]
-                            await _append_log(session_id, skill_event)
+                            await append_log(session_id, skill_event)
                             await self._ws.publish(channel, skill_event)
                             if extra_channels:
                                 for ch in extra_channels:
@@ -232,7 +235,7 @@ class SessionRunner:
                             self._tracker.enrich(event)
                             extra_event = await on_tool_result(event)
                             if extra_event:
-                                await _append_log(session_id, extra_event)
+                                await append_log(session_id, extra_event)
                                 await self._ws.publish(channel, extra_event)
 
             self._last_cody_session_id = result_cody_session_id
@@ -252,7 +255,7 @@ class SessionRunner:
         except Exception as e:
             error_msg = traceback.format_exc()
             error_event = {"type": "error", "content": str(e), "ts": _now().isoformat()}
-            await _append_log(session_id, error_event)
+            await append_log(session_id, error_event)
 
             status_event = {"type": "status_change", "status": SessionStatus.FAILED, "error": str(e), "ts": _now().isoformat()}
             await self._ws.publish(channel, status_event)
@@ -298,7 +301,7 @@ async def run_stage_chat(
 
     # Log user message
     user_event = {"type": "user_message", "content": message, "ts": _now().isoformat()}
-    await _append_log(session_id, user_event)
+    await append_log(session_id, user_event)
 
     tracker = _ToolCallTracker()
 
@@ -314,7 +317,7 @@ async def run_stage_chat(
                     continue
 
                 event["ts"] = _now().isoformat()
-                await _append_log(session_id, event)
+                await append_log(session_id, event)
 
                 if event["type"] == "done":
                     yield {"type": "done"}
@@ -325,18 +328,18 @@ async def run_stage_chat(
                 skill_event = tracker.on_event(event)
                 if skill_event:
                     skill_event["ts"] = event["ts"]
-                    await _append_log(session_id, skill_event)
+                    await append_log(session_id, skill_event)
                     yield skill_event
                 if event["type"] == "tool_result" and on_tool_result:
                     tracker.enrich(event)
                     updated_event = await on_tool_result(event)
                     if updated_event:
-                        await _append_log(session_id, updated_event)
+                        await append_log(session_id, updated_event)
                         yield updated_event
 
     except Exception as e:
         error_event = {"type": "error", "content": str(e), "ts": _now().isoformat()}
-        await _append_log(session_id, error_event)
+        await append_log(session_id, error_event)
         yield error_event
 
 

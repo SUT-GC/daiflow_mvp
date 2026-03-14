@@ -9,7 +9,7 @@ export default function PlanStage() {
   const { taskId } = useParams()
   const navigate = useNavigate()
   const { t } = useLocale()
-  const { task, planContent, status, messages, sendMessage, streaming, regenerating, refreshSession } = usePlanStage(taskId)
+  const { task, planContent, status, messages, sendMessage, streaming, regenerating, refreshSession, isStale } = usePlanStage(taskId)
 
   const readonly = task ? isStageReadonly(task.status, 2) : false
 
@@ -73,6 +73,8 @@ export default function PlanStage() {
       chatMessages={messages}
       chatOnSend={sendMessage}
       chatStreaming={streaming}
+      isStale={isStale}
+      onRetry={refreshSession}
     />
   )
 }

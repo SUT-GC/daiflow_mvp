@@ -250,12 +250,23 @@ const zh: Record<TranslationKey, string> = {
   'debug.no_changes': '无变更',
   'debug.search_logs': '搜索日志...',
   'debug.select_session_hint': '选择项目、范围和 Session 查看日志',
+  'debug.select_session_from_list': '从列表中选择一个 Session 查看日志',
+  'debug.all_sessions': '所有 Sessions',
+  'debug.overview': '总览',
+  'debug.by_project': '按项目',
+  'debug.no_matching_sessions': '没有匹配的 Session',
+  'debug.all_types': '全部类型',
+  'debug.all_status': '全部状态',
   'debug.loading': '加载日志中...',
 
   // ErrorBoundary
   'error.title': '出现错误',
   'error.try_again': '重试',
   'error.back_to_tasks': '返回任务列表',
+
+  // Stale session
+  'stale.message': '会话可能已中断 — 超过 5 分钟无活动。',
+  'stale.retry': '重试',
 }
 
 export default zh

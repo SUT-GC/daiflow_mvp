@@ -248,12 +248,23 @@ const en = {
   'debug.no_changes': 'no changes',
   'debug.search_logs': 'Search logs...',
   'debug.select_session_hint': 'Select a project, scope, and session to view logs',
+  'debug.select_session_from_list': 'Select a session from the list to view logs',
+  'debug.all_sessions': 'All Sessions',
+  'debug.overview': 'overview',
+  'debug.by_project': 'By Project',
+  'debug.no_matching_sessions': 'No sessions match the filter',
+  'debug.all_types': 'All Types',
+  'debug.all_status': 'All Status',
   'debug.loading': 'Loading logs...',
 
   // ErrorBoundary
   'error.title': 'Something went wrong',
   'error.try_again': 'Try Again',
   'error.back_to_tasks': 'Return to Tasks',
+
+  // Stale session
+  'stale.message': 'Session may have been interrupted — no activity for 5 minutes.',
+  'stale.retry': 'Retry',
 } as const
 
 export type TranslationKey = keyof typeof en

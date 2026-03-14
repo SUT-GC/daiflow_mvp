@@ -21,12 +21,14 @@ async def _recover_interrupted_sessions():
 
     Also auto-retries interrupted init pipelines and recovers
     todos/tasks stuck in transitional states due to lost background tasks.
+    Publishes WS status_change events so any connected frontends are notified.
     """
     from datetime import datetime, timezone
     from sqlalchemy import select
     from daiflow.database import get_background_db
     from daiflow.models import Session, SessionStatus, Todo, TodoStatus
     from daiflow.services.project_service import run_init_retry
+    from daiflow.ws_manager import ws_manager
 
     async with get_background_db() as db:
         # Find ALL RUNNING sessions (interrupted by shutdown)
@@ -60,6 +62,13 @@ async def _recover_interrupted_sessions():
                 sum(1 for s in interrupted if s.type == "init"),
                 sum(1 for s in interrupted if s.type != "init"),
             )
+
+            # Publish WS events so reconnected frontends see FAILED state
+            for s in interrupted:
+                await ws_manager.publish(
+                    f"session:{s.session_id}",
+                    {"type": "status_change", "status": SessionStatus.FAILED, "error": s.error},
+                )
 
             # Auto-retry each affected init project
             for pid, info in projects_to_retry.items():

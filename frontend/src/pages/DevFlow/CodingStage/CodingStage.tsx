@@ -16,7 +16,7 @@ export default function CodingStage() {
 
   const {
     task, todos, selectedTodo, setSelectedTodo, diff,
-    todoSessionStatus, allDone, loadData,
+    todoSessionStatus, allDone, loadData, isStale,
     messages, sendMessage, streaming,
   } = useCodingStage(taskId)
 
@@ -179,6 +179,7 @@ export default function CodingStage() {
       chatMessages={messages}
       chatOnSend={sendMessage}
       chatStreaming={streaming}
+      isStale={isStale}
     />
   )
 }
