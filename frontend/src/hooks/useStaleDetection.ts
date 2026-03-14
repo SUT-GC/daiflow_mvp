@@ -11,7 +11,7 @@ import { SessionStatus } from '../types/enums'
 export function useStaleDetection(
   status: number,
   logsLength: number,
-  thresholdMs = 60_000,
+  thresholdMs = 300_000,
 ): boolean {
   const [isStale, setIsStale] = useState(false)
   const lastEventTimeRef = useRef(Date.now())
