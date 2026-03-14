@@ -255,6 +255,8 @@ const zh: Record<TranslationKey, string> = {
   'debug.overview': '总览',
   'debug.by_project': '按项目',
   'debug.no_matching_sessions': '没有匹配的 Session',
+  'debug.all_types': '全部类型',
+  'debug.all_status': '全部状态',
   'debug.loading': '加载日志中...',
 
   // ErrorBoundary

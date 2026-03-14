@@ -253,6 +253,8 @@ const en = {
   'debug.overview': 'overview',
   'debug.by_project': 'By Project',
   'debug.no_matching_sessions': 'No sessions match the filter',
+  'debug.all_types': 'All Types',
+  'debug.all_status': 'All Status',
   'debug.loading': 'Loading logs...',
 
   // ErrorBoundary

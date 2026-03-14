@@ -26,6 +26,14 @@ const STAGE_LABELS: Record<string, string> = {
   review: 'Review',
 }
 
+const STAGE_TAG_CLS: Record<string, string> = {
+  init: 'tag-purple',
+  plan: 'tag-blue',
+  todo_split: 'tag-teal',
+  todo_exec: 'tag-amber',
+  review: 'tag-green',
+}
+
 const LOG_TYPE_FILTERS = ['all', 'text_delta', 'thinking', 'tool_call', 'tool_result', 'error', 'done', 'status_change']
 
 export default function Debug() {
@@ -280,8 +288,8 @@ export default function Debug() {
                     value={allSessionsTypeFilter}
                     onChange={e => setAllSessionsTypeFilter(e.target.value)}
                   >
-                    {allSessionTypes.map(t => (
-                      <option key={t} value={t}>{t === 'all' ? 'All Types' : STAGE_LABELS[t] || t}</option>
+                    {allSessionTypes.map(tp => (
+                      <option key={tp} value={tp}>{tp === 'all' ? t('debug.all_types') : STAGE_LABELS[tp] || tp}</option>
                     ))}
                   </select>
                   <select
@@ -289,7 +297,7 @@ export default function Debug() {
                     value={allSessionsStatusFilter}
                     onChange={e => setAllSessionsStatusFilter(e.target.value)}
                   >
-                    <option value="all">All Status</option>
+                    <option value="all">{t('debug.all_status')}</option>
                     {Object.entries(SESSION_STATUS_LABELS).map(([k, v]) => (
                       <option key={k} value={k}>{v.label}</option>
                     ))}
@@ -298,16 +306,22 @@ export default function Debug() {
                 </div>
                 {filteredAllSessions.map(s => {
                   const st = SESSION_STATUS_LABELS[s.status] || SESSION_STATUS_LABELS[0]
+                  const typeLabel = STAGE_LABELS[s.type] || s.type
+                  // Show a short label: extract the meaningful suffix from session_id
+                  const shortLabel = s.session_id.split(':').slice(-1)[0]
                   return (
                     <button
                       key={s.session_id}
                       className={`debug-item ${selectedSession === s.session_id ? 'active' : ''}`}
                       onClick={() => setSelectedSession(s.session_id)}
+                      title={s.session_id}
                     >
-                      <span className="debug-item-name" title={s.session_id}>
-                        {s.session_id}
+                      <span className="debug-item-name">
+                        <span className={`tag tag-sm ${STAGE_TAG_CLS[s.type] || 'tag-dim'}`}>{typeLabel}</span>
+                        {' '}{shortLabel}
                       </span>
                       <span className="debug-item-right">
+                        <span className="debug-item-duration">{formatDuration(s.started_at, s.finished_at)}</span>
                         <span className={`tag ${st.cls}`}>{st.label}</span>
                       </span>
                     </button>
