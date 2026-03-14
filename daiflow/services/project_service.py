@@ -295,34 +295,21 @@ async def run_init(project_id: str):
 
         # Resolve allowed_roots: git-cloned paths take priority over local_path
         allowed_roots = await _resolve_allowed_roots(project_dir, repos)
-
-        # Layer 2: Per-repo knowledge (concurrent)
-        layer2_sessions = await db.execute(
-            select(Session).where(Session.ref_id == project_id, Session.layer == 2)
-        )
-        layer2 = layer2_sessions.scalars().all()
-
         lang = await get_language_setting(db)
 
-        layer2_ok = await _run_layer(layer2, 2, project_dir, allowed_roots, repos, project_bus, lang)
-
-        if not layer2_ok:
-            logger.error("Layer 2 had failures, aborting init for project %s", project_id)
-            await _finalize_init(db, project_id, project_bus)
-            return
-
-        # Layer 3: Cross-repo knowledge (concurrent)
-        layer3_sessions = await db.execute(
-            select(Session).where(Session.ref_id == project_id, Session.layer == 3)
-        )
-        layer3 = layer3_sessions.scalars().all()
-
-        layer3_ok = await _run_layer(layer3, 3, project_dir, allowed_roots, repos, project_bus, lang)
-
-        if not layer3_ok:
-            logger.error("Layer 3 had failures, aborting init for project %s", project_id)
-            await _finalize_init(db, project_id, project_bus)
-            return
+        # Layers 2 & 3: knowledge generation (concurrent within each layer, serial across)
+        for layer_num in (2, 3):
+            layer_sessions = await db.execute(
+                select(Session).where(Session.ref_id == project_id, Session.layer == layer_num)
+            )
+            layer_ok = await _run_layer(
+                layer_sessions.scalars().all(), layer_num,
+                project_dir, allowed_roots, repos, project_bus, lang,
+            )
+            if not layer_ok:
+                logger.error("Layer %d had failures, aborting init for project %s", layer_num, project_id)
+                await _finalize_init(db, project_id, project_bus)
+                return
 
         # Layer 4: Generate project.md
         try:

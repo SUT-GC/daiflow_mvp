@@ -2,6 +2,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from daiflow.config import CODY_DB_PATH
+from daiflow.exceptions import ConfigurationError
 from daiflow.models import Setting
 
 
@@ -29,7 +30,7 @@ async def build_cody_client(
     api_key = settings.get("cody_api_key", "")
 
     if not all([model, base_url, api_key]):
-        raise ValueError("AI model not configured. Please set cody_model, cody_base_url, and cody_api_key in Settings.")
+        raise ConfigurationError("AI model not configured. Please set cody_model, cody_base_url, and cody_api_key in Settings.")
 
     builder = (
         Cody()

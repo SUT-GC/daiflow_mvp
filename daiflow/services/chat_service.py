@@ -10,6 +10,7 @@ from typing import Any, Callable
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from daiflow.exceptions import InvalidStateError, NotFoundError
 from daiflow.models import Session, Task, TaskStatus, Todo
 from daiflow.prompts import PLAN_CHAT_PREFIX, TODO_CHAT_PREFIX
 from daiflow.services.cody_service import build_task_cody_client
@@ -46,14 +47,15 @@ async def prepare_stage_chat(
         StageChatContext with all fields populated.
 
     Raises:
-        ValueError: If the entity is not found or in an invalid state.
+        NotFoundError: If the entity is not found.
+        InvalidStateError: If the entity is in an invalid state for chat.
     """
     lang = await get_language_setting(db)
 
     if stage == "plan":
         task = await db.get(Task, entity_id)
         if not task:
-            raise ValueError(f"Task {entity_id} not found")
+            raise NotFoundError(f"Task {entity_id} not found")
 
         session_id = task_plan(entity_id)
         task_dir = get_task_dir(entity_id)
@@ -92,7 +94,7 @@ async def prepare_stage_chat(
     elif stage == "todo":
         task = await db.get(Task, entity_id)
         if not task:
-            raise ValueError(f"Task {entity_id} not found")
+            raise NotFoundError(f"Task {entity_id} not found")
 
         session_id = task_todo_split(entity_id)
         task_dir = get_task_dir(entity_id)
@@ -130,13 +132,13 @@ async def prepare_stage_chat(
     elif stage == "todo_exec":
         todo = await db.get(Todo, entity_id)
         if not todo:
-            raise ValueError(f"Todo {entity_id} not found")
+            raise NotFoundError(f"Todo {entity_id} not found")
 
         task = await db.get(Task, todo.task_id)
         if not task:
-            raise ValueError(f"Task {todo.task_id} not found")
+            raise NotFoundError(f"Task {todo.task_id} not found")
         if task.status != TaskStatus.CODING:
-            raise ValueError("Task is not in coding stage")
+            raise InvalidStateError("Task is not in coding stage")
 
         session_id = task_todo_exec(task.id, entity_id)
         client = await build_task_cody_client(db, task.id, task.project_id)
@@ -153,7 +155,7 @@ async def prepare_stage_chat(
     elif stage == "review":
         task = await db.get(Task, entity_id)
         if not task:
-            raise ValueError(f"Task {entity_id} not found")
+            raise NotFoundError(f"Task {entity_id} not found")
 
         session_id = task_review(entity_id)
         client = await build_task_cody_client(db, entity_id, task.project_id)
@@ -176,4 +178,4 @@ async def prepare_stage_chat(
         )
 
     else:
-        raise ValueError(f"Unknown stage: {stage}")
+        raise InvalidStateError(f"Unknown stage: {stage}")

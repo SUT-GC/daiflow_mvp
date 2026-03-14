@@ -76,6 +76,11 @@ export interface DiffData {
   diffs: { repo: string; repo_type: string; diff: string; error?: string }[]
 }
 
+/** Extract and join raw diff strings from a DiffData response. */
+export function joinDiffs(data: DiffData): string {
+  return data.diffs?.map(d => d.diff).join('\n') || ''
+}
+
 interface CreateProjectData {
   name: string
   description?: string

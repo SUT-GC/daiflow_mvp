@@ -17,12 +17,12 @@ from daiflow.workflow.task_machine import TaskWorkflow
 logger = logging.getLogger(__name__)
 
 
-class TransitionError(Exception):
-    """Raised when a state transition is invalid."""
+from daiflow.exceptions import InvalidStateError
 
-    def __init__(self, message: str, status_code: int = 400):
-        super().__init__(message)
-        self.status_code = status_code
+
+class TransitionError(InvalidStateError):
+    """Raised when a state transition is invalid."""
+    pass
 
 
 async def lock_plan_and_generate_todos(db: AsyncSession, task: Task) -> None:

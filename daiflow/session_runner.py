@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from daiflow.config import FILE_WRITE_TOOLS, LANGUAGE_INSTRUCTIONS, SESSIONS_DIR, safe_filename
 from daiflow.models import Session, SessionStatus
-from daiflow.ws_manager import ws_manager
+from daiflow.ws_manager import WSManager, ws_manager as _default_ws_manager
 
 logger = logging.getLogger(__name__)
 
@@ -112,10 +112,16 @@ class SessionRunner:
     """Unified AI task executor that wraps a Cody client.
 
     Supports client reuse across sessions (e.g. plan + todo share one client).
+
+    Args:
+        cody_client: The Cody SDK client to use for streaming.
+        ws_manager: WebSocket manager for publishing events. Defaults to the
+            global singleton. Accept as parameter for testability.
     """
 
-    def __init__(self, cody_client):
+    def __init__(self, cody_client, ws_manager: WSManager | None = None):
         self.client = cody_client
+        self._ws = ws_manager or _default_ws_manager
         self._last_cody_session_id: str | None = None
         self._tracker = _ToolCallTracker()
 
@@ -165,7 +171,7 @@ class SessionRunner:
         # Notify extra channels (e.g. project init bus) that session started
         if extra_channels:
             for ch in extra_channels:
-                await ws_manager.publish(ch, {
+                await self._ws.publish(ch, {
                     "type": "session_status",
                     "session_id": session_id,
                     "status": SessionStatus.RUNNING,
@@ -198,13 +204,13 @@ class SessionRunner:
                             result_cody_session_id = chunk.session_id
 
                         status_event = {"type": "status_change", "status": SessionStatus.DONE, "ts": event["ts"]}
-                        await ws_manager.publish(channel, status_event)
+                        await self._ws.publish(channel, status_event)
                         await _append_log(session_id, status_event)
 
                         done_finished_at = _now()
                         if extra_channels:
                             for ch in extra_channels:
-                                await ws_manager.publish(ch, {
+                                await self._ws.publish(ch, {
                                     "type": "session_status",
                                     "session_id": session_id,
                                     "status": SessionStatus.DONE,
@@ -212,22 +218,22 @@ class SessionRunner:
                                     "ts": event["ts"],
                                 })
                     else:
-                        await ws_manager.publish(channel, event)
+                        await self._ws.publish(channel, event)
 
                         skill_event = self._tracker.on_event(event)
                         if skill_event:
                             skill_event["ts"] = event["ts"]
                             await _append_log(session_id, skill_event)
-                            await ws_manager.publish(channel, skill_event)
+                            await self._ws.publish(channel, skill_event)
                             if extra_channels:
                                 for ch in extra_channels:
-                                    await ws_manager.publish(ch, {**skill_event, "session_id": session_id})
+                                    await self._ws.publish(ch, {**skill_event, "session_id": session_id})
                         if event["type"] == "tool_result" and on_tool_result:
                             self._tracker.enrich(event)
                             extra_event = await on_tool_result(event)
                             if extra_event:
                                 await _append_log(session_id, extra_event)
-                                await ws_manager.publish(channel, extra_event)
+                                await self._ws.publish(channel, extra_event)
 
             self._last_cody_session_id = result_cody_session_id
 
@@ -249,12 +255,12 @@ class SessionRunner:
             await _append_log(session_id, error_event)
 
             status_event = {"type": "status_change", "status": SessionStatus.FAILED, "error": str(e), "ts": _now().isoformat()}
-            await ws_manager.publish(channel, status_event)
+            await self._ws.publish(channel, status_event)
 
             failed_finished_at = _now()
             if extra_channels:
                 for ch in extra_channels:
-                    await ws_manager.publish(ch, {
+                    await self._ws.publish(ch, {
                         "type": "session_status",
                         "session_id": session_id,
                         "status": SessionStatus.FAILED,

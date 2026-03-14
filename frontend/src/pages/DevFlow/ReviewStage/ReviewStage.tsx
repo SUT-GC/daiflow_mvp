@@ -4,7 +4,8 @@ import StageLayout, { isStageReadonly } from '../../../components/StageLayout/St
 import DiffViewer, { parseDiff } from '../../../components/DiffViewer/DiffViewer'
 import Modal from '../../../components/Modal/Modal'
 import { useStageChat } from '../../../hooks/useStageChat'
-import { getTask, getTaskDiff, generateCommitMessage, submitMR, TaskData } from '../../../api'
+import { useCommitModal } from '../../../hooks/useCommitModal'
+import { getTask, getTaskDiff, joinDiffs, TaskData } from '../../../api'
 import { useLocale } from '../../../hooks/useLocale'
 import './ReviewStage.css'
 
@@ -15,19 +16,13 @@ export default function ReviewStage() {
   const [task, setTask] = useState<TaskData | null>(null)
   const [diff, setDiff] = useState('')
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
-  const [showCommitModal, setShowCommitModal] = useState(false)
-  const [commitMessage, setCommitMessage] = useState('')
-  const [submitting, setSubmitting] = useState(false)
-  const [submitted, setSubmitted] = useState(false)
-  const [generating, setGenerating] = useState(false)
 
   const loadData = useCallback(async () => {
     if (!taskId) return
     const t = await getTask(taskId)
     setTask(t)
     const diffData = await getTaskDiff(taskId)
-    const allDiffs = diffData.diffs?.map((d: any) => d.diff).join('\n') || ''
-    setDiff(allDiffs)
+    setDiff(joinDiffs(diffData))
   }, [taskId])
 
   useEffect(() => { loadData() }, [loadData])
@@ -35,8 +30,7 @@ export default function ReviewStage() {
   const onUpdated = useCallback(async () => {
     if (taskId) {
       const diffData = await getTaskDiff(taskId)
-      const allDiffs = diffData.diffs?.map((d: any) => d.diff).join('\n') || ''
-      setDiff(allDiffs)
+      setDiff(joinDiffs(diffData))
     }
   }, [taskId])
 
@@ -49,18 +43,7 @@ export default function ReviewStage() {
     onUpdated,
   })
 
-  const handleSubmitMR = async () => {
-    if (!taskId || !commitMessage.trim()) return
-    setSubmitting(true)
-    try {
-      await submitMR(taskId, commitMessage)
-      setSubmitted(true)
-    } catch (err: any) {
-      alert('Error: ' + err.message)
-    } finally {
-      setSubmitting(false)
-    }
-  }
+  const commitModal = useCommitModal({ taskId, taskName: task?.name })
 
   const { additions, deletions, files } = useMemo(() => {
     const parsed = parseDiff(diff)
@@ -105,20 +88,8 @@ export default function ReviewStage() {
         actions={
           <button
             className="btn btn-teal"
-            disabled={readonly || generating}
-            onClick={async () => {
-              setShowCommitModal(true)
-              setGenerating(true)
-              setCommitMessage('')
-              try {
-                const result = await generateCommitMessage(taskId!)
-                setCommitMessage(result.commit_message)
-              } catch {
-                setCommitMessage(`feat: ${task?.name}\n\nImplemented via DaiFlow automated workflow.`)
-              } finally {
-                setGenerating(false)
-              }
-            }}
+            disabled={readonly || commitModal.generating}
+            onClick={commitModal.openModal}
           >
             {t('review.submit_mr')}
           </button>
@@ -130,8 +101,8 @@ export default function ReviewStage() {
       />
 
       {/* Commit Modal */}
-      <Modal open={showCommitModal} onClose={() => !submitting && setShowCommitModal(false)} width={560}>
-        {!submitted ? (
+      <Modal open={commitModal.open} onClose={commitModal.closeModal} width={560}>
+        {!commitModal.submitted ? (
           <>
             <div className="modal-title">{t('review.commit_title')}</div>
             <div className="modal-sub">{t('review.commit_sub')}</div>
@@ -140,9 +111,9 @@ export default function ReviewStage() {
               <textarea
                 className="input"
                 rows={6}
-                value={generating ? 'Generating commit message...' : commitMessage}
-                onChange={e => setCommitMessage(e.target.value)}
-                disabled={generating}
+                value={commitModal.generating ? 'Generating commit message...' : commitModal.commitMessage}
+                onChange={e => commitModal.setCommitMessage(e.target.value)}
+                disabled={commitModal.generating}
                 style={{ fontFamily: 'var(--mono)', fontSize: '12px' }}
               />
             </div>
@@ -161,9 +132,9 @@ export default function ReviewStage() {
               </div>
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
-              <button className="btn btn-ghost" onClick={() => setShowCommitModal(false)}>{t('review.cancel')}</button>
-              <button className="btn btn-teal" onClick={handleSubmitMR} disabled={submitting || generating}>
-                {submitting ? t('review.pushing') : t('review.confirm_push')}
+              <button className="btn btn-ghost" onClick={commitModal.closeModal}>{t('review.cancel')}</button>
+              <button className="btn btn-teal" onClick={commitModal.submit} disabled={commitModal.submitting || commitModal.generating}>
+                {commitModal.submitting ? t('review.pushing') : t('review.confirm_push')}
               </button>
             </div>
           </>
@@ -173,7 +144,7 @@ export default function ReviewStage() {
             <div className="success-title">{t('review.success')}</div>
             <div className="success-sub">{t('review.success_sub')}</div>
             <div style={{ display: 'flex', justifyContent: 'center', gap: 8, marginTop: 20 }}>
-              <button className="btn btn-ghost" onClick={() => setShowCommitModal(false)}>{t('review.close')}</button>
+              <button className="btn btn-ghost" onClick={commitModal.closeModal}>{t('review.close')}</button>
               <button className="btn btn-primary" onClick={() => navigate('/tasks')}>{t('review.return_tasks')}</button>
             </div>
           </div>

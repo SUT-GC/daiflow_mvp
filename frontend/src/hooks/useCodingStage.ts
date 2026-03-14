@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { getTask, getTodos, getTaskDiff, getTodoDiff, TaskData, TodoData } from '../api'
+import { getTask, getTodos, getTaskDiff, getTodoDiff, joinDiffs, TaskData, TodoData } from '../api'
 import { SessionStatus, TodoStatus } from '../types/enums'
 import { useSession } from './useSession'
 import { useStageChat } from './useStageChat'
@@ -41,7 +41,7 @@ export function useCodingStage(taskId: string | undefined) {
     let todoDiff = ''
     try {
       const data = await getTodoDiff(todoId)
-      todoDiff = data.diffs?.map((d: any) => d.diff).join('\n') || ''
+      todoDiff = joinDiffs(data)
     } catch {
       // per-todo diff failed, will fallback below
     }
@@ -53,7 +53,7 @@ export function useCodingStage(taskId: string | undefined) {
     if (taskId) {
       try {
         const data = await getTaskDiff(taskId)
-        setDiff(data.diffs?.map((d: any) => d.diff).join('\n') || '')
+        setDiff(joinDiffs(data))
       } catch {
         setDiff('')
       }
@@ -79,7 +79,7 @@ export function useCodingStage(taskId: string | undefined) {
       debounceRef.current = setTimeout(async () => {
         try {
           const diffData = await getTaskDiff(taskId)
-          const allDiffs = diffData.diffs?.map((d: any) => d.diff).join('\n') || ''
+          const allDiffs = joinDiffs(diffData)
           setDiff(allDiffs)
           const td = await getTodos(taskId)
           setTodos(td)

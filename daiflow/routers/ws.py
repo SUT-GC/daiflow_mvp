@@ -21,6 +21,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
 
 from daiflow.database import get_db_session
+from daiflow.exceptions import DaiFlowError
 from daiflow.services.chat_service import prepare_stage_chat
 from daiflow.session_runner import run_stage_chat
 from daiflow.ws_manager import ws_manager
@@ -66,12 +67,12 @@ async def _handle_chat(ws: WebSocket, data: dict):
                         return
                     await ws.send_json({"channel": channel, "event": event})
 
-    except ValueError as e:
+    except DaiFlowError as e:
         try:
             await ws.send_json({
                 "type": "error",
                 "id": req_id,
-                "code": "not_found",
+                "code": "not_found" if e.status_code == 404 else "invalid_state",
                 "message": str(e),
             })
         except Exception:

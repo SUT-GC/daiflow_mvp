@@ -250,6 +250,7 @@ const en = {
   // ErrorBoundary
   'error.title': 'Something went wrong',
   'error.try_again': 'Try Again',
+  'error.back_to_tasks': 'Return to Tasks',
 } as const
 
 export type TranslationKey = keyof typeof en

@@ -252,6 +252,7 @@ const zh: Record<TranslationKey, string> = {
   // ErrorBoundary
   'error.title': '出现错误',
   'error.try_again': '重试',
+  'error.back_to_tasks': '返回任务列表',
 }
 
 export default zh
