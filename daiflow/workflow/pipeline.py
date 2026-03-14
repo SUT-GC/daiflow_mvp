@@ -88,3 +88,4 @@ async def run_simple_task(
                 "layer": session.layer,
                 "finished_at": failed_at.isoformat(),
             })
+            raise

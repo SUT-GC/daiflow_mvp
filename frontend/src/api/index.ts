@@ -143,6 +143,8 @@ export const deleteTask = (id: string) =>
   request<{ ok: boolean }>(`/tasks/${id}`, { method: 'DELETE' })
 export const confirmInit = (id: string) =>
   request<{ ok: boolean; status: number }>(`/tasks/${id}/confirm-init`, { method: 'POST' })
+export const retryInit = (id: string) =>
+  request<{ ok: boolean; status: number }>(`/tasks/${id}/retry-init`, { method: 'POST' })
 export const getTaskInitSessions = (taskId: string) =>
   request<InitSessionData[]>(`/tasks/${taskId}/init/sessions`)
 export const lockPlan = (id: string) =>

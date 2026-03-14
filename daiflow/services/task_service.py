@@ -154,8 +154,7 @@ async def _do_sync_skills(db: AsyncSession, session_id: str, *, task_id: str, pr
     from daiflow.session_runner import _append_log
 
     sync_skills_to_task(project_id, task_id)
-    now_iso = datetime.now(timezone.utc).isoformat()
-    await _append_log(session_id, {"type": "text_delta", "ts": now_iso, "content": "✓ Synced project skills to task\n"})
+    await _append_log(session_id, {"type": "text_delta", "ts": datetime.now(timezone.utc).isoformat(), "content": "✓ Synced project skills to task\n"})
 
 
 async def init_task(task_id: str):
@@ -206,6 +205,8 @@ async def init_task(task_id: str):
 
     except Exception:
         logger.exception("init_task failed for task %s", task_id)
+        # Notify frontend that init is done (with failures)
+        await ws_manager.publish(init_bus, {"type": "done"})
         # Reset to CREATED so user can retry
         try:
             async with get_background_db() as db:

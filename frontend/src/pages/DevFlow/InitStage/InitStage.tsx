@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import Topbar from '../../../components/Shell/Topbar'
 import StageProgress from '../../../components/StageProgress/StageProgress'
-import { getTask, getTaskInitSessions, confirmInit, type TaskData, type InitSessionData } from '../../../api'
+import { getTask, getTaskInitSessions, confirmInit, retryInit, type TaskData, type InitSessionData } from '../../../api'
 import { useLocale } from '../../../hooks/useLocale'
 import { wsClient } from '../../../ws'
 import type { TranslationKey } from '../../../i18n'
@@ -22,6 +22,7 @@ export default function InitStage() {
   const [task, setTask] = useState<TaskData | null>(null)
   const [sessions, setSessions] = useState<InitSessionData[]>([])
   const [confirming, setConfirming] = useState(false)
+  const [retrying, setRetrying] = useState(false)
 
   const loadData = useCallback(async () => {
     if (!taskId) return
@@ -112,6 +113,20 @@ export default function InitStage() {
     }
   }
 
+  const handleRetry = async () => {
+    if (!taskId || retrying) return
+    setRetrying(true)
+    try {
+      await retryInit(taskId)
+      // Reload to get fresh session data
+      await loadData()
+    } catch (err) {
+      console.error('Failed to retry init:', err)
+    } finally {
+      setRetrying(false)
+    }
+  }
+
   const getSessionKey = (sessionId: string): string => {
     const parts = sessionId.split(':')
     return parts[parts.length - 1]
@@ -186,6 +201,15 @@ export default function InitStage() {
 
             <div className="init-footer">
               <div style={{ flex: 1 }} />
+              {hasFailed && (
+                <button
+                  className="btn btn-secondary"
+                  disabled={retrying}
+                  onClick={handleRetry}
+                >
+                  {retrying ? '...' : t('init_stage.retry')}
+                </button>
+              )}
               <button
                 className="btn btn-primary"
                 disabled={!allDone || confirming}

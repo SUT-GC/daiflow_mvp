@@ -344,6 +344,7 @@ async def run_init(project_id: str):
         await asyncio.gather(
             run_simple_task(f"init:{project_id}:skill_fetch", project_bus, _do_skill_fetch),
             run_simple_task(f"init:{project_id}:repo_clone", project_bus, _do_repo_clone),
+            return_exceptions=True,
         )
 
         # Check if Layer 1 had critical failures (repo_clone failure = no code to analyze)

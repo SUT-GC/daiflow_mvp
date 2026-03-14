@@ -59,7 +59,8 @@ async def client(db_engine):
     # Patch get_background_db so background tasks also use the test DB
     with patch("daiflow.database.get_background_db", override_get_background_db), \
          patch("daiflow.services.task_service.get_background_db", override_get_background_db), \
-         patch("daiflow.services.project_service.get_background_db", override_get_background_db):
+         patch("daiflow.services.project_service.get_background_db", override_get_background_db), \
+         patch("daiflow.workflow.pipeline.get_background_db", override_get_background_db):
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             yield ac

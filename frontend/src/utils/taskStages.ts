@@ -14,8 +14,8 @@ export const STATUS_TAGS: Record<number, string> = {
 export function getStageFromStatus(status: number): number {
   if (status <= 1) return 1  // CREATED / INITIALIZING → Init
   if (status <= 2) return 2  // PLANNING → Plan
-  if (status <= 3) return 3  // PLAN_LOCKED → Todo
-  if (status <= 5) return 4  // TODO_READY / CODING → Coding
+  if (status <= 4) return 3  // PLAN_LOCKED / TODO_READY → Todo
+  if (status <= 5) return 4  // CODING → Coding
   return 5                   // REVIEWING / DONE → Review
 }
 
@@ -23,7 +23,7 @@ export function getStageFromStatus(status: number): number {
 export function getDevFlowPath(taskId: string, status: number): string {
   if (status <= 1) return `/devflow/${taskId}/init`
   if (status <= 2) return `/devflow/${taskId}/plan`
-  if (status === 3) return `/devflow/${taskId}/todo`
+  if (status <= 4) return `/devflow/${taskId}/todo`
   if (status <= 5) return `/devflow/${taskId}/coding`
   return `/devflow/${taskId}/review`
 }

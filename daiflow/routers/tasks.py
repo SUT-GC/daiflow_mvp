@@ -241,6 +241,35 @@ async def confirm_init(
     return {"ok": True, "status": task.status}
 
 
+@router.post("/{task_id}/retry-init")
+async def retry_init(
+    task_id: str,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
+    """Retry init after failure. Task must be in CREATED state (reset by failed init)."""
+    task = await db.get(Task, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    if task.status != TaskStatus.CREATED:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot retry init in {TaskStatus(task.status).name} state",
+        )
+
+    # Clean up old init sessions so they get re-created
+    old_sessions = await db.execute(
+        select(Session).where(Session.task_id == task_id, Session.type == "task_init")
+    )
+    for s in old_sessions.scalars().all():
+        await db.delete(s)
+    await db.commit()
+
+    background_tasks.add_task(init_task, task_id)
+    return {"ok": True, "status": task.status}
+
+
 @router.get("/{task_id}/init/sessions")
 async def get_init_sessions(task_id: str, db: AsyncSession = Depends(get_db)):
     """Get init subtask sessions for a task."""
