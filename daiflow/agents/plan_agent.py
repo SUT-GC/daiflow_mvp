@@ -40,9 +40,14 @@ class PlanAgent(AgentConfig):
         return make_file_write_detector("plan.md", "plan_updated", on_plan_match)
 
     async def on_complete(self, ctx: AgentContext) -> None:
+        from daiflow.models import Task
+        # Re-fetch task in case it was deleted during execution
+        task = await ctx.db.get(Task, ctx.task.id)
+        if not task:
+            return
         plan_path = Path(ctx.task_dir) / "plan.md"
         if plan_path.exists():
-            ctx.task.tech_plan = plan_path.read_text(encoding="utf-8")
+            task.tech_plan = plan_path.read_text(encoding="utf-8")
             await ctx.db.commit()
 
     def chat_system_prefix(self, ctx: AgentContext) -> str | None:

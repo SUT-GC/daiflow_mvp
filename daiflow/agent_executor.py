@@ -94,12 +94,15 @@ async def run_agent(
     config = get_agent_config(agent_type)
 
     try:
-        # 1. Build context
+        # 1. Create/reset session record (before context build so failures are visible)
+        effective_task_id = task_id or entity_id
+        # For todo_exec, ref_id is the task_id (parent); for others, ref_id is entity_id
+        ref_id = effective_task_id if agent_type == "todo_exec" else entity_id
+        await _reset_or_create_session(db, session_id, agent_type, ref_id, effective_task_id)
+
+        # 2. Build context
         ctx = await _build_context(db, entity_id, agent_type, task_id)
         ctx.session_id = session_id
-
-        # 2. Create/reset session record
-        await _reset_or_create_session(db, session_id, agent_type, ctx.task.id if agent_type == "todo_exec" else entity_id, ctx.task.id)
 
         # 3. Get language setting
         lang = await get_language_setting(db)

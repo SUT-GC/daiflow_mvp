@@ -28,12 +28,15 @@ class TodoExecAgent(AgentConfig):
         return make_file_write_detector(None, "code_updated")
 
     async def on_complete(self, ctx: AgentContext) -> None:
-        from daiflow.models import SessionStatus
+        from daiflow.models import Todo, SessionStatus
         from daiflow.services.git_service import get_head_hash
         from daiflow.workflow import TodoWorkflow
 
-        todo = ctx.todo
-        task = ctx.task
+        # Re-fetch todo from DB in case it was modified/deleted during execution
+        todo = await ctx.db.get(Todo, ctx.todo.id)
+        if not todo:
+            logger.warning("Todo %s no longer exists, skipping on_complete", ctx.todo.id)
+            return
 
         # Record HEAD hash after execution
         head_after: dict[str, str] = {}
