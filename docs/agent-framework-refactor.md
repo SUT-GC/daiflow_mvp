@@ -4,7 +4,9 @@
 
 ### 1.1 当前 Agent 类型一览
 
-DaiFlow 目前有 **5 种 Agent 类型**，底层全部基于 Cody SDK，通过 SessionRunner 统一执行：
+DaiFlow 目前有 **6 种 Agent 类型**，按执行方式分为两类：
+
+**SessionRunner 驱动（AI 流式执行）：**
 
 | Agent 类型 | Session ID 模式 | 是否支持 Chat | Cody Session 策略 | 触发方式 |
 |---|---|---|---|---|
@@ -12,12 +14,20 @@ DaiFlow 目前有 **5 种 Agent 类型**，底层全部基于 Cody SDK，通过 
 | plan（技术方案） | `task:{task_id}:plan` | ✅ | 新建 | 用户点击"生成方案" |
 | todo_split（任务拆解） | `task:{task_id}:todo_split` | ✅ | 复用 plan 的 cody_session | 用户点击"锁定方案" |
 | todo_exec（代码执行） | `task:{task_id}:todo:{todo_id}` | ✅ | 每个独立 | 用户点击"执行" |
-| review（代码审查） | `task:{task_id}:review` | ✅ | 新建 | 用户点击"开始审查" |
+
+**非 SessionRunner 类型：**
+
+| Agent 类型 | Session ID 模式 | 执行方式 | 触发方式 |
+|---|---|---|---|
+| task_init（任务初始化） | `task:{task_id}:init:*` | `run_simple_task()`（非 AI） | 创建任务时自动 |
+| review（代码审查） | `task:{task_id}:review` | 直接调用 Cody client（不走 SessionRunner） | 用户点击"开始审查" |
+
+> **注意：** review 阶段的 `generate_commit_message()` 直接使用 Cody client，不经过 SessionRunner 流式执行。但 review 的 **chat** 功能仍走 `run_stage_chat()` 路径。task_init 用 `run_simple_task()` 执行资源准备（如 skill fetch），不涉及 AI 调用。
 
 **数量关系：**
 - 一次项目初始化 = 11~12 个 init agent（4 层，层内并发）
-- 一个开发任务 = 1 plan + 1 todo_split + N todo_exec + 1 review = N+3 个 agent
-- 所有 agent 的执行模式完全一致：Cody SDK 流式输出 → .jsonl 日志 → WebSocket 推送 → DB 状态更新
+- 一个开发任务 = 1 task_init + 1 plan + 1 todo_split + N todo_exec + 1 review = N+4 个 agent
+- SessionRunner 驱动的 agent 执行模式完全一致：Cody SDK 流式输出 → .jsonl 日志 → WebSocket 推送 → DB 状态更新
 
 ### 1.2 当前架构的统一之处（保持不变）
 
@@ -60,6 +70,10 @@ async def generate_xxx(id: str):
 - 构建 on_tool_result 回调
 - 返回 StageChatContext
 
+**注意：** file-write 回调在 task_service 和 chat_service 中并非完全相同。plan 的回调逻辑一致（读 plan.md → 写 task.tech_plan），但 todo 的回调有差异：task_service 只返回内容，chat_service 额外调用 `sync_todos_from_file()` 同步 Todo 记录到 DB。重构时需注意统一为 chat_service 的完整版本。
+
+另外，`run_stage_chat()` **会**写 JSONL 日志（通过 `_append_log()` 调用），与 `run()` 的日志机制一致，区别在于 `run_stage_chat()` 不更新 Session DB 状态。
+
 **影响：** 新增一种 agent 需要改动 task_service.py + chat_service.py + router + 前端 hook，全靠 copy-paste。
 
 #### 问题 2：崩溃恢复完全缺失
@@ -77,7 +91,7 @@ async def generate_xxx(id: str):
 
 #### 问题 3：前端 stage hook 结构性重复
 
-`usePlanStage`、`useTodoStage`、`useCodingStage` 三个 hook 结构一致：
+`usePlanStage`、`useTodoStage`、`useCodingStage` 三个 hook 结构一致（注意：`useReviewStage` 目前不存在，review 页面直接在组件内管理状态）：
 
 ```typescript
 // 每个 hook 都是：
@@ -94,9 +108,12 @@ function useXxxStage(taskId: string) {
 
 差异仅在于：产出物类型（plan.md / todo.json / diff）和 onUpdated 回调逻辑。
 
-#### 问题 4：Init 层间编排没有持久化
+#### 问题 4：Init 层间编排的恢复能力不足
 
-`compute_init_sessions()` 计算出完整的 session 列表后直接执行，没有预先落库。如果进程在创建 session 的过程中崩溃，无法知道"这一层应该有几个 session"，导致无法精确恢复层状态。
+`compute_init_sessions()` 计算出完整的 session 列表，在 router 层（`projects.py` 的 `init_project` 端点）预先创建到 DB。这一步已经做了落库，但存在以下不足：
+- Session 预创建在 router 层而非 service 层，职责不清晰
+- 崩溃后虽然 session 记录存在，但没有统一的层状态查询和重试机制
+- 用户无法针对某一层的失败 session 进行定向重试
 
 ---
 
@@ -123,9 +140,11 @@ daiflow/agents/
 ├── plan_agent.py        # plan agent 配置
 ├── todo_split_agent.py  # todo_split agent 配置
 ├── todo_exec_agent.py   # todo_exec agent 配置
-├── review_agent.py      # review agent 配置
+├── review_agent.py      # review agent 配置（仅 chat，不走 SessionRunner.run()）
 └── init_agent.py        # init knowledge agent 配置
 ```
+
+> **review 的特殊性：** review 阶段不通过 SessionRunner.run() 执行 AI 任务（`generate_commit_message` 直接调 Cody client），但它的 **chat 功能** 仍走 `run_stage_chat()` → 需要注册为 AgentConfig 以支持 `prepare_chat()`，但 `build_prompt()` 和 `on_complete()` 无需实现。
 
 #### AgentConfig 基类
 
@@ -516,20 +535,26 @@ async def run(self, db, session_id, prompt, ..., cody_session_id=None):
     )
 ```
 
-### 3.4 Init 层状态持久化
+### 3.4 Init 层状态管理改进
 
-#### 3.4.1 Session 计划先全量落库
+#### 3.4.1 Session 预创建下沉到 Service 层
+
+当前 session 预创建在 router 层（`projects.py` 的 `init_project` 端点），建议下沉到 `project_service.py`，使职责更清晰：
 
 ```python
-# project_service.py 修改
+# project_service.py 修改 — 将 session 预创建从 router 移入 service
 
 async def run_init(project_id: str, ws_manager=None):
     planned = compute_init_sessions(project_id, repos)
 
-    # 改动：一次性创建所有 session 记录，状态 = WAITING
+    # 改动：session 预创建移入 service 层（原在 router 层）
     for s in planned:
         existing = await db.get(Session, s["session_id"])
-        if not existing:
+        if existing:
+            # 重置（支持重新初始化）
+            existing.status = SessionStatus.WAITING
+            existing.error = None
+        else:
             db.add(Session(
                 session_id=s["session_id"],
                 type="init",
@@ -537,7 +562,7 @@ async def run_init(project_id: str, ws_manager=None):
                 layer=s["layer"],
                 status=SessionStatus.WAITING,
             ))
-    await db.commit()  # 全部落库后才开始执行
+    await db.commit()
 
     # 然后逐层执行（逻辑不变）
     for layer_num in [1, 2, 3, 4]:
@@ -817,7 +842,7 @@ async def get_agent_type_config(agent_type: str):
 | 步骤 | 内容 | 影响范围 |
 |---|---|---|
 | 1 | 创建 `daiflow/agents/` 目录，定义 AgentConfig 基类和注册表 | 新增文件 |
-| 2 | 实现 5 种 AgentConfig（plan、todo_split、todo_exec、review、init） | 新增文件 |
+| 2 | 实现 5 种 AgentConfig（plan、todo_split、todo_exec、init 走 SessionRunner；review 仅 chat） | 新增文件 |
 | 3 | 实现 AgentExecutor，封装统一执行流程 | 新增文件 |
 | 4 | 改造 task_service.py：generate_plan/todos/execute_todo 调用 AgentExecutor | 修改文件 |
 | 5 | 改造 chat_service.py：prepare_stage_chat 调用 AgentExecutor.prepare_chat | 修改文件 |
