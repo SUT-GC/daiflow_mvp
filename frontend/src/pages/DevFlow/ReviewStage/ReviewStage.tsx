@@ -3,9 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import StageLayout, { isStageReadonly } from '../../../components/StageLayout/StageLayout'
 import DiffViewer, { parseDiff } from '../../../components/DiffViewer/DiffViewer'
 import Modal from '../../../components/Modal/Modal'
-import { useStageChat } from '../../../hooks/useStageChat'
-import { useSession } from '../../../hooks/useSession'
-import { useStaleDetection } from '../../../hooks/useStaleDetection'
+import { useAgent } from '../../../hooks/useAgent'
 import { useCommitModal } from '../../../hooks/useCommitModal'
 import { getTask, getTaskDiff, joinDiffs, TaskData } from '../../../api'
 import { useLocale } from '../../../hooks/useLocale'
@@ -38,10 +36,8 @@ export default function ReviewStage() {
   }, [taskId])
 
   const sessionId = taskId ? sessionIds.review(taskId) : null
-  const { status: reviewStatus, logs: reviewLogs } = useSession(sessionId)
-  const isStale = useStaleDetection(reviewStatus, reviewLogs.length)
 
-  const { messages, sendMessage, streaming } = useStageChat({
+  const agent = useAgent({
     sessionId,
     stage: 'review',
     entityId: taskId || '',
@@ -100,10 +96,11 @@ export default function ReviewStage() {
           </button>
         }
         chatTitle={t('review.chat_title')}
-        chatMessages={messages}
-        chatOnSend={sendMessage}
-        chatStreaming={streaming}
-        isStale={isStale}
+        chatMessages={agent.messages}
+        chatOnSend={agent.sendMessage}
+        chatStreaming={agent.streaming}
+        isStale={agent.isStale}
+        onRetry={agent.refreshSession}
       />
 
       {/* Commit Modal */}

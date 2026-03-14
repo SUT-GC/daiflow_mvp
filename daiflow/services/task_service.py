@@ -2,8 +2,6 @@ import json
 import logging
 import shutil
 from datetime import datetime, timezone
-from pathlib import Path
-
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,7 +11,7 @@ from daiflow.models import Project, ProjectRepo, Session, SessionStatus, Task, T
 from daiflow.services.git_service import checkout_branch, get_head_hash
 from daiflow.services.project_service import repo_dir_name
 from daiflow.services.skill_service import get_project_dir, get_task_dir, sync_skills_to_task
-from daiflow.workflow import TaskWorkflow, TodoWorkflow
+from daiflow.workflow import TaskWorkflow
 from daiflow.session_ids import (
     task_init_bus,
     task_init_fetch,
