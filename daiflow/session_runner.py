@@ -154,17 +154,20 @@ class SessionRunner:
             prompt = prompt + LANGUAGE_INSTRUCTIONS.get(language, "")
         channel = f"session:{session_id}"
 
-        # Clear previous log file (for regenerate scenarios)
+        # Append run_boundary marker instead of deleting (preserves previous attempts)
         log_file = _log_path(session_id)
         if log_file.exists():
-            log_file.unlink()
+            await _append_log(session_id, {"type": "run_boundary", "ts": _now().isoformat()})
 
-        # Update session status to running
+        # Update session status to running; store cody_session_id immediately if reusing
         run_started_at = _now()
+        run_values = {"status": SessionStatus.RUNNING, "started_at": run_started_at}
+        if cody_session_id:
+            run_values["cody_session_id"] = cody_session_id
         await db.execute(
             update(Session)
             .where(Session.session_id == session_id)
-            .values(status=SessionStatus.RUNNING, started_at=run_started_at)
+            .values(**run_values)
         )
         await db.commit()
 
