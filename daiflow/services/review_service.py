@@ -4,12 +4,15 @@ import json
 import logging
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from transitions.core import MachineError
 
 from daiflow.models import Task
 from daiflow.prompts import COMMIT_MESSAGE_PROMPT_TEMPLATE
 from daiflow.services.cody_service import build_cody_client
 from daiflow.services.git_service import commit, get_diff, push
+from daiflow.services.skill_service import get_task_dir
 from daiflow.services.task_service import fetch_project_repos, resolve_repo_path
+from daiflow.workflow import TaskWorkflow
 
 logger = logging.getLogger(__name__)
 
@@ -37,23 +40,11 @@ async def generate_commit_message(db: AsyncSession, task: Task) -> str:
 
     Falls back to a simple message if AI generation fails or there are no diffs.
     """
-    repos = await fetch_project_repos(db, task.project_id)
-    allowed_roots = [r.local_path for r in repos if r.local_path]
-
-    # Collect diffs
-    diff_texts = []
-    for repo in repos:
-        repo_path = resolve_repo_path(repo, task.id)
-        if not repo_path:
-            continue
-        try:
-            d = await get_diff(repo_path, task.branch)
-            if d:
-                diff_texts.append(d)
-        except Exception:
-            pass
-
     fallback = f"feat: {task.name}"
+
+    # Reuse get_task_diffs to collect diffs (single repo query + resolve)
+    diffs = await get_task_diffs(db, task)
+    diff_texts = [d["diff"] for d in diffs if d.get("diff")]
     if not diff_texts:
         return fallback
 
@@ -69,16 +60,10 @@ async def generate_commit_message(db: AsyncSession, task: Task) -> str:
     )
 
     try:
-        # Resolve workdir
-        if allowed_roots:
-            workdir = allowed_roots[0]
-        else:
-            resolved = [resolve_repo_path(r, task.id) for r in repos]
-            resolved = [p for p in resolved if p]
-            from daiflow.services.skill_service import get_task_dir
-            workdir = resolved[0] if resolved else str(get_task_dir(task.id))
-            allowed_roots = resolved or [workdir]
-        client = await build_cody_client(db, workdir, allowed_roots)
+        repos = await fetch_project_repos(db, task.project_id)
+        allowed_roots = [p for r in repos if (p := resolve_repo_path(r, task.id))]
+        workdir = allowed_roots[0] if allowed_roots else str(get_task_dir(task.id))
+        client = await build_cody_client(db, workdir, allowed_roots or [workdir])
         result_text = ""
         async with client:
             async for chunk in client.stream(prompt):
@@ -93,8 +78,9 @@ async def generate_commit_message(db: AsyncSession, task: Task) -> str:
 
 
 async def submit_mr(db: AsyncSession, task: Task, commit_message: str) -> list[dict]:
-    """Commit and push changes across all repos.
+    """Commit and push changes across all repos, then transition task to DONE.
 
+    Updates task.mr_info with results and transitions to DONE if any repo succeeded.
     Returns a list of per-repo result dicts with status/error fields.
     """
     repos = await fetch_project_repos(db, task.project_id)
@@ -129,5 +115,16 @@ async def submit_mr(db: AsyncSession, task: Task, commit_message: str) -> list[d
             results.append({"repo": repo_label, "status": "success"})
         except Exception as e:
             results.append({"repo": repo_label, "status": "error", "error": str(e)})
+
+    # Transition task to DONE if at least one repo succeeded
+    has_success = any(r["status"] == "success" for r in results)
+    if has_success:
+        wf = TaskWorkflow(task, db)
+        try:
+            await wf.finish()
+        except MachineError:
+            logger.warning("Could not transition task %s to DONE", task.id)
+    task.mr_info = json.dumps(results)
+    await db.commit()
 
     return results
