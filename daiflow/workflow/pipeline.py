@@ -19,7 +19,7 @@ from daiflow.models import ProjectRepo, Session, SessionStatus
 from daiflow.services.settings_service import get_language_setting
 from daiflow.services.skill_service import get_project_dir
 from daiflow.session_runner import _append_log
-from daiflow.ws_manager import ws_manager
+from daiflow.ws_manager import WSManager, ws_manager as _default_ws_manager
 
 logger = logging.getLogger(__name__)
 
@@ -28,12 +28,14 @@ async def run_simple_task(
     session_id: str,
     project_bus: str,
     fn: Callable[[AsyncSession, str], Awaitable[None]],
+    ws_manager: WSManager | None = None,
 ):
     """Execute a non-AI task with unified Session state management.
 
     Handles: status transitions, timestamps, log writing, WebSocket publishing.
     The caller only needs to provide the pure business logic function `fn`.
     """
+    ws_manager = ws_manager or _default_ws_manager
     async with get_background_db() as db:
         session = await db.get(Session, session_id)
         if not session:

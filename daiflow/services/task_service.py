@@ -8,16 +8,25 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from daiflow.database import get_background_db
+from daiflow.exceptions import InvalidStateError
 from daiflow.models import Project, ProjectRepo, Session, SessionStatus, Task, TaskStatus, Todo, TodoStatus
 from daiflow.prompts import PLAN_PROMPT_TEMPLATE, TODO_EXECUTE_PROMPT_TEMPLATE, TODO_PROMPT_TEMPLATE
-from daiflow.services.cody_service import append_path_boundary, build_cody_client
+from daiflow.services.cody_service import append_path_boundary, build_task_cody_client
 from daiflow.services.git_service import checkout_branch, get_head_hash
 from daiflow.services.project_service import repo_dir_name
 from daiflow.services.settings_service import get_language_setting
-from daiflow.services.skill_service import get_project_dir, get_task_dir, get_task_skills_dir, sync_skills_to_task
+from daiflow.services.skill_service import get_project_dir, get_task_dir, sync_skills_to_task
 from daiflow.session_runner import SessionRunner, make_file_write_detector
 from daiflow.workflow import TaskWorkflow, TodoWorkflow
-from daiflow.ws_manager import ws_manager
+from daiflow.session_ids import (
+    task_init_bus,
+    task_init_fetch,
+    task_init_skills,
+    task_plan,
+    task_todo_exec,
+    task_todo_split,
+)
+from daiflow.ws_manager import WSManager, ws_manager as _default_ws_manager
 
 logger = logging.getLogger(__name__)
 
@@ -51,12 +60,25 @@ def _copy_code_to_task(project_id: str, task_id: str, repos: list):
                 logger.info("Copied code %s -> %s", src, dst)
 
 
-def resolve_repo_path(repo, task_id: str) -> str | None:
-    """Resolve the actual filesystem path for a repo in a task context.
+def resolve_repo_path_in(base_dir, repos: list) -> list[str]:
+    """Resolve filesystem paths for repos under a base directory.
 
-    - Repos with local_path: code lives in user's working directory
-    - Git-only repos: code lives in task/code/{repo_name} (isolated copy)
+    Shared logic used by both project init (project dir) and task execution (task dir).
+
+    - Repos with local_path: use local_path directly (user's working directory)
+    - Git-only repos: use base_dir/code/{repo_name} (isolated copy)
     """
+    roots = []
+    for r in repos:
+        if r.local_path:
+            roots.append(r.local_path)
+        elif r.git_url:
+            roots.append(str(base_dir / "code" / repo_dir_name(r.git_url)))
+    return roots
+
+
+def resolve_repo_path(repo, task_id: str) -> str | None:
+    """Resolve the actual filesystem path for a single repo in a task context."""
     if repo.local_path:
         return repo.local_path
     elif repo.git_url:
@@ -65,12 +87,38 @@ def resolve_repo_path(repo, task_id: str) -> str | None:
 
 
 def resolve_task_roots(task_id: str, repos: list) -> list[str]:
-    """Resolve allowed_roots for a task.
+    """Resolve allowed_roots for a task."""
+    return resolve_repo_path_in(get_task_dir(task_id), repos)
 
-    - Repos with local_path: use local_path directly (user's working directory)
-    - Repos with git_url only: use task/code/{repo_name} (isolated copy)
+
+async def get_task_context(db: AsyncSession, task_id: str, project_id: str) -> tuple[list, list[str]]:
+    """Fetch repos and resolve allowed_roots for a task. Common pattern used by multiple services.
+
+    Returns:
+        (repos, allowed_roots) tuple.
     """
-    return [p for r in repos if (p := resolve_repo_path(r, task_id))]
+    repos = await fetch_project_repos(db, project_id)
+    allowed_roots = resolve_task_roots(task_id, repos)
+    return repos, allowed_roots
+
+
+async def _reset_or_create_session(
+    db: AsyncSession, session_id: str, session_type: str, ref_id: str, task_id: str,
+):
+    """Create a new Session record or reset an existing one to WAITING.
+
+    Used by generate_plan/generate_todos to ensure a clean session before each run.
+    """
+    existing = await db.get(Session, session_id)
+    if existing:
+        existing.status = SessionStatus.WAITING
+        existing.error = None
+        existing.cody_session_id = None
+        existing.started_at = None
+        existing.finished_at = None
+    else:
+        db.add(Session(session_id=session_id, type=session_type, ref_id=ref_id, task_id=task_id))
+    await db.commit()
 
 
 async def _do_fetch_code(db: AsyncSession, session_id: str, *, task_id: str, project_id: str, branch: str | None):
@@ -105,7 +153,7 @@ async def _do_sync_skills(db: AsyncSession, session_id: str, *, task_id: str, pr
     await _append_log(session_id, {"type": "text_delta", "ts": datetime.now(timezone.utc).isoformat(), "content": "✓ Synced project skills to task\n"})
 
 
-async def init_task(task_id: str):
+async def init_task(task_id: str, ws_manager: WSManager | None = None):
     """Initialize a task: fetch code + sync skills, then wait for user confirmation.
 
     Creates Session records for each subtask so the frontend can show progress.
@@ -113,7 +161,8 @@ async def init_task(task_id: str):
     """
     from daiflow.workflow.pipeline import run_simple_task
 
-    init_bus = f"task:init:{task_id}"
+    ws = ws_manager or _default_ws_manager
+    init_bus = task_init_bus(task_id)
 
     try:
         async with get_background_db() as db:
@@ -130,8 +179,8 @@ async def init_task(task_id: str):
             await wf.initialize()
 
             # Create session records for init subtasks
-            fetch_sid = f"task:{task_id}:init:fetch_code"
-            skills_sid = f"task:{task_id}:init:sync_skills"
+            fetch_sid = task_init_fetch(task_id)
+            skills_sid = task_init_skills(task_id)
             for sid in (fetch_sid, skills_sid):
                 existing = await db.get(Session, sid)
                 if not existing:
@@ -149,12 +198,12 @@ async def init_task(task_id: str):
         )
 
         # Publish init done event
-        await ws_manager.publish(init_bus, {"type": "done"})
+        await ws.publish(init_bus, {"type": "done"})
 
     except Exception:
         logger.exception("init_task failed for task %s", task_id)
         # Notify frontend that init is done (with failures)
-        await ws_manager.publish(init_bus, {"type": "done"})
+        await ws.publish(init_bus, {"type": "done"})
         # Reset to CREATED so user can retry
         try:
             async with get_background_db() as db:
@@ -181,24 +230,11 @@ async def generate_plan(task_id: str):
         task_dir = get_task_dir(task_id)
         plan_path = task_dir / "plan.md"
 
-        # Resolve allowed roots (local_path or task/code/ copy)
-        repos = await fetch_project_repos(db, task.project_id)
-        allowed_roots = resolve_task_roots(task_id, repos)
-
-        # Create or reset session record
-        session_id = f"task:{task_id}:plan"
-        existing_session = await db.get(Session, session_id)
-        if existing_session:
-            existing_session.status = SessionStatus.WAITING
-            existing_session.error = None
-            existing_session.cody_session_id = None
-            existing_session.started_at = None
-            existing_session.finished_at = None
-        else:
-            db.add(Session(session_id=session_id, type="plan", ref_id=task_id, task_id=task_id))
-        await db.commit()
+        session_id = task_plan(task_id)
+        await _reset_or_create_session(db, session_id, "plan", task_id, task_id)
 
         # Build prompt
+        repos, allowed_roots = await get_task_context(db, task_id, task.project_id)
         prompt = PLAN_PROMPT_TEMPLATE.format(
             description=task.description or "",
             prd=task.prd or "",
@@ -209,8 +245,7 @@ async def generate_plan(task_id: str):
 
         # Run Cody via SessionRunner
         lang = await get_language_setting(db)
-        skill_dir = str(get_task_skills_dir(task_id))
-        client = await build_cody_client(db, str(task_dir), allowed_roots, skill_dir=skill_dir)
+        client = await build_task_cody_client(db, task_id, task.project_id)
 
         async def on_plan_match(_file_path):
             if plan_path.exists():
@@ -231,8 +266,6 @@ async def generate_plan(task_id: str):
         if not task:
             logger.debug("Task %s deleted before plan write", task_id)
             return
-
-        # cody_session_id is stored in sessions table by SessionRunner
 
         # Read plan.md and store in task
         if plan_path.exists():
@@ -255,28 +288,16 @@ async def generate_todos(task_id: str):
         task_dir = get_task_dir(task_id)
         todo_path = task_dir / "todo.json"
 
-        repos = await fetch_project_repos(db, task.project_id)
-        allowed_roots = resolve_task_roots(task_id, repos)
+        session_id = task_todo_split(task_id)
+        await _reset_or_create_session(db, session_id, "todo_split", task_id, task_id)
 
-        session_id = f"task:{task_id}:todo_split"
-        existing_session = await db.get(Session, session_id)
-        if existing_session:
-            existing_session.status = SessionStatus.WAITING
-            existing_session.error = None
-            existing_session.cody_session_id = None
-            existing_session.started_at = None
-            existing_session.finished_at = None
-        else:
-            db.add(Session(session_id=session_id, type="todo_split", ref_id=task_id, task_id=task_id))
-        await db.commit()
-
+        repos, allowed_roots = await get_task_context(db, task_id, task.project_id)
         prompt = TODO_PROMPT_TEMPLATE.format(todo_path=str(todo_path))
         prompt = append_path_boundary(prompt, str(task_dir), allowed_roots)
 
         # Reuse plan's Cody session for context continuity
         lang = await get_language_setting(db)
-        skill_dir = str(get_task_skills_dir(task_id))
-        client = await build_cody_client(db, str(task_dir), allowed_roots, skill_dir=skill_dir)
+        client = await build_task_cody_client(db, task_id, task.project_id)
 
         # Look up plan's cody_session_id via task_id FK
         result = await db.execute(
@@ -334,7 +355,7 @@ async def sync_todos_from_file(db: AsyncSession, task_id: str, content: str):
         todos_data = json.loads(content)
     except (json.JSONDecodeError, TypeError) as e:
         logger.error("Failed to parse todo.json content for task %s: %s", task_id, e)
-        raise ValueError(f"Invalid todo.json format: {e}") from e
+        raise InvalidStateError(f"Invalid todo.json format: {e}") from e
 
     # Delete only pending todos — preserve running/done/failed
     _preserve_statuses = (TodoStatus.RUNNING, TodoStatus.DONE, TodoStatus.FAILED, TodoStatus.SKIPPED)
@@ -372,7 +393,11 @@ def _parse_todos_json(content: str) -> list[dict]:
 
 
 def _insert_todos(db: AsyncSession, task_id: str, todos_data: list[dict]):
-    """Add parsed todo items to the DB session (does not commit)."""
+    """Add parsed todo items to the DB session.
+
+    Note: This only calls db.add() (synchronous on AsyncSession).
+    The caller MUST await db.commit() to persist the changes.
+    """
     for item in todos_data:
         db.add(Todo(task_id=task_id, seq=item["seq"], title=item["title"], description=item["description"]))
 
@@ -425,10 +450,9 @@ async def execute_todo(todo_id: str):
 
         task_dir = get_task_dir(task.id)
 
-        repos = await fetch_project_repos(db, task.project_id)
-        allowed_roots = resolve_task_roots(task.id, repos)
+        repos, allowed_roots = await get_task_context(db, task.id, task.project_id)
 
-        session_id = f"task:{task.id}:todo:{todo_id}"
+        session_id = task_todo_exec(task.id, todo_id)
         existing_session = await db.get(Session, session_id)
         if not existing_session:
             session = Session(session_id=session_id, type="todo_exec", ref_id=todo_id, task_id=task.id)
@@ -452,8 +476,7 @@ async def execute_todo(todo_id: str):
         prompt = append_path_boundary(prompt, str(task_dir), allowed_roots)
 
         lang = await get_language_setting(db)
-        skill_dir = str(get_task_skills_dir(task.id))
-        client = await build_cody_client(db, str(task_dir), allowed_roots, skill_dir=skill_dir)
+        client = await build_task_cody_client(db, task.id, task.project_id)
         runner = SessionRunner(client)
         on_tool_result = make_file_write_detector(None, "code_updated")
         async with client:

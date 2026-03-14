@@ -15,7 +15,8 @@ from daiflow.services.settings_service import get_language_setting
 from daiflow.services.skill_service import get_project_dir
 from daiflow.session_runner import SessionRunner, _append_log
 from daiflow.workflow.pipeline import run_simple_task
-from daiflow.ws_manager import ws_manager
+from daiflow.session_ids import project_init as _init_sid, project_init_bus as _init_bus
+from daiflow.ws_manager import WSManager, ws_manager as _default_ws_manager
 
 logger = logging.getLogger(__name__)
 
@@ -45,20 +46,15 @@ def repo_dir_name(git_url: str) -> str:
     return name or "repo"
 
 
-async def _resolve_allowed_roots(project_dir: Path, repos: list) -> list[str]:
-    """Resolve the actual analysis paths for each repo.
+def _resolve_allowed_roots(project_dir: Path, repos: list) -> list[str]:
+    """Resolve analysis paths for each repo under a project directory.
 
-    If a repo has git_url, use the cloned path under project_dir/repos/.
-    Otherwise fall back to local_path.
+    Uses the same repo_dir_name logic as task_service.resolve_repo_path,
+    but resolves relative to the project dir (not task dir).
     """
-    roots = []
-    for r in repos:
-        if r.git_url:
-            clone_dir = project_dir / "code" / repo_dir_name(r.git_url)
-            roots.append(str(clone_dir))
-        elif r.local_path:
-            roots.append(r.local_path)
-    return roots
+    from daiflow.services.task_service import resolve_repo_path_in
+
+    return resolve_repo_path_in(project_dir, repos)
 
 
 def _build_repos_context(repos: list, allowed_roots: list[str] | None = None) -> str:
@@ -82,13 +78,13 @@ def compute_init_sessions(project_id: str, repos: list) -> list[dict]:
 
     # Layer 1: resource prep (skill_fetch + repo_clone, parallel)
     sessions.append({
-        "session_id": f"init:{project_id}:skill_fetch",
+        "session_id": _init_sid(project_id, "skill_fetch"),
         "type": "init",
         "ref_id": project_id,
         "layer": 1,
     })
     sessions.append({
-        "session_id": f"init:{project_id}:repo_clone",
+        "session_id": _init_sid(project_id, "repo_clone"),
         "type": "init",
         "ref_id": project_id,
         "layer": 1,
@@ -99,7 +95,7 @@ def compute_init_sessions(project_id: str, repos: list) -> list[dict]:
         repo_type = repo.repo_type
         types = LAYER_2_TYPES.get(repo_type, [])
         for kt in types:
-            sid = f"init:{project_id}:{kt}"
+            sid = _init_sid(project_id, kt)
             if sid not in seen_session_ids:
                 seen_session_ids.add(sid)
                 sessions.append({
@@ -112,7 +108,7 @@ def compute_init_sessions(project_id: str, repos: list) -> list[dict]:
     # Layer 3: cross-repo knowledge
     for kt in LAYER_3_TYPES:
         sessions.append({
-            "session_id": f"init:{project_id}:{kt}",
+            "session_id": _init_sid(project_id, kt),
             "type": "init",
             "ref_id": project_id,
             "layer": 3,
@@ -120,7 +116,7 @@ def compute_init_sessions(project_id: str, repos: list) -> list[dict]:
 
     # Layer 4: project.md
     sessions.append({
-        "session_id": f"init:{project_id}:project_md",
+        "session_id": _init_sid(project_id, "project_md"),
         "type": "init",
         "ref_id": project_id,
         "layer": 4,
@@ -192,7 +188,7 @@ async def _run_layer4(
     lang: str | None,
 ):
     """Run Layer 4: generate project.md index."""
-    sid = f"init:{project_id}:project_md"
+    sid = _init_sid(project_id, "project_md")
     async with get_background_db() as layer4_db:
         prompt = PROJECT_MD_PROMPT.format(output_path=str(project_dir))
         client = await build_cody_client(layer4_db, str(project_dir), allowed_roots)
@@ -201,8 +197,9 @@ async def _run_layer4(
             await runner.run(layer4_db, sid, prompt, extra_channels=[project_bus], language=lang)
 
 
-async def _finalize_init(db, project_id: str, project_bus: str):
+async def _finalize_init(db, project_id: str, project_bus: str, ws: WSManager | None = None):
     """Mark remaining WAITING init sessions as FAILED and send final done event."""
+    ws = ws or _default_ws_manager
     result = await db.execute(
         select(Session).where(
             Session.ref_id == project_id,
@@ -214,7 +211,7 @@ async def _finalize_init(db, project_id: str, project_bus: str):
         s.status = SessionStatus.FAILED
         s.error = "Skipped due to earlier layer failures"
         s.finished_at = datetime.now(timezone.utc)
-        await ws_manager.publish(project_bus, {
+        await ws.publish(project_bus, {
             "type": "session_status",
             "session_id": s.session_id,
             "status": SessionStatus.FAILED,
@@ -222,17 +219,18 @@ async def _finalize_init(db, project_id: str, project_bus: str):
             "layer": s.layer,
         })
     await db.commit()
-    await ws_manager.publish(project_bus, {"type": "done"})
+    await ws.publish(project_bus, {"type": "done"})
 
 
-async def run_init(project_id: str):
+async def run_init(project_id: str, ws_manager: WSManager | None = None):
     """Execute the 4-layer project knowledge generation pipeline.
 
     Uses an independent DB session for background execution.
     """
+    ws = ws_manager or _default_ws_manager
     async with get_background_db() as db:
         project_dir = get_project_dir(project_id)
-        project_bus = f"project:init:{project_id}"
+        project_bus = _init_bus(project_id)
 
         # Fetch repos
         result = await db.execute(
@@ -275,11 +273,14 @@ async def run_init(project_id: str):
                     "content": f"✓ {repo_dir_name(r.git_url)} ready.\n",
                 })
 
-        await asyncio.gather(
-            run_simple_task(f"init:{project_id}:skill_fetch", project_bus, _do_skill_fetch),
-            run_simple_task(f"init:{project_id}:repo_clone", project_bus, _do_repo_clone),
+        layer1_results = await asyncio.gather(
+            run_simple_task(_init_sid(project_id, "skill_fetch"), project_bus, _do_skill_fetch),
+            run_simple_task(_init_sid(project_id, "repo_clone"), project_bus, _do_repo_clone),
             return_exceptions=True,
         )
+        for r in layer1_results:
+            if isinstance(r, Exception):
+                logger.error("Layer 1 task raised: %s", r)
 
         # Check if Layer 1 had critical failures (repo_clone failure = no code to analyze)
         layer1_sessions = await db.execute(
@@ -289,39 +290,26 @@ async def run_init(project_id: str):
         if layer1_failed:
             failed_names = ", ".join(s.session_id for s in layer1_failed)
             logger.error("Layer 1 failed (%s), aborting init for project %s", failed_names, project_id)
-            await ws_manager.publish(project_bus, {"type": "done"})
+            await ws.publish(project_bus, {"type": "done"})
             return
 
         # Resolve allowed_roots: git-cloned paths take priority over local_path
         allowed_roots = await _resolve_allowed_roots(project_dir, repos)
-
-        # Layer 2: Per-repo knowledge (concurrent)
-        layer2_sessions = await db.execute(
-            select(Session).where(Session.ref_id == project_id, Session.layer == 2)
-        )
-        layer2 = layer2_sessions.scalars().all()
-
         lang = await get_language_setting(db)
 
-        layer2_ok = await _run_layer(layer2, 2, project_dir, allowed_roots, repos, project_bus, lang)
-
-        if not layer2_ok:
-            logger.error("Layer 2 had failures, aborting init for project %s", project_id)
-            await _finalize_init(db, project_id, project_bus)
-            return
-
-        # Layer 3: Cross-repo knowledge (concurrent)
-        layer3_sessions = await db.execute(
-            select(Session).where(Session.ref_id == project_id, Session.layer == 3)
-        )
-        layer3 = layer3_sessions.scalars().all()
-
-        layer3_ok = await _run_layer(layer3, 3, project_dir, allowed_roots, repos, project_bus, lang)
-
-        if not layer3_ok:
-            logger.error("Layer 3 had failures, aborting init for project %s", project_id)
-            await _finalize_init(db, project_id, project_bus)
-            return
+        # Layers 2 & 3: knowledge generation (concurrent within each layer, serial across)
+        for layer_num in (2, 3):
+            layer_sessions = await db.execute(
+                select(Session).where(Session.ref_id == project_id, Session.layer == layer_num)
+            )
+            layer_ok = await _run_layer(
+                layer_sessions.scalars().all(), layer_num,
+                project_dir, allowed_roots, repos, project_bus, lang,
+            )
+            if not layer_ok:
+                logger.error("Layer %d had failures, aborting init for project %s", layer_num, project_id)
+                await _finalize_init(db, project_id, project_bus, ws)
+                return
 
         # Layer 4: Generate project.md
         try:
@@ -329,14 +317,14 @@ async def run_init(project_id: str):
         except Exception as e:
             logger.error("Layer 4 project.md generation failed: %s", e)
 
-        await _finalize_init(db, project_id, project_bus)
+        await _finalize_init(db, project_id, project_bus, ws)
 
 
 async def run_init_retry(project_id: str, failed_session_ids: list[str], from_layer: int):
     """Re-run failed sessions in from_layer + all sessions in subsequent layers."""
     async with get_background_db() as db:
         project_dir = get_project_dir(project_id)
-        project_bus = f"project:init:{project_id}"
+        project_bus = _init_bus(project_id)
 
         # Fetch repos and resolve allowed_roots (use cloned paths if available)
         result = await db.execute(

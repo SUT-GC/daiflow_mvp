@@ -6,8 +6,25 @@
  * 2. sendChat(stage, entityId, message, onEvent) — bidirectional chat streaming
  */
 
+/** All known WebSocket event types from the backend. */
+export type WSEventType =
+  | 'text_delta'
+  | 'thinking'
+  | 'tool_call'
+  | 'tool_result'
+  | 'done'
+  | 'error'
+  | 'status_change'
+  | 'plan_updated'
+  | 'todo_updated'
+  | 'code_updated'
+  | 'skill_loaded'
+  | 'session_status'
+  | 'user_message'
+  | 'compact'
+
 export interface WSEvent {
-  type: string
+  type: WSEventType
   content?: string
   tool_name?: string
   args?: Record<string, any>
@@ -36,6 +53,8 @@ type EventHandler = (event: WSEvent) => void
 const WS_PING_INTERVAL_MS = 25_000
 /** Maximum delay (ms) between reconnect attempts (exponential backoff cap). */
 const WS_MAX_RECONNECT_DELAY_MS = 30_000
+/** Delay (ms) for low-frequency fallback reconnect after max attempts exhausted. */
+const WS_FALLBACK_RECONNECT_MS = 60_000
 
 class WebSocketClient {
   private ws: WebSocket | null = null
@@ -235,12 +254,11 @@ class WebSocketClient {
   }
 
   private scheduleReconnect(): void {
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      console.error('WS: max reconnect attempts reached')
-      return
-    }
-
-    const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), WS_MAX_RECONNECT_DELAY_MS)
+    // After exhausting fast retries, fall back to low-frequency reconnect
+    // so the connection can recover without requiring a page refresh.
+    const delay = this.reconnectAttempts >= this.maxReconnectAttempts
+      ? WS_FALLBACK_RECONNECT_MS
+      : Math.min(1000 * Math.pow(2, this.reconnectAttempts), WS_MAX_RECONNECT_DELAY_MS)
     this.reconnectAttempts++
 
     this.reconnectTimer = setTimeout(() => {

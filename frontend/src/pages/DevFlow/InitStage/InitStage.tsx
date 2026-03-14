@@ -2,8 +2,9 @@ import { useEffect, useState, useMemo, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import Topbar from '../../../components/Shell/Topbar'
 import StageProgress from '../../../components/StageProgress/StageProgress'
-import { getTask, getTaskInitSessions, confirmInit, retryInit, type TaskData, type InitSessionData } from '../../../api'
+import { getTask, getTaskInitSessions, confirmInit, retryTaskInit, type TaskData, type InitSessionData } from '../../../api'
 import { useLocale } from '../../../hooks/useLocale'
+import { sessionIds } from '../../../utils/sessionIds'
 import { wsClient } from '../../../ws'
 import type { TranslationKey } from '../../../i18n'
 import '../../Projects/ProjectInit.css'
@@ -39,8 +40,8 @@ export default function InitStage() {
   // Subscribe to init WS channel for real-time updates
   useEffect(() => {
     if (!taskId) return
-    const channel = `task:init:${taskId}`
-    wsClient.subscribe(channel, (event: any) => {
+    const channel = sessionIds.taskInitBus(taskId)
+    const unsub = wsClient.subscribe(channel, (event: any) => {
       if (event.type === 'session_status') {
         setSessions(prev => prev.map(s =>
           s.session_id === event.session_id
@@ -53,7 +54,7 @@ export default function InitStage() {
         loadData()
       }
     })
-    return () => { wsClient.unsubscribe(channel) }
+    return unsub
   }, [taskId, loadData])
 
   const totalCount = sessions.length
@@ -117,7 +118,7 @@ export default function InitStage() {
     if (!taskId || retrying) return
     setRetrying(true)
     try {
-      await retryInit(taskId)
+      await retryTaskInit(taskId)
       // Reload to get fresh session data
       await loadData()
     } catch (err) {

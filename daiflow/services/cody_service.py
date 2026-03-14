@@ -2,6 +2,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from daiflow.config import CODY_DB_PATH
+from daiflow.exceptions import ConfigurationError
 from daiflow.models import Setting
 
 
@@ -29,7 +30,7 @@ async def build_cody_client(
     api_key = settings.get("cody_api_key", "")
 
     if not all([model, base_url, api_key]):
-        raise ValueError("AI model not configured. Please set cody_model, cody_base_url, and cody_api_key in Settings.")
+        raise ConfigurationError("AI model not configured. Please set cody_model, cody_base_url, and cody_api_key in Settings.")
 
     builder = (
         Cody()
@@ -55,6 +56,22 @@ async def build_cody_client(
             )
 
     return builder.build()
+
+
+async def build_task_cody_client(db: AsyncSession, task_id: str, project_id: str):
+    """Build a Cody client configured for a task context.
+
+    Convenience wrapper that resolves task directory, allowed roots,
+    and skill directory — the common pattern used by task_service,
+    chat_service, and review_service.
+    """
+    from daiflow.services.skill_service import get_task_dir, get_task_skills_dir
+    from daiflow.services.task_service import get_task_context
+
+    task_dir = get_task_dir(task_id)
+    _, allowed_roots = await get_task_context(db, task_id, project_id)
+    skill_dir = str(get_task_skills_dir(task_id))
+    return await build_cody_client(db, str(task_dir), allowed_roots, skill_dir=skill_dir)
 
 
 def append_path_boundary(prompt: str, workdir: str, allowed_roots: list[str]) -> str:

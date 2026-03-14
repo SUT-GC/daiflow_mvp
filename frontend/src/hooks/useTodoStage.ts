@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { getTask, getTodos, TaskData, TodoData } from '../api'
 import { SessionStatus } from '../types/enums'
+import { sessionIds } from '../utils/sessionIds'
 import type { WSEvent } from '../ws'
 import { useSession } from './useSession'
 import { useStageChat } from './useStageChat'
@@ -28,7 +29,7 @@ export function useTodoStage(taskId: string | undefined) {
     refreshTodos()
   }, [refreshTask, refreshTodos])
 
-  const sessionId = taskId ? `task:${taskId}:todo_split` : null
+  const sessionId = taskId ? sessionIds.todoSplit(taskId) : null
   const { status, logs, error: sessionError } = useSession(sessionId, sessionRefreshKey)
 
   // Refresh task and todos when session completes (DB is synced at that point)

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { getTask, TaskData } from '../api'
 import { SessionStatus } from '../types/enums'
+import { sessionIds } from '../utils/sessionIds'
 import { useSession } from './useSession'
 import { useStageChat } from './useStageChat'
 
@@ -23,7 +24,7 @@ export function usePlanStage(taskId: string | undefined) {
 
   useEffect(() => { refreshTask() }, [refreshTask])
 
-  const sessionId = taskId ? `task:${taskId}:plan` : null
+  const sessionId = taskId ? sessionIds.plan(taskId) : null
   const { status, logs, error: sessionError } = useSession(sessionId, sessionRefreshKey)
 
   // Refresh task when session completes (tech_plan is synced to DB at that point)

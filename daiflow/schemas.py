@@ -1,6 +1,7 @@
 """Pydantic response/request models for API endpoints."""
 
 import json
+import re
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, field_validator
@@ -134,6 +135,10 @@ class ProjectUpdate(BaseModel):
     skill_names: list[str] | None = None
 
 
+# Valid git branch name: starts with word char, allows word chars, dots, slashes, hyphens
+_BRANCH_RE = re.compile(r'^[\w][\w./-]*$')
+
+
 class TaskCreate(BaseModel):
     name: str
     project_id: str
@@ -142,6 +147,15 @@ class TaskCreate(BaseModel):
     prd: str = ""
     tech_plan: str = ""
 
+    @field_validator("branch")
+    @classmethod
+    def validate_branch(cls, v: str) -> str:
+        if not v:
+            return v  # Empty branch is allowed (optional)
+        if not _BRANCH_RE.match(v) or '..' in v or v.endswith('.lock') or v.endswith('/'):
+            raise ValueError(f"Invalid branch name: {v!r}")
+        return v
+
 
 class TaskUpdate(BaseModel):
     name: str | None = None
@@ -149,6 +163,15 @@ class TaskUpdate(BaseModel):
     branch: str | None = None
     prd: str | None = None
     tech_plan: str | None = None
+
+    @field_validator("branch")
+    @classmethod
+    def validate_branch(cls, v: str | None) -> str | None:
+        if v is None or not v:
+            return v
+        if not _BRANCH_RE.match(v) or '..' in v or v.endswith('.lock') or v.endswith('/'):
+            raise ValueError(f"Invalid branch name: {v!r}")
+        return v
 
 
 class SettingsUpdate(BaseModel):

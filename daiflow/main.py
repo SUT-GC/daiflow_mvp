@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from daiflow.config import init_daiflow_dir
+from daiflow.config import cleanup_old_logs, init_daiflow_dir
 from daiflow.database import init_db
 from daiflow.routers import jobs, projects, sessions, settings, tasks, todos, ws
 
@@ -19,12 +19,13 @@ logger = logging.getLogger(__name__)
 async def _recover_interrupted_sessions():
     """Reset all interrupted sessions (RUNNING → FAILED) on startup.
 
-    Also auto-retries interrupted init pipelines.
+    Also auto-retries interrupted init pipelines and recovers
+    todos/tasks stuck in transitional states due to lost background tasks.
     """
     from datetime import datetime, timezone
     from sqlalchemy import select
     from daiflow.database import get_background_db
-    from daiflow.models import Session, SessionStatus
+    from daiflow.models import Session, SessionStatus, Todo, TodoStatus
     from daiflow.services.project_service import run_init_retry
 
     async with get_background_db() as db:
@@ -33,39 +34,51 @@ async def _recover_interrupted_sessions():
             select(Session).where(Session.status == SessionStatus.RUNNING)
         )
         interrupted = result.scalars().all()
-        if not interrupted:
-            return
 
-        # Mark all as FAILED
-        projects_to_retry: dict[str, dict] = {}
-        for s in interrupted:
-            s.status = SessionStatus.FAILED
-            s.error = "Interrupted by server shutdown"
-            s.finished_at = datetime.now(timezone.utc)
+        if interrupted:
+            # Mark all as FAILED
+            projects_to_retry: dict[str, dict] = {}
+            for s in interrupted:
+                s.status = SessionStatus.FAILED
+                s.error = "Interrupted by server shutdown"
+                s.finished_at = datetime.now(timezone.utc)
 
-            # Track init sessions for auto-retry
-            if s.type == "init":
-                pid = s.ref_id
-                if pid not in projects_to_retry:
-                    projects_to_retry[pid] = {"from_layer": s.layer or 1, "failed_ids": []}
-                info = projects_to_retry[pid]
-                if s.layer and s.layer < info["from_layer"]:
-                    info["from_layer"] = s.layer
-                if s.layer == info["from_layer"]:
-                    info["failed_ids"].append(s.session_id)
-        await db.commit()
+                # Track init sessions for auto-retry
+                if s.type == "init":
+                    pid = s.ref_id
+                    if pid not in projects_to_retry:
+                        projects_to_retry[pid] = {"from_layer": s.layer or 1, "failed_ids": []}
+                    info = projects_to_retry[pid]
+                    if s.layer and s.layer < info["from_layer"]:
+                        info["from_layer"] = s.layer
+                    if s.layer == info["from_layer"]:
+                        info["failed_ids"].append(s.session_id)
 
-        logger.info(
-            "Recovered %d interrupted sessions (%d init, %d other)",
-            len(interrupted),
-            sum(1 for s in interrupted if s.type == "init"),
-            sum(1 for s in interrupted if s.type != "init"),
+            logger.info(
+                "Recovered %d interrupted sessions (%d init, %d other)",
+                len(interrupted),
+                sum(1 for s in interrupted if s.type == "init"),
+                sum(1 for s in interrupted if s.type != "init"),
+            )
+
+            # Auto-retry each affected init project
+            for pid, info in projects_to_retry.items():
+                logger.info("Auto-retrying init for project %s from layer %d", pid, info["from_layer"])
+                asyncio.create_task(run_init_retry(pid, info["failed_ids"], info["from_layer"]))
+
+        # Recover todos stuck in RUNNING (background task was lost on crash).
+        # Reset them to FAILED so the user can retry.
+        stuck_todos = await db.execute(
+            select(Todo).where(Todo.status == TodoStatus.RUNNING)
         )
+        stuck_count = 0
+        for todo in stuck_todos.scalars().all():
+            todo.status = TodoStatus.FAILED
+            stuck_count += 1
+        if stuck_count:
+            logger.info("Reset %d stuck RUNNING todo(s) to FAILED", stuck_count)
 
-        # Auto-retry each affected init project
-        for pid, info in projects_to_retry.items():
-            logger.info("Auto-retrying init for project %s from layer %d", pid, info["from_layer"])
-            asyncio.create_task(run_init_retry(pid, info["failed_ids"], info["from_layer"]))
+        await db.commit()
 
 
 @asynccontextmanager
@@ -73,6 +86,11 @@ async def lifespan(app: FastAPI):
     init_daiflow_dir()
     await init_db()
     await _recover_interrupted_sessions()
+
+    # Clean up old session logs
+    removed = cleanup_old_logs()
+    if removed:
+        logger.info("Cleaned up %d old session log(s)", removed)
 
     # Start repo monitor background job
     from daiflow.services.repo_monitor import start_monitor, stop_monitor
@@ -117,6 +135,10 @@ if static_dir.exists():
     # SPA fallback: serve index.html for all non-API routes
     @app.get("/{full_path:path}")
     async def serve_spa(request: Request, full_path: str):
+        # Never intercept API routes — let them return 404 naturally
+        if full_path.startswith("api/"):
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=404, content={"detail": "Not found"})
         # Try to serve the exact file first (e.g. favicon, manifest)
         file_path = (static_dir / full_path).resolve()
         # Guard against path traversal — file must be within static_dir

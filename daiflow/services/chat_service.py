@@ -10,12 +10,14 @@ from typing import Any, Callable
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from daiflow.exceptions import InvalidStateError, NotFoundError
 from daiflow.models import Session, Task, TaskStatus, Todo
 from daiflow.prompts import PLAN_CHAT_PREFIX, TODO_CHAT_PREFIX
-from daiflow.services.cody_service import build_cody_client
+from daiflow.services.cody_service import build_task_cody_client
 from daiflow.services.settings_service import get_language_setting
-from daiflow.services.skill_service import get_task_dir, get_task_skills_dir
-from daiflow.services.task_service import resolve_task_roots, fetch_project_repos, sync_todos_from_file
+from daiflow.services.skill_service import get_task_dir
+from daiflow.services.task_service import sync_todos_from_file
+from daiflow.session_ids import task_plan, task_review, task_todo_exec, task_todo_split
 from daiflow.session_runner import make_file_write_detector
 
 
@@ -27,12 +29,6 @@ class StageChatContext:
     on_tool_result: Callable | None
     language: str | None
     system_prefix: str | None = None  # Prepended to user message for context
-
-
-async def _get_task_allowed_roots(db: AsyncSession, task_id: str, project_id: str) -> list[str]:
-    """Get allowed_roots for a task, including both local repos and git-cloned copies."""
-    repos = await fetch_project_repos(db, project_id)
-    return resolve_task_roots(task_id, repos)
 
 
 async def prepare_stage_chat(
@@ -51,21 +47,20 @@ async def prepare_stage_chat(
         StageChatContext with all fields populated.
 
     Raises:
-        ValueError: If the entity is not found or in an invalid state.
+        NotFoundError: If the entity is not found.
+        InvalidStateError: If the entity is in an invalid state for chat.
     """
     lang = await get_language_setting(db)
 
     if stage == "plan":
         task = await db.get(Task, entity_id)
         if not task:
-            raise ValueError(f"Task {entity_id} not found")
+            raise NotFoundError(f"Task {entity_id} not found")
 
-        session_id = f"task:{entity_id}:plan"
+        session_id = task_plan(entity_id)
         task_dir = get_task_dir(entity_id)
         plan_path = task_dir / "plan.md"
-        allowed_roots = await _get_task_allowed_roots(db, entity_id, task.project_id)
-        skill_dir = str(get_task_skills_dir(entity_id))
-        client = await build_cody_client(db, str(task_dir), allowed_roots, skill_dir=skill_dir)
+        client = await build_task_cody_client(db, entity_id, task.project_id)
 
         async def on_plan_match(_file_path):
             if plan_path.exists():
@@ -99,14 +94,12 @@ async def prepare_stage_chat(
     elif stage == "todo":
         task = await db.get(Task, entity_id)
         if not task:
-            raise ValueError(f"Task {entity_id} not found")
+            raise NotFoundError(f"Task {entity_id} not found")
 
-        session_id = f"task:{entity_id}:todo_split"
+        session_id = task_todo_split(entity_id)
         task_dir = get_task_dir(entity_id)
         todo_path = task_dir / "todo.json"
-        allowed_roots = await _get_task_allowed_roots(db, entity_id, task.project_id)
-        skill_dir = str(get_task_skills_dir(entity_id))
-        client = await build_cody_client(db, str(task_dir), allowed_roots, skill_dir=skill_dir)
+        client = await build_task_cody_client(db, entity_id, task.project_id)
 
         async def on_todo_match(_file_path):
             if todo_path.exists():
@@ -139,19 +132,16 @@ async def prepare_stage_chat(
     elif stage == "todo_exec":
         todo = await db.get(Todo, entity_id)
         if not todo:
-            raise ValueError(f"Todo {entity_id} not found")
+            raise NotFoundError(f"Todo {entity_id} not found")
 
         task = await db.get(Task, todo.task_id)
         if not task:
-            raise ValueError(f"Task {todo.task_id} not found")
+            raise NotFoundError(f"Task {todo.task_id} not found")
         if task.status != TaskStatus.CODING:
-            raise ValueError("Task is not in coding stage")
+            raise InvalidStateError("Task is not in coding stage")
 
-        session_id = f"task:{task.id}:todo:{entity_id}"
-        task_dir = get_task_dir(task.id)
-        allowed_roots = await _get_task_allowed_roots(db, task.id, task.project_id)
-        skill_dir = str(get_task_skills_dir(task.id))
-        client = await build_cody_client(db, str(task_dir), allowed_roots, skill_dir=skill_dir)
+        session_id = task_todo_exec(task.id, entity_id)
+        client = await build_task_cody_client(db, task.id, task.project_id)
         on_tool_result = make_file_write_detector(None, "code_updated")
 
         return StageChatContext(
@@ -165,13 +155,10 @@ async def prepare_stage_chat(
     elif stage == "review":
         task = await db.get(Task, entity_id)
         if not task:
-            raise ValueError(f"Task {entity_id} not found")
+            raise NotFoundError(f"Task {entity_id} not found")
 
-        session_id = f"task:{entity_id}:review"
-        task_dir = get_task_dir(entity_id)
-        allowed_roots = await _get_task_allowed_roots(db, entity_id, task.project_id)
-        skill_dir = str(get_task_skills_dir(entity_id))
-        client = await build_cody_client(db, str(task_dir), allowed_roots, skill_dir=skill_dir)
+        session_id = task_review(entity_id)
+        client = await build_task_cody_client(db, entity_id, task.project_id)
         on_tool_result = make_file_write_detector(None, "code_updated")
 
         # Look up cody_session_id via task_id FK
@@ -191,4 +178,4 @@ async def prepare_stage_chat(
         )
 
     else:
-        raise ValueError(f"Unknown stage: {stage}")
+        raise InvalidStateError(f"Unknown stage: {stage}")

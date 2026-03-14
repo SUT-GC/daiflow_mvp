@@ -29,8 +29,11 @@ async def execute_todo_route(
     if task.status != TaskStatus.CODING:
         raise HTTPException(status_code=400, detail="Task is not in coding stage")
 
-    # Transition immediately to RUNNING to prevent TOCTOU race
-    # (if two requests arrive, only the first will succeed)
+    # Transition to RUNNING immediately via state machine.
+    # The state machine checks source state (must be PENDING or FAILED) and
+    # validates _prev_todo_completed. SQLite serializes writes, so if two
+    # concurrent requests race, the second will find status=RUNNING after
+    # the first commits, and the state machine will reject it with MachineError.
     wf = TodoWorkflow(todo, db)
     try:
         if todo.status == TodoStatus.FAILED:

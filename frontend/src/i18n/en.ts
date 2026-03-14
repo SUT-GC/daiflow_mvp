@@ -219,10 +219,13 @@ const en = {
   'review.success_sub': 'Code has been committed and pushed to remote',
   'review.close': 'Close',
   'review.return_tasks': 'Return to Tasks',
+  'review.generating_commit': 'Generating commit message...',
 
   // ChatPanel
   'chat.default_title': 'AI Chat',
   'chat.placeholder': 'Send a message...',
+  'chat.expand': 'Expand',
+  'chat.collapse': 'Collapse',
 
   // Debug
   'debug.title': 'Debug',
@@ -250,6 +253,7 @@ const en = {
   // ErrorBoundary
   'error.title': 'Something went wrong',
   'error.try_again': 'Try Again',
+  'error.back_to_tasks': 'Return to Tasks',
 } as const
 
 export type TranslationKey = keyof typeof en

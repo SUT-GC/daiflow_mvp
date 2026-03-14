@@ -1,16 +1,18 @@
 import { useNavigate } from 'react-router-dom'
 import { useTheme } from '../../hooks/useTheme'
+import { useLocale } from '../../hooks/useLocale'
 import { TaskStatus } from '../../types/enums'
+import type { TranslationKey } from '../../i18n'
 
-const STATUS_CONFIG: Record<number, { label: string; cls: string }> = {
-  [TaskStatus.CREATED]:      { label: '未开始', cls: 'status-grey' },
-  [TaskStatus.INITIALIZING]: { label: '初始化', cls: 'status-amber' },
-  [TaskStatus.PLANNING]:     { label: '方案中', cls: 'status-amber' },
-  [TaskStatus.PLAN_LOCKED]:  { label: '方案锁定', cls: 'status-teal' },
-  [TaskStatus.TODO_READY]:   { label: '待编码', cls: 'status-blue' },
-  [TaskStatus.CODING]:       { label: '编码中', cls: 'status-amber' },
-  [TaskStatus.REVIEWING]:    { label: '审查中', cls: 'status-amber' },
-  [TaskStatus.DONE]:         { label: '已完成', cls: 'status-teal' },
+const STATUS_CONFIG: Record<number, { labelKey: TranslationKey; cls: string }> = {
+  [TaskStatus.CREATED]:      { labelKey: 'tasks.status.0', cls: 'status-grey' },
+  [TaskStatus.INITIALIZING]: { labelKey: 'tasks.status.1', cls: 'status-amber' },
+  [TaskStatus.PLANNING]:     { labelKey: 'tasks.status.2', cls: 'status-amber' },
+  [TaskStatus.PLAN_LOCKED]:  { labelKey: 'tasks.status.3', cls: 'status-teal' },
+  [TaskStatus.TODO_READY]:   { labelKey: 'tasks.status.4', cls: 'status-blue' },
+  [TaskStatus.CODING]:       { labelKey: 'tasks.status.5', cls: 'status-amber' },
+  [TaskStatus.REVIEWING]:    { labelKey: 'tasks.status.6', cls: 'status-amber' },
+  [TaskStatus.DONE]:         { labelKey: 'tasks.status.7', cls: 'status-teal' },
 }
 
 interface TopbarProps {
@@ -26,6 +28,7 @@ interface TopbarProps {
 export default function Topbar({ title, subtitle, branch, taskStatus, backTo, backLabel, actions }: TopbarProps) {
   const navigate = useNavigate()
   const { theme, toggleTheme } = useTheme()
+  const { t } = useLocale()
 
   const statusInfo = taskStatus != null ? STATUS_CONFIG[taskStatus] : null
 
@@ -44,7 +47,7 @@ export default function Topbar({ title, subtitle, branch, taskStatus, backTo, ba
         </>
       )}
       {branch && <span className="topbar-branch">{branch}</span>}
-      {statusInfo && <span className={`topbar-status ${statusInfo.cls}`}>{statusInfo.label}</span>}
+      {statusInfo && <span className={`topbar-status ${statusInfo.cls}`}>{t(statusInfo.labelKey)}</span>}
       <div className="topbar-right">
         <button className="theme-btn" onClick={toggleTheme}>
           {theme === 'dark' ? '\u2600' : '\u263D'}

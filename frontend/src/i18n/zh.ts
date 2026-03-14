@@ -221,10 +221,13 @@ const zh: Record<TranslationKey, string> = {
   'review.success_sub': '代码已提交并推送到远程仓库',
   'review.close': '关闭',
   'review.return_tasks': '返回任务列表',
+  'review.generating_commit': '正在生成提交信息...',
 
   // ChatPanel
   'chat.default_title': 'AI 对话',
   'chat.placeholder': '发送消息...',
+  'chat.expand': '展开',
+  'chat.collapse': '收起',
 
   // Debug
   'debug.title': '排障',
@@ -252,6 +255,7 @@ const zh: Record<TranslationKey, string> = {
   // ErrorBoundary
   'error.title': '出现错误',
   'error.try_again': '重试',
+  'error.back_to_tasks': '返回任务列表',
 }
 
 export default zh

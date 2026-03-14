@@ -56,13 +56,25 @@ async def client(db_engine):
 
     app.dependency_overrides[get_db] = override_get_db
 
-    # Patch get_background_db so background tasks also use the test DB
-    with patch("daiflow.database.get_background_db", override_get_background_db), \
-         patch("daiflow.services.task_service.get_background_db", override_get_background_db), \
-         patch("daiflow.services.project_service.get_background_db", override_get_background_db), \
-         patch("daiflow.workflow.pipeline.get_background_db", override_get_background_db):
+    # Patch get_background_db everywhere it's imported so background tasks use the test DB.
+    # Each module that does `from daiflow.database import get_background_db` gets its own
+    # reference, so we must patch each import site individually.
+    _bg_db_modules = [
+        "daiflow.database",
+        "daiflow.services.task_service",
+        "daiflow.services.project_service",
+        "daiflow.services.repo_monitor",
+        "daiflow.workflow.pipeline",
+    ]
+    patches = [patch(f"{mod}.get_background_db", override_get_background_db) for mod in _bg_db_modules]
+    for p in patches:
+        p.start()
+    try:
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             yield ac
+    finally:
+        for p in patches:
+            p.stop()
 
     app.dependency_overrides.clear()

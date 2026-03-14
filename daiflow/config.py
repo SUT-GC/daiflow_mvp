@@ -27,7 +27,26 @@ LANGUAGE_INSTRUCTIONS = {
 DEFAULT_LANGUAGE = "en"
 
 
+# Session log retention (days). Logs older than this are cleaned up on startup.
+LOG_RETENTION_DAYS = int(os.environ.get("DAIFLOW_LOG_RETENTION_DAYS", "30"))
+
+
 def init_daiflow_dir():
     """Create the ~/.daiflow/ directory structure if it doesn't exist."""
     for d in [DAIFLOW_HOME, SESSIONS_DIR, PROJECTS_DIR, TASKS_DIR]:
         d.mkdir(parents=True, exist_ok=True)
+
+
+def cleanup_old_logs():
+    """Delete .jsonl log files older than LOG_RETENTION_DAYS."""
+    import time
+    cutoff = time.time() - LOG_RETENTION_DAYS * 86400
+    count = 0
+    for f in SESSIONS_DIR.glob("*.jsonl"):
+        try:
+            if f.stat().st_mtime < cutoff:
+                f.unlink()
+                count += 1
+        except OSError:
+            pass
+    return count

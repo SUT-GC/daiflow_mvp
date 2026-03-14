@@ -9,7 +9,7 @@ from daiflow.prompts import COMMIT_MESSAGE_PROMPT_TEMPLATE
 from daiflow.services.cody_service import build_cody_client
 from daiflow.services.git_service import commit, get_diff, push
 from daiflow.services.skill_service import get_task_dir
-from daiflow.services.task_service import fetch_project_repos, resolve_repo_path
+from daiflow.services.task_service import fetch_project_repos, get_task_context, resolve_repo_path
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +39,7 @@ async def generate_commit_message(db: AsyncSession, task: Task) -> str:
     """
     fallback = f"feat: {task.name}"
 
-    repos = await fetch_project_repos(db, task.project_id)
-    allowed_roots = [p for r in repos if (p := resolve_repo_path(r, task.id))]
+    _, allowed_roots = await get_task_context(db, task.id, task.project_id)
 
     # Collect diffs
     diff_texts = []
@@ -120,6 +119,12 @@ async def submit_mr(db: AsyncSession, task: Task, commit_message: str) -> list[d
             await push(repo_path, task.branch)
             results.append({"repo": repo_label, "status": "success"})
         except Exception as e:
-            results.append({"repo": repo_label, "status": "error", "error": str(e)})
+            results.append({
+                "repo": repo_label,
+                "status": "error",
+                "error": str(e),
+                "recovery": f"Changes have been committed locally on branch '{task.branch}'. "
+                            f"You can push manually with: git push -u origin {task.branch}",
+            })
 
     return results
