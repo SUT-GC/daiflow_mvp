@@ -27,7 +27,7 @@ export default function PlanStage() {
     }
   }
 
-  const readonly = task ? isStageReadonly(task.status, 1) : false
+  const readonly = task ? isStageReadonly(task.status, 2) : false
   const isGenerating = status === 1 || streaming || regenerating
   const lockDisabled = !planContent || isGenerating || readonly
   const regenerateDisabled = isGenerating || readonly
@@ -36,7 +36,7 @@ export default function PlanStage() {
     <StageLayout
       taskId={taskId!}
       task={task}
-      currentStage={1}
+      currentStage={2}
       content={
         <div className="card plan-card">
           <div className="plan-card-title">

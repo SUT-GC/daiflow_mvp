@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from daiflow.config import init_daiflow_dir
 from daiflow.database import init_db
-from daiflow.routers import projects, sessions, settings, tasks, todos, ws
+from daiflow.routers import jobs, projects, sessions, settings, tasks, todos, ws
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +73,15 @@ async def lifespan(app: FastAPI):
     init_daiflow_dir()
     await init_db()
     await _recover_interrupted_sessions()
+
+    # Start repo monitor background job
+    from daiflow.services.repo_monitor import start_monitor, stop_monitor
+    start_monitor()
+
     yield
+
+    # Stop repo monitor on shutdown
+    stop_monitor()
 
 
 app = FastAPI(title="DaiFlow", version="0.1.0", lifespan=lifespan)
@@ -97,6 +105,7 @@ app.include_router(projects.router)
 app.include_router(tasks.router)
 app.include_router(todos.router)
 app.include_router(sessions.router)
+app.include_router(jobs.router)
 app.include_router(ws.router)
 
 # Serve React build as static files (production mode)
@@ -109,8 +118,9 @@ if static_dir.exists():
     @app.get("/{full_path:path}")
     async def serve_spa(request: Request, full_path: str):
         # Try to serve the exact file first (e.g. favicon, manifest)
-        file_path = static_dir / full_path
-        if full_path and file_path.is_file():
+        file_path = (static_dir / full_path).resolve()
+        # Guard against path traversal — file must be within static_dir
+        if full_path and file_path.is_relative_to(static_dir.resolve()) and file_path.is_file():
             return FileResponse(file_path)
         # Otherwise return index.html for client-side routing
         return FileResponse(static_dir / "index.html")

@@ -6,13 +6,15 @@ from pathlib import Path
 
 from sqlalchemy import select, update
 
-from daiflow.services.settings_service import get_language_setting
 from daiflow.database import get_background_db
 from daiflow.models import ProjectRepo, Session, SessionStatus
+from daiflow.prompts import KNOWLEDGE_PROMPTS, PROJECT_MD_PROMPT
 from daiflow.services.cody_service import append_path_boundary, build_cody_client
-from daiflow.services.git_service import clone_or_pull
+from daiflow.services.git_service import clone_or_pull, get_head_hash
+from daiflow.services.settings_service import get_language_setting
 from daiflow.services.skill_service import get_project_dir
 from daiflow.session_runner import SessionRunner, _append_log
+from daiflow.workflow.pipeline import run_simple_task
 from daiflow.ws_manager import ws_manager
 
 logger = logging.getLogger(__name__)
@@ -26,75 +28,8 @@ LAYER_2_TYPES = {
 }
 LAYER_3_TYPES = ["module-overview", "api-interaction", "data-entity", "dependencies"]
 
-# Prompt templates for each knowledge type
-# Available placeholders: {output_path}, {repos_context}
-KNOWLEDGE_PROMPTS = {
-    "frontend-structure": (
-        "You have access to the following repositories:\n{repos_context}\n\n"
-        "Analyze the frontend repositories and generate a comprehensive skill document about the frontend directory structure. "
-        "Cover: directory organization, module responsibilities, naming conventions, and architectural patterns. "
-        "Write the output to {output_path}/SKILL.md in Agent Skills format with YAML frontmatter "
-        "(name: frontend-structure, description: Frontend directory structure analysis, user-invocable: false)."
-    ),
-    "backend-structure": (
-        "You have access to the following repositories:\n{repos_context}\n\n"
-        "Analyze the backend repositories and generate a comprehensive skill document about the backend directory structure. "
-        "Cover: directory organization, module responsibilities, naming conventions, and architectural patterns. "
-        "Write the output to {output_path}/SKILL.md in Agent Skills format with YAML frontmatter "
-        "(name: backend-structure, description: Backend directory structure analysis, user-invocable: false)."
-    ),
-    "business-flow": (
-        "You have access to the following repositories:\n{repos_context}\n\n"
-        "Analyze the repositories and generate a comprehensive skill document about business flows. "
-        "Cover: key user flows per module, state transitions, and data flow patterns. "
-        "Write the output to {output_path}/SKILL.md in Agent Skills format with YAML frontmatter "
-        "(name: business-flow, description: Business flow analysis per module, user-invocable: false)."
-    ),
-    "component-usage": (
-        "You have access to the following repositories:\n{repos_context}\n\n"
-        "Analyze the frontend repositories and generate a comprehensive skill document about component usage. "
-        "Cover: shared components, usage patterns, props interfaces, and composition patterns. "
-        "Write the output to {output_path}/SKILL.md in Agent Skills format with YAML frontmatter "
-        "(name: component-usage, description: Frontend component structure and reuse patterns, user-invocable: false)."
-    ),
-    "module-overview": (
-        "You have access to the following repositories:\n{repos_context}\n\n"
-        "Analyze all repositories and generate a comprehensive skill document about module breakdown. "
-        "Cover: all modules across frontend and backend, their responsibilities and boundaries. "
-        "Write the output to {output_path}/SKILL.md in Agent Skills format with YAML frontmatter "
-        "(name: module-overview, description: Module breakdown and descriptions, user-invocable: false)."
-    ),
-    "api-interaction": (
-        "You have access to the following repositories:\n{repos_context}\n\n"
-        "Analyze all repositories and generate a comprehensive skill document about API interactions. "
-        "Cover: API endpoints, request/response patterns, frontend-backend integration points. "
-        "Write the output to {output_path}/SKILL.md in Agent Skills format with YAML frontmatter "
-        "(name: api-interaction, description: Frontend-backend API interaction relationships, user-invocable: false)."
-    ),
-    "data-entity": (
-        "You have access to the following repositories:\n{repos_context}\n\n"
-        "Analyze all repositories and generate a comprehensive skill document about data entities. "
-        "Cover: data models, database schemas, data flow patterns, and entity relationships. "
-        "Write the output to {output_path}/SKILL.md in Agent Skills format with YAML frontmatter "
-        "(name: data-entity, description: Data entities and data flows per module, user-invocable: false)."
-    ),
-    "dependencies": (
-        "You have access to the following repositories:\n{repos_context}\n\n"
-        "Analyze all repositories and generate a comprehensive skill document about dependencies. "
-        "Cover: external dependencies, internal module dependencies, version requirements. "
-        "Write the output to {output_path}/SKILL.md in Agent Skills format with YAML frontmatter "
-        "(name: dependencies, description: Downstream dependencies per module, user-invocable: false)."
-    ),
-}
 
-PROJECT_MD_PROMPT = (
-    "Read all SKILL.md files under {output_path}/skills/ directory (each subdirectory contains one SKILL.md). "
-    "Generate a project.md index file that summarizes all skills and serves as a knowledge base entry point. "
-    "Write the output to {output_path}/project.md."
-)
-
-
-def _repo_dir_name(git_url: str) -> str:
+def repo_dir_name(git_url: str) -> str:
     """Extract a safe directory name from a git URL.
 
     e.g. 'https://github.com/org/my-repo.git' -> 'my-repo'
@@ -119,7 +54,7 @@ async def _resolve_allowed_roots(project_dir: Path, repos: list) -> list[str]:
     roots = []
     for r in repos:
         if r.git_url:
-            clone_dir = project_dir / "code" / _repo_dir_name(r.git_url)
+            clone_dir = project_dir / "code" / repo_dir_name(r.git_url)
             roots.append(str(clone_dir))
         elif r.local_path:
             roots.append(r.local_path)
@@ -305,81 +240,46 @@ async def run_init(project_id: str):
         )
         repos = result.scalars().all()
 
-        # Layer 1: skill_fetch + repo_clone (parallel)
-        async def _run_skill_fetch():
-            sid = f"init:{project_id}:skill_fetch"
-            await db.execute(
-                update(Session).where(Session.session_id == sid).values(
-                    status=SessionStatus.RUNNING, started_at=datetime.now(timezone.utc)
-                )
-            )
-            await db.commit()
-            await ws_manager.publish(project_bus, {
-                "type": "session_status", "session_id": sid, "status": SessionStatus.RUNNING, "layer": 1,
-            })
-            # Placeholder — no external skill fetching yet
-            await _append_log(sid, {"type": "text_delta", "content": "Skill fetch: no external skills configured, skipping.\n"})
-            await _append_log(sid, {"type": "done"})
-            await db.execute(
-                update(Session).where(Session.session_id == sid).values(
-                    status=SessionStatus.DONE, finished_at=datetime.now(timezone.utc)
-                )
-            )
-            await db.commit()
-            await ws_manager.publish(project_bus, {
-                "type": "session_status", "session_id": sid, "status": SessionStatus.DONE, "layer": 1,
+        # Layer 1: skill_fetch + repo_clone (parallel via run_simple_task)
+        async def _do_skill_fetch(task_db, session_id):
+            await _append_log(session_id, {
+                "type": "text_delta", "ts": datetime.now(timezone.utc).isoformat(),
+                "content": "Skill fetch: no external skills configured, skipping.\n",
             })
 
-        async def _run_repo_clone():
-            sid = f"init:{project_id}:repo_clone"
-            # Use independent DB session to avoid contention with concurrent skill_fetch
-            async with get_background_db() as clone_db:
-                await clone_db.execute(
-                    update(Session).where(Session.session_id == sid).values(
-                        status=SessionStatus.RUNNING, started_at=datetime.now(timezone.utc)
-                    )
-                )
-                await clone_db.commit()
-                await ws_manager.publish(project_bus, {
-                    "type": "session_status", "session_id": sid, "status": SessionStatus.RUNNING, "layer": 1,
+        async def _do_repo_clone(task_db, session_id):
+            git_repos = [r for r in repos if r.git_url and not r.local_path]
+            if not git_repos:
+                await _append_log(session_id, {
+                    "type": "text_delta", "ts": datetime.now(timezone.utc).isoformat(),
+                    "content": "No remote repos to clone, skipping.\n",
                 })
+                return
+            for r in git_repos:
+                clone_dir = project_dir / "code" / repo_dir_name(r.git_url)
+                await _append_log(session_id, {
+                    "type": "text_delta", "ts": datetime.now(timezone.utc).isoformat(),
+                    "content": f"Cloning/pulling {r.git_url} → {clone_dir} ...\n",
+                })
+                await clone_or_pull(r.git_url, str(clone_dir))
+                # Seed master_hash for repo monitor
                 try:
-                    git_repos = [r for r in repos if r.git_url and not r.local_path]
-                    if not git_repos:
-                        await _append_log(sid, {"type": "text_delta", "content": "No remote repos to clone, skipping.\n"})
-                    for r in git_repos:
-                        clone_dir = project_dir / "code" / _repo_dir_name(r.git_url)
-                        await _append_log(sid, {"type": "text_delta", "content": f"Cloning/pulling {r.git_url} → {clone_dir} ...\n"})
-                        await clone_or_pull(r.git_url, str(clone_dir))
-                        await _append_log(sid, {"type": "text_delta", "content": f"✓ {_repo_dir_name(r.git_url)} ready.\n"})
-
-                    await _append_log(sid, {"type": "done"})
-                    await clone_db.execute(
-                        update(Session).where(Session.session_id == sid).values(
-                            status=SessionStatus.DONE, finished_at=datetime.now(timezone.utc)
-                        )
+                    head = await get_head_hash(str(clone_dir))
+                    await task_db.execute(
+                        update(ProjectRepo).where(ProjectRepo.id == r.id).values(master_hash=head)
                     )
-                    await clone_db.commit()
-                    await ws_manager.publish(project_bus, {
-                        "type": "session_status", "session_id": sid, "status": SessionStatus.DONE, "layer": 1,
-                    })
-                except Exception as e:
-                    logger.error("Layer 1 repo clone/pull failed: %s", e)
-                    await _append_log(sid, {"type": "text_delta", "content": f"✗ Clone failed: {e}\n"})
-                    await _append_log(sid, {"type": "done"})
-                    await clone_db.execute(
-                        update(Session).where(Session.session_id == sid).values(
-                            status=SessionStatus.FAILED, error=str(e)[:500],
-                            finished_at=datetime.now(timezone.utc),
-                        )
-                    )
-                    await clone_db.commit()
-                    await ws_manager.publish(project_bus, {
-                        "type": "session_status", "session_id": sid,
-                        "status": SessionStatus.FAILED, "error": str(e)[:500], "layer": 1,
-                    })
+                except Exception:
+                    pass
+                await _append_log(session_id, {
+                    "type": "text_delta", "ts": datetime.now(timezone.utc).isoformat(),
+                    "content": f"✓ {repo_dir_name(r.git_url)} ready.\n",
+                })
 
-        await asyncio.gather(_run_skill_fetch(), _run_repo_clone())
+        await asyncio.gather(
+            run_simple_task(f"init:{project_id}:skill_fetch", project_bus, _do_skill_fetch),
+            run_simple_task(f"init:{project_id}:repo_clone", project_bus, _do_repo_clone),
+            return_exceptions=True,
+        )
 
         # Check if Layer 1 had critical failures (repo_clone failure = no code to analyze)
         layer1_sessions = await db.execute(

@@ -30,7 +30,7 @@ export default function TodoStage() {
     }
   }
 
-  const readonly = task ? isStageReadonly(task.status, 2) : false
+  const readonly = task ? isStageReadonly(task.status, 3) : false
   const isGenerating = status === 1 || streaming
   const startCodingDisabled = todos.length === 0 || isGenerating || readonly
   const redecomposeDisabled = isGenerating || readonly
@@ -40,7 +40,7 @@ export default function TodoStage() {
       <StageLayout
         taskId={taskId!}
         task={task}
-        currentStage={2}
+        currentStage={3}
         content={
           <div className="card todo-wrap">
             <div className="todo-card-title">

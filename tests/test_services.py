@@ -162,7 +162,8 @@ class TestSyncTodosFromFile:
 
 
 class TestStartCoding:
-    async def test_sets_status_to_coding(self, db_session):
+    async def test_loads_todos_without_changing_status(self, db_session):
+        """start_coding loads todos into DB; status transition is handled by TaskWorkflow in the router."""
         p = Project(name="proj")
         db_session.add(p)
         await db_session.flush()
@@ -173,7 +174,8 @@ class TestStartCoding:
         await start_coding(t.id, db_session)
 
         await db_session.refresh(t)
-        assert t.status == TaskStatus.CODING
+        # Status unchanged — router uses TaskWorkflow for the transition
+        assert t.status == TaskStatus.TODO_READY
 
     async def test_nonexistent_task(self, db_session):
         # Should not raise

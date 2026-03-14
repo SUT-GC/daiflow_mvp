@@ -8,3 +8,4 @@ pydantic-settings>=2.0.0
 click>=8.1.0
 cody-ai>=1.10.2
 alembic>=1.13.0
+transitions>=0.9.0

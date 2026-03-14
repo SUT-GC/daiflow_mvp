@@ -76,6 +76,7 @@ class ProjectRepo(Base):
     repo_type = Column(String, default="custom")  # frontend / backend / custom
     repo_type_label = Column(String, default="")
     description = Column(Text, default="")
+    master_hash = Column(String, default="")  # last known master/main HEAD hash
     created_at = Column(DateTime, default=_now)
 
     project = relationship("Project", back_populates="repos")
@@ -92,8 +93,6 @@ class Task(Base):
     prd = Column(Text, default="")
     tech_plan = Column(Text, default="")
     status = Column(Integer, default=0)  # 0=created..7=done
-    plan_cody_session_id = Column(String, nullable=True)
-    review_cody_session_id = Column(String, nullable=True)
     mr_info = Column(Text, default="{}")  # JSON
     created_at = Column(DateTime, default=_now)
     updated_at = Column(DateTime, default=_now, onupdate=_now)
@@ -125,6 +124,7 @@ class Session(Base):
     __tablename__ = "sessions"
 
     session_id = Column(String, primary_key=True)  # business ID like task:42:plan
+    task_id = Column(String, ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True, index=True)
     cody_session_id = Column(String, nullable=True)
     type = Column(String, nullable=False)  # init/plan/todo_split/todo_exec/review
     ref_id = Column(String, default="", index=True)
@@ -134,6 +134,44 @@ class Session(Base):
     started_at = Column(DateTime, nullable=True)
     finished_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=_now)
+
+
+class JobRunStatus(IntEnum):
+    RUNNING = 0
+    SUCCESS = 1
+    FAILED = 2
+
+
+class Job(Base):
+    """Job definition — what type of job, which project, config."""
+    __tablename__ = "jobs"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    type = Column(String, nullable=False)       # "repo_monitor" (extensible)
+    enabled = Column(Integer, default=1)         # 1=enabled, 0=disabled
+    interval = Column(Integer, default=300)      # seconds between runs
+    config = Column(Text, default="{}")          # JSON: type-specific config
+    created_at = Column(DateTime, default=_now)
+    updated_at = Column(DateTime, default=_now, onupdate=_now)
+
+    runs = relationship("JobRun", back_populates="job", cascade="all, delete-orphan")
+    project = relationship("Project")
+
+
+class JobRun(Base):
+    """Single execution record of a job."""
+    __tablename__ = "job_runs"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    job_id = Column(String, ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True)
+    status = Column(Integer, default=0)          # JobRunStatus
+    result = Column(Text, default="{}")          # JSON: type-specific output
+    error = Column(Text, nullable=True)
+    started_at = Column(DateTime, default=_now)
+    finished_at = Column(DateTime, nullable=True)
+
+    job = relationship("Job", back_populates="runs")
 
 
 class Setting(Base):

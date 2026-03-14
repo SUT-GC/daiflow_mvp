@@ -27,8 +27,6 @@ export interface TaskData {
   prd: string
   tech_plan: string
   status: number
-  plan_cody_session_id?: string
-  review_cody_session_id?: string
   mr_info: Record<string, any>
   created_at: string | null
   updated_at: string | null
@@ -125,6 +123,14 @@ export const retryInit = (id: string) =>
 export const getProjectKnowledge = (id: string) =>
   request<{ project_id: string; files: { name: string; type: string; content: string }[] }>(`/projects/${id}/knowledge`)
 
+export interface InitSessionData {
+  session_id: string
+  status: number
+  error: string | null
+  started_at: string | null
+  finished_at: string | null
+}
+
 // ── Tasks ──
 export const listTasks = (projectId?: string) =>
   request<TaskData[]>(`/tasks${projectId ? `?project_id=${projectId}` : ''}`)
@@ -135,6 +141,12 @@ export const updateTask = (id: string, data: UpdateTaskData) =>
   request<TaskData>(`/tasks/${id}`, { method: 'PUT', body: JSON.stringify(data) })
 export const deleteTask = (id: string) =>
   request<{ ok: boolean }>(`/tasks/${id}`, { method: 'DELETE' })
+export const confirmInit = (id: string) =>
+  request<{ ok: boolean; status: number }>(`/tasks/${id}/confirm-init`, { method: 'POST' })
+export const retryInit = (id: string) =>
+  request<{ ok: boolean; status: number }>(`/tasks/${id}/retry-init`, { method: 'POST' })
+export const getTaskInitSessions = (taskId: string) =>
+  request<InitSessionData[]>(`/tasks/${taskId}/init/sessions`)
 export const lockPlan = (id: string) =>
   request<{ ok: boolean; status: number }>(`/tasks/${id}/lock-plan`, { method: 'POST' })
 export const startCoding = (id: string) =>
@@ -166,8 +178,43 @@ export const getTodoDiff = (todoId: string) =>
   request<DiffData>(`/todos/${todoId}/diff`)
 
 // ── Sessions ──
+export const listSessions = (params?: { ref_id?: string; type?: string }) => {
+  const qs = new URLSearchParams()
+  if (params?.ref_id) qs.set('ref_id', params.ref_id)
+  if (params?.type) qs.set('type', params.type)
+  const query = qs.toString()
+  return request<SessionStatusData[]>(`/sessions${query ? `?${query}` : ''}`)
+}
 export const getSessionStatus = (sessionId: string) =>
   request<SessionStatusData>(`/sessions/${sessionId}/status`)
 export const getSessionLogs = (sessionId: string) =>
   request<Record<string, unknown>[]>(`/sessions/${sessionId}/logs`)
 
+// ── Jobs ──
+export interface JobData {
+  id: string
+  project_id: string
+  type: string
+  enabled: boolean
+  interval: number
+  config: Record<string, unknown>
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface JobRunData {
+  id: string
+  job_id: string
+  status: string
+  result: Record<string, unknown>
+  error: string | null
+  started_at: string | null
+  finished_at: string | null
+  project_id?: string
+  job_type?: string
+}
+
+export const listJobs = (projectId?: string) =>
+  request<JobData[]>(`/jobs${projectId ? `?project_id=${projectId}` : ''}`)
+export const getJobRuns = (jobId: string, limit = 50) =>
+  request<JobRunData[]>(`/jobs/${jobId}/runs?limit=${limit}`)

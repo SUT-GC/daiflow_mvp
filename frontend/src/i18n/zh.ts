@@ -6,6 +6,7 @@ const zh: Record<TranslationKey, string> = {
   'nav.projects': '项目',
   'nav.tasks': '任务',
   'nav.settings': '设置',
+  'nav.debug': '排障',
   'nav.not_configured': '未配置',
 
   // Settings
@@ -151,10 +152,22 @@ const zh: Record<TranslationKey, string> = {
   'tasks.status.7': '已完成',
 
   // StageProgress
-  'stage.1': '技术方案',
-  'stage.2': '任务拆解',
-  'stage.3': '代码实现',
-  'stage.4': '代码审查',
+  'stage.1': '任务初始化',
+  'stage.2': '技术方案',
+  'stage.3': '任务拆解',
+  'stage.4': '代码实现',
+  'stage.5': '代码审查',
+
+  // InitStage
+  'init_stage.title': '任务初始化',
+  'init_stage.desc': '正在准备开发环境...',
+  'init_stage.fetch_code': '获取代码',
+  'init_stage.sync_skills': '同步技能',
+  'init_stage.completed': '初始化完成',
+  'init_stage.in_progress': '初始化中',
+  'init_stage.failed': '初始化失败',
+  'init_stage.confirm': '开始生成方案',
+  'init_stage.retry': '重试',
 
   // PlanStage
   'plan.title': '技术方案',
@@ -212,6 +225,29 @@ const zh: Record<TranslationKey, string> = {
   // ChatPanel
   'chat.default_title': 'AI 对话',
   'chat.placeholder': '发送消息...',
+
+  // Debug
+  'debug.title': '排障',
+  'debug.all_projects': '全部项目',
+  'debug.select_project': '选择项目',
+  'debug.select_scope': '选择范围',
+  'debug.project_init': '项目初始化 (知识库)',
+  'debug.repo_monitor': '仓库监控 (Jobs)',
+  'debug.jobs': 'Jobs',
+  'debug.tasks': '任务',
+  'debug.sessions': 'Sessions',
+  'debug.job_runs': '执行记录',
+  'debug.job_run_detail': '执行详情',
+  'debug.no_projects': '暂无项目',
+  'debug.no_sessions': '暂无 Session',
+  'debug.no_logs': '暂无日志',
+  'debug.no_matching_logs': '没有匹配的日志',
+  'debug.no_jobs': '未配置 Job',
+  'debug.no_job_runs': '暂无执行记录',
+  'debug.no_changes': '无变更',
+  'debug.search_logs': '搜索日志...',
+  'debug.select_session_hint': '选择项目、范围和 Session 查看日志',
+  'debug.loading': '加载日志中...',
 
   // ErrorBoundary
   'error.title': '出现错误',

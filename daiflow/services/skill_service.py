@@ -1,5 +1,6 @@
 import json
 import shutil
+import tempfile
 from pathlib import Path
 
 from daiflow.config import PROJECTS_DIR, TASKS_DIR
@@ -19,12 +20,20 @@ def sync_skills_to_task(project_id: str, task_id: str):
     dst = get_task_skills_dir(task_id)
     dst.parent.mkdir(parents=True, exist_ok=True)
 
-    if dst.exists():
-        shutil.rmtree(dst)
-
     if src.exists():
-        shutil.copytree(src, dst)
+        # Atomic swap: copy to temp dir first, then rename
+        tmp_dst = Path(tempfile.mkdtemp(dir=dst.parent))
+        try:
+            shutil.copytree(src, tmp_dst / "skills")
+            if dst.exists():
+                shutil.rmtree(dst)
+            (tmp_dst / "skills").rename(dst)
+        finally:
+            if tmp_dst.exists():
+                shutil.rmtree(tmp_dst, ignore_errors=True)
     else:
+        if dst.exists():
+            shutil.rmtree(dst)
         dst.mkdir(parents=True, exist_ok=True)
 
     # Also copy project.md if it exists

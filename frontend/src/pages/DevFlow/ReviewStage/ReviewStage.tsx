@@ -71,14 +71,14 @@ export default function ReviewStage() {
     }
   }, [diff])
 
-  const readonly = task ? isStageReadonly(task.status, 4) : false
+  const readonly = task ? isStageReadonly(task.status, 5) : false
 
   return (
     <>
       <StageLayout
         taskId={taskId!}
         task={task}
-        currentStage={4}
+        currentStage={5}
         content={
           <div className="diff-main">
             <div className="diff-summary-bar">

@@ -8,10 +8,12 @@ import EditProject from './pages/Projects/EditProject'
 import ProjectInit from './pages/Projects/ProjectInit'
 import ProjectKnowledge from './pages/Projects/ProjectKnowledge'
 import Tasks from './pages/Tasks/Tasks'
+import InitStage from './pages/DevFlow/InitStage/InitStage'
 import PlanStage from './pages/DevFlow/PlanStage/PlanStage'
 import TodoStage from './pages/DevFlow/TodoStage/TodoStage'
 import CodingStage from './pages/DevFlow/CodingStage/CodingStage'
 import ReviewStage from './pages/DevFlow/ReviewStage/ReviewStage'
+import Debug from './pages/Debug/Debug'
 import { checkSettings } from './api'
 import ErrorBoundary from './components/ErrorBoundary/ErrorBoundary'
 import { ThemeContext, useThemeProvider } from './hooks/useTheme'
@@ -79,10 +81,12 @@ export default function App() {
             <Route path="/projects/:projectId/init" element={<SettingsGuard><ProjectInit /></SettingsGuard>} />
             <Route path="/projects/:projectId/knowledge" element={<SettingsGuard><ProjectKnowledge /></SettingsGuard>} />
             <Route path="/tasks" element={<SettingsGuard><Tasks /></SettingsGuard>} />
+            <Route path="/devflow/:taskId/init" element={<SettingsGuard><InitStage /></SettingsGuard>} />
             <Route path="/devflow/:taskId/plan" element={<SettingsGuard><PlanStage /></SettingsGuard>} />
             <Route path="/devflow/:taskId/todo" element={<SettingsGuard><TodoStage /></SettingsGuard>} />
             <Route path="/devflow/:taskId/coding" element={<SettingsGuard><CodingStage /></SettingsGuard>} />
             <Route path="/devflow/:taskId/review" element={<SettingsGuard><ReviewStage /></SettingsGuard>} />
+            <Route path="/debug" element={<SettingsGuard><Debug /></SettingsGuard>} />
             <Route path="/" element={<Navigate to="/projects" replace />} />
           </Routes>
           </ErrorBoundary>

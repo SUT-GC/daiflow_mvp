@@ -1,19 +1,23 @@
 import json
 import logging
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from daiflow.services.settings_service import get_language_setting
 from daiflow.database import get_background_db
 from daiflow.models import Project, ProjectRepo, Session, SessionStatus, Task, TaskStatus, Todo, TodoStatus
+from daiflow.prompts import PLAN_PROMPT_TEMPLATE, TODO_EXECUTE_PROMPT_TEMPLATE, TODO_PROMPT_TEMPLATE
 from daiflow.services.cody_service import append_path_boundary, build_cody_client
 from daiflow.services.git_service import checkout_branch, get_head_hash
-from daiflow.services.project_service import _repo_dir_name
+from daiflow.services.project_service import repo_dir_name
+from daiflow.services.settings_service import get_language_setting
 from daiflow.services.skill_service import get_project_dir, get_task_dir, get_task_skills_dir, sync_skills_to_task
 from daiflow.session_runner import SessionRunner, make_file_write_detector
+from daiflow.workflow import TaskWorkflow, TodoWorkflow
+from daiflow.ws_manager import ws_manager
 
 logger = logging.getLogger(__name__)
 
@@ -24,60 +28,6 @@ async def fetch_project_repos(db: AsyncSession, project_id: str) -> list:
         select(ProjectRepo).where(ProjectRepo.project_id == project_id)
     )
     return result.scalars().all()
-
-
-PLAN_PROMPT_TEMPLATE = (
-    "You are a senior software architect. Your task is to generate a comprehensive technical plan.\n\n"
-    "## Context\n"
-    "1. First, read `project.md` in the current working directory for project knowledge.\n"
-    "2. Then, read the relevant skill files in `.cody/skills/` for detailed module understanding.\n\n"
-    "## Task Description\n{description}\n\n"
-    "## PRD (Product Requirements)\n{prd}\n\n"
-    "## Existing Technical Ideas\n{tech_plan}\n\n"
-    "## Instructions\n"
-    "Write a complete technical plan to `{plan_path}`. The plan MUST include:\n"
-    "1. **Background & Goals** — What problem this solves\n"
-    "2. **Backend Changes** — API endpoints, services, models to add/modify\n"
-    "3. **Frontend Changes** — Components, pages, hooks to add/modify\n"
-    "4. **Data Changes** — Database schema, migration needs\n"
-    "5. **Impact Scope** — What existing features may be affected\n"
-    "6. **Implementation Order** — Recommended sequence of development\n\n"
-    "Use Markdown format with clear headings and bullet points."
-)
-
-TODO_PROMPT_TEMPLATE = (
-    "You are a technical lead decomposing a plan into actionable tasks.\n\n"
-    "## Context\n"
-    "1. Read `project.md` for project knowledge.\n"
-    "2. Read `plan.md` for the technical plan to decompose.\n\n"
-    "## Instructions\n"
-    "Based on the technical plan in `plan.md`, decompose the implementation into an ordered list of TODO items.\n"
-    "Each TODO should be an independently executable unit of work (one API endpoint, one component, etc.).\n\n"
-    "Write the result as a JSON array to `{todo_path}` with this exact format:\n"
-    "```json\n"
-    '[{{"seq": 1, "title": "Short title", "description": "Detailed description of what to implement and how"}}]\n'
-    "```\n\n"
-    "Guidelines:\n"
-    "- Order todos by dependency (implement foundations first)\n"
-    "- Each todo should be completable in a single coding session\n"
-    "- Include both backend and frontend tasks\n"
-    "- Be specific about files to create/modify"
-)
-
-TODO_EXECUTE_PROMPT_TEMPLATE = (
-    "You are a senior developer implementing a specific TODO item.\n\n"
-    "## Context\n"
-    "1. Read `project.md` for project knowledge.\n"
-    "2. Read `plan.md` for the overall technical plan.\n\n"
-    "## TODO #{seq}: {title}\n"
-    "{description}\n\n"
-    "## Instructions\n"
-    "Implement the changes described in this TODO item. Follow the technical plan in `plan.md`.\n"
-    "- Write clean, production-quality code\n"
-    "- Follow existing code conventions in the project\n"
-    "- Include necessary imports and type annotations\n"
-    "- Do NOT modify files outside the scope of this TODO"
-)
 
 
 def _copy_code_to_task(project_id: str, task_id: str, repos: list):
@@ -91,7 +41,7 @@ def _copy_code_to_task(project_id: str, task_id: str, repos: list):
 
     for r in repos:
         if r.git_url and not r.local_path:
-            repo_name = _repo_dir_name(r.git_url)
+            repo_name = repo_dir_name(r.git_url)
             src = project_dir / "code" / repo_name
             dst = task_dir / "code" / repo_name
             if src.exists():
@@ -101,27 +51,70 @@ def _copy_code_to_task(project_id: str, task_id: str, repos: list):
                 logger.info("Copied code %s -> %s", src, dst)
 
 
-def _resolve_task_roots(task_id: str, repos: list) -> list[str]:
+def resolve_repo_path(repo, task_id: str) -> str | None:
+    """Resolve the actual filesystem path for a repo in a task context.
+
+    - Repos with local_path: code lives in user's working directory
+    - Git-only repos: code lives in task/code/{repo_name} (isolated copy)
+    """
+    if repo.local_path:
+        return repo.local_path
+    elif repo.git_url:
+        return str(get_task_dir(task_id) / "code" / repo_dir_name(repo.git_url))
+    return None
+
+
+def resolve_task_roots(task_id: str, repos: list) -> list[str]:
     """Resolve allowed_roots for a task.
 
     - Repos with local_path: use local_path directly (user's working directory)
     - Repos with git_url only: use task/code/{repo_name} (isolated copy)
     """
-    task_dir = get_task_dir(task_id)
-    roots = []
-    for r in repos:
-        if r.local_path:
-            roots.append(r.local_path)
-        elif r.git_url:
-            roots.append(str(task_dir / "code" / _repo_dir_name(r.git_url)))
-    return roots
+    return [p for r in repos if (p := resolve_repo_path(r, task_id))]
+
+
+async def _do_fetch_code(db: AsyncSession, session_id: str, *, task_id: str, project_id: str, branch: str | None):
+    """Subtask: copy code repos and checkout branch."""
+    from daiflow.session_runner import _append_log
+
+    repos = await fetch_project_repos(db, project_id)
+    _copy_code_to_task(project_id, task_id, repos)
+
+    now_iso = lambda: datetime.now(timezone.utc).isoformat()
+    await _append_log(session_id, {"type": "text_delta", "ts": now_iso(), "content": f"Copied {len(repos)} repo(s) to task directory\n"})
+
+    if branch:
+        for repo in repos:
+            repo_path = resolve_repo_path(repo, task_id)
+            if not repo_path:
+                continue
+            label = repo.local_path or repo_dir_name(repo.git_url)
+            try:
+                await checkout_branch(repo_path, branch)
+                await _append_log(session_id, {"type": "text_delta", "ts": now_iso(), "content": f"✓ Checked out branch '{branch}' on {label}\n"})
+            except Exception as e:
+                logger.warning("Branch checkout for %s on %s: %s", branch, repo_path, e)
+                await _append_log(session_id, {"type": "text_delta", "ts": now_iso(), "content": f"⚠ Branch checkout failed on {label}: {e}\n"})
+
+
+async def _do_sync_skills(db: AsyncSession, session_id: str, *, task_id: str, project_id: str):
+    """Subtask: sync project skills to task directory."""
+    from daiflow.session_runner import _append_log
+
+    sync_skills_to_task(project_id, task_id)
+    await _append_log(session_id, {"type": "text_delta", "ts": datetime.now(timezone.utc).isoformat(), "content": "✓ Synced project skills to task\n"})
 
 
 async def init_task(task_id: str):
-    """Initialize a task: sync skills, checkout branch, then generate plan.
+    """Initialize a task: fetch code + sync skills, then wait for user confirmation.
 
-    Uses an independent DB session for background execution.
+    Creates Session records for each subtask so the frontend can show progress.
+    Does NOT auto-trigger plan generation — user must confirm via /confirm-init.
     """
+    from daiflow.workflow.pipeline import run_simple_task
+
+    init_bus = f"task:init:{task_id}"
+
     try:
         async with get_background_db() as db:
             task = await db.get(Task, task_id)
@@ -132,51 +125,43 @@ async def init_task(task_id: str):
             if not project:
                 return
 
-            # Mark as initializing
-            task.status = TaskStatus.INITIALIZING
+            # Transition: created → initializing
+            wf = TaskWorkflow(task, db)
+            await wf.initialize()
+
+            # Create session records for init subtasks
+            fetch_sid = f"task:{task_id}:init:fetch_code"
+            skills_sid = f"task:{task_id}:init:sync_skills"
+            for sid in (fetch_sid, skills_sid):
+                existing = await db.get(Session, sid)
+                if not existing:
+                    db.add(Session(session_id=sid, type="task_init", ref_id=task_id, task_id=task_id, status=SessionStatus.WAITING))
             await db.commit()
 
-            # Sync skills
-            sync_skills_to_task(task.project_id, task_id)
+        # Run subtasks sequentially
+        await run_simple_task(
+            fetch_sid, init_bus,
+            lambda db, sid: _do_fetch_code(db, sid, task_id=task_id, project_id=task.project_id, branch=task.branch),
+        )
+        await run_simple_task(
+            skills_sid, init_bus,
+            lambda db, sid: _do_sync_skills(db, sid, task_id=task_id, project_id=task.project_id),
+        )
 
-            # Fetch repos and prepare code directories
-            repos = await fetch_project_repos(db, task.project_id)
-
-            # Copy cloned code to task directory for git-only repos
-            _copy_code_to_task(task.project_id, task_id, repos)
-
-            # Checkout branch on all working directories
-            if task.branch:
-                for repo in repos:
-                    if repo.local_path:
-                        # User's local repo — checkout branch directly
-                        try:
-                            await checkout_branch(repo.local_path, task.branch)
-                        except Exception as e:
-                            logger.warning("Branch checkout for %s on %s: %s", task.branch, repo.local_path, e)
-                    elif repo.git_url:
-                        # Task's isolated copy — checkout branch there
-                        task_repo_path = str(get_task_dir(task_id) / "code" / _repo_dir_name(repo.git_url))
-                        try:
-                            await checkout_branch(task_repo_path, task.branch)
-                        except Exception as e:
-                            logger.warning("Branch checkout for %s on %s: %s", task.branch, task_repo_path, e)
-
-            # Update status to planning
-            task.status = TaskStatus.PLANNING
-            await db.commit()
-
-        # Then generate plan
-        await generate_plan(task_id)
+        # Publish init done event
+        await ws_manager.publish(init_bus, {"type": "done"})
 
     except Exception:
         logger.exception("init_task failed for task %s", task_id)
+        # Notify frontend that init is done (with failures)
+        await ws_manager.publish(init_bus, {"type": "done"})
         # Reset to CREATED so user can retry
         try:
             async with get_background_db() as db:
                 task = await db.get(Task, task_id)
-                if task and task.status in (TaskStatus.INITIALIZING, TaskStatus.PLANNING):
-                    task.status = TaskStatus.CREATED
+                if task and task.status == TaskStatus.INITIALIZING:
+                    wf = TaskWorkflow(task, db)
+                    await wf.reset()
                     await db.commit()
         except Exception:
             logger.exception("Failed to reset task %s status after init failure", task_id)
@@ -198,7 +183,7 @@ async def generate_plan(task_id: str):
 
         # Resolve allowed roots (local_path or task/code/ copy)
         repos = await fetch_project_repos(db, task.project_id)
-        allowed_roots = _resolve_task_roots(task_id, repos)
+        allowed_roots = resolve_task_roots(task_id, repos)
 
         # Create or reset session record
         session_id = f"task:{task_id}:plan"
@@ -210,7 +195,7 @@ async def generate_plan(task_id: str):
             existing_session.started_at = None
             existing_session.finished_at = None
         else:
-            db.add(Session(session_id=session_id, type="plan", ref_id=task_id))
+            db.add(Session(session_id=session_id, type="plan", ref_id=task_id, task_id=task_id))
         await db.commit()
 
         # Build prompt
@@ -247,9 +232,7 @@ async def generate_plan(task_id: str):
             logger.debug("Task %s deleted before plan write", task_id)
             return
 
-        # Store cody_session_id for plan/todo session sharing
-        if runner.last_cody_session_id:
-            task.plan_cody_session_id = runner.last_cody_session_id
+        # cody_session_id is stored in sessions table by SessionRunner
 
         # Read plan.md and store in task
         if plan_path.exists():
@@ -273,7 +256,7 @@ async def generate_todos(task_id: str):
         todo_path = task_dir / "todo.json"
 
         repos = await fetch_project_repos(db, task.project_id)
-        allowed_roots = _resolve_task_roots(task_id, repos)
+        allowed_roots = resolve_task_roots(task_id, repos)
 
         session_id = f"task:{task_id}:todo_split"
         existing_session = await db.get(Session, session_id)
@@ -284,7 +267,7 @@ async def generate_todos(task_id: str):
             existing_session.started_at = None
             existing_session.finished_at = None
         else:
-            db.add(Session(session_id=session_id, type="todo_split", ref_id=task_id))
+            db.add(Session(session_id=session_id, type="todo_split", ref_id=task_id, task_id=task_id))
         await db.commit()
 
         prompt = TODO_PROMPT_TEMPLATE.format(todo_path=str(todo_path))
@@ -294,6 +277,14 @@ async def generate_todos(task_id: str):
         lang = await get_language_setting(db)
         skill_dir = str(get_task_skills_dir(task_id))
         client = await build_cody_client(db, str(task_dir), allowed_roots, skill_dir=skill_dir)
+
+        # Look up plan's cody_session_id via task_id FK
+        result = await db.execute(
+            select(Session.cody_session_id).where(
+                Session.task_id == task_id, Session.type == "plan",
+            )
+        )
+        plan_cody_sid = result.scalar()
 
         async def on_todo_match(_file_path):
             if todo_path.exists():
@@ -306,7 +297,7 @@ async def generate_todos(task_id: str):
         async with client:
             await runner.run(
                 db, session_id, prompt,
-                cody_session_id=task.plan_cody_session_id,
+                cody_session_id=plan_cody_sid,
                 language=lang,
                 on_tool_result=on_tool_result,
             )
@@ -327,7 +318,9 @@ async def generate_todos(task_id: str):
         else:
             logger.warning("todo.json not found for task %s after generation", task_id)
 
-        task.status = TaskStatus.TODO_READY
+        # Transition: plan_locked → todo_ready
+        wf = TaskWorkflow(task, db)
+        await wf.todos_ready()
         await db.commit()
 
 
@@ -385,7 +378,11 @@ def _insert_todos(db: AsyncSession, task_id: str, todos_data: list[dict]):
 
 
 async def start_coding(task_id: str, db: AsyncSession):
-    """Parse todo.json (if not already parsed), update task status to coding."""
+    """Parse todo.json (if not already parsed), update task status to coding.
+
+    Status transition is handled by TaskWorkflow in the router layer.
+    This function only ensures todos are loaded into DB.
+    """
     task = await db.get(Task, task_id)
     if not task:
         return
@@ -407,13 +404,14 @@ async def start_coding(task_id: str, db: AsyncSession):
             except (json.JSONDecodeError, KeyError, TypeError) as e:
                 logger.error("Failed to parse todo.json for task %s: %s", task_id, e)
 
-    task.status = TaskStatus.CODING
     await db.commit()
 
 
 async def execute_todo(todo_id: str):
     """Execute a single todo item.
 
+    The router has already transitioned the todo to RUNNING.
+    This function runs Cody and transitions to done/failed.
     Uses an independent DB session for background execution.
     """
     async with get_background_db() as db:
@@ -428,14 +426,13 @@ async def execute_todo(todo_id: str):
         task_dir = get_task_dir(task.id)
 
         repos = await fetch_project_repos(db, task.project_id)
-        allowed_roots = _resolve_task_roots(task.id, repos)
+        allowed_roots = resolve_task_roots(task.id, repos)
 
         session_id = f"task:{task.id}:todo:{todo_id}"
         existing_session = await db.get(Session, session_id)
         if not existing_session:
-            session = Session(session_id=session_id, type="todo_exec", ref_id=todo_id)
+            session = Session(session_id=session_id, type="todo_exec", ref_id=todo_id, task_id=task.id)
             db.add(session)
-        todo.status = TodoStatus.RUNNING
 
         # Record HEAD hash of each repo before execution
         head_before: dict[str, str] = {}
@@ -475,6 +472,12 @@ async def execute_todo(todo_id: str):
         if runner.last_cody_session_id:
             todo.cody_session_id = runner.last_cody_session_id
 
+        # Transition: running → done or running → failed
         session_rec = await db.get(Session, session_id)
-        todo.status = TodoStatus.DONE if (session_rec and session_rec.status == SessionStatus.DONE) else TodoStatus.FAILED
+        succeeded = session_rec and session_rec.status == SessionStatus.DONE
+        todo_wf = TodoWorkflow(todo, db)
+        if succeeded:
+            await todo_wf.complete()
+        else:
+            await todo_wf.fail()
         await db.commit()

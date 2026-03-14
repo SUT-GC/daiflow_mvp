@@ -107,7 +107,7 @@ export default function Tasks() {
                 </div>
                 <div className="task-right">
                   <div className="stage-pip">
-                    {[1, 2, 3, 4].map(s => (
+                    {[1, 2, 3, 4, 5].map(s => (
                       <div key={s} className={`pip ${task.status >= 7 ? 'done' : s < stage ? 'done' : s === stage ? 'active' : ''}`} />
                     ))}
                   </div>

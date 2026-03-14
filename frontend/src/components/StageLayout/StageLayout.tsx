@@ -9,12 +9,13 @@ import type { TaskData } from '../../api'
 import type { ChatMessage } from '../../hooks/useStageChat'
 import './StageLayout.css'
 
-/** Map stage number (1-4) to the minimum task status that locks it. */
+/** Map stage number (1-5) to the minimum task status that locks it. */
 const STAGE_LOCK_STATUS: Record<number, number> = {
-  1: TaskStatus.PLAN_LOCKED,  // Plan locks when status >= PLAN_LOCKED (3)
-  2: TaskStatus.CODING,       // Todo locks when status >= CODING (5)
-  3: TaskStatus.REVIEWING,    // Coding locks when status >= REVIEWING (6)
-  4: TaskStatus.DONE,         // Review locks when status >= DONE (7)
+  1: TaskStatus.PLANNING,     // Init locks when status >= PLANNING (2)
+  2: TaskStatus.PLAN_LOCKED,  // Plan locks when status >= PLAN_LOCKED (3)
+  3: TaskStatus.CODING,       // Todo locks when status >= CODING (5)
+  4: TaskStatus.REVIEWING,    // Coding locks when status >= REVIEWING (6)
+  5: TaskStatus.DONE,         // Review locks when status >= DONE (7)
 }
 
 export function isStageReadonly(taskStatus: number, currentStage: number): boolean {
@@ -26,7 +27,7 @@ export function isStageReadonly(taskStatus: number, currentStage: number): boole
 interface StageLayoutProps {
   taskId: string
   task: TaskData | null
-  currentStage: 1 | 2 | 3 | 4
+  currentStage: 1 | 2 | 3 | 4 | 5
   /** Main content area — each stage fills this in */
   content: React.ReactNode
   /** Action bar buttons — rendered at the bottom spanning full width */

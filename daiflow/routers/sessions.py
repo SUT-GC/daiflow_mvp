@@ -1,7 +1,9 @@
 import asyncio
 import json
+from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from daiflow.config import SESSIONS_DIR, safe_filename
@@ -10,6 +12,26 @@ from daiflow.models import Session
 from daiflow.schemas import SessionStatusResponse
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
+
+
+@router.get("")
+async def list_sessions(
+    ref_id: Optional[str] = Query(None),
+    type: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """List sessions with optional filters. For the debug/troubleshoot page."""
+    query = select(Session).order_by(Session.created_at.desc())
+    if ref_id:
+        query = query.where(Session.ref_id == ref_id)
+    if type:
+        query = query.where(Session.type == type)
+    result = await db.execute(query.limit(200))
+    sessions = result.scalars().all()
+    return [
+        SessionStatusResponse.model_validate(s).model_dump()
+        for s in sessions
+    ]
 
 
 @router.get("/{session_id:path}/status")

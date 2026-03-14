@@ -94,3 +94,21 @@ class TestSettingsAPI:
         """Theme and language are optional fields — empty values should be accepted."""
         resp = await client.put("/api/settings", json={"theme": ""})
         assert resp.status_code == 200
+
+    async def test_masked_api_key_not_overwritten(self, client):
+        """Sending back a masked API key should not overwrite the real key."""
+        real_key = "sk-ant-12345678901234567890"
+        await client.put("/api/settings", json={
+            "cody_model": "claude-opus-4-6",
+            "cody_base_url": "https://api.anthropic.com",
+            "cody_api_key": real_key,
+        })
+        # Get the masked value
+        resp = await client.get("/api/settings")
+        masked_key = resp.json()["cody_api_key"]
+        assert "****" in masked_key
+        # Send the masked value back — should not overwrite
+        await client.put("/api/settings", json={"cody_api_key": masked_key})
+        # Verify the real key is preserved (check still passes)
+        resp = await client.get("/api/settings/check")
+        assert resp.json()["configured"] is True

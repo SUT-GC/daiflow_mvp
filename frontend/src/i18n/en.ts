@@ -4,6 +4,7 @@ const en = {
   'nav.projects': 'Projects',
   'nav.tasks': 'Tasks',
   'nav.settings': 'Settings',
+  'nav.debug': 'Debug',
   'nav.not_configured': 'not configured',
 
   // Settings
@@ -149,10 +150,22 @@ const en = {
   'tasks.status.7': 'Done',
 
   // StageProgress
-  'stage.1': 'Technical Plan',
-  'stage.2': 'Task Decomposition',
-  'stage.3': 'Code Implementation',
-  'stage.4': 'Code Review',
+  'stage.1': 'Task Init',
+  'stage.2': 'Technical Plan',
+  'stage.3': 'Task Decomposition',
+  'stage.4': 'Code Implementation',
+  'stage.5': 'Code Review',
+
+  // InitStage
+  'init_stage.title': 'Task Initialization',
+  'init_stage.desc': 'Preparing development environment...',
+  'init_stage.fetch_code': 'Fetch Code',
+  'init_stage.sync_skills': 'Sync Skills',
+  'init_stage.completed': 'Completed',
+  'init_stage.in_progress': 'In Progress',
+  'init_stage.failed': 'Failed',
+  'init_stage.confirm': 'Start Plan Generation',
+  'init_stage.retry': 'Retry',
 
   // PlanStage
   'plan.title': 'Technical Plan',
@@ -210,6 +223,29 @@ const en = {
   // ChatPanel
   'chat.default_title': 'AI Chat',
   'chat.placeholder': 'Send a message...',
+
+  // Debug
+  'debug.title': 'Debug',
+  'debug.all_projects': 'All Projects',
+  'debug.select_project': 'Select Project',
+  'debug.select_scope': 'Select Scope',
+  'debug.project_init': 'Project Init (Knowledge)',
+  'debug.repo_monitor': 'Repo Monitor (Jobs)',
+  'debug.jobs': 'Jobs',
+  'debug.tasks': 'Tasks',
+  'debug.sessions': 'Sessions',
+  'debug.job_runs': 'Job Runs',
+  'debug.job_run_detail': 'Run Details',
+  'debug.no_projects': 'No projects found',
+  'debug.no_sessions': 'No sessions found',
+  'debug.no_logs': 'No log entries',
+  'debug.no_matching_logs': 'No logs match the filter',
+  'debug.no_jobs': 'No jobs configured',
+  'debug.no_job_runs': 'No runs yet',
+  'debug.no_changes': 'no changes',
+  'debug.search_logs': 'Search logs...',
+  'debug.select_session_hint': 'Select a project, scope, and session to view logs',
+  'debug.loading': 'Loading logs...',
 
   // ErrorBoundary
   'error.title': 'Something went wrong',

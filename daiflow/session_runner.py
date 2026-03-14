@@ -154,10 +154,11 @@ class SessionRunner:
             log_file.unlink()
 
         # Update session status to running
+        run_started_at = _now()
         await db.execute(
             update(Session)
             .where(Session.session_id == session_id)
-            .values(status=SessionStatus.RUNNING, started_at=_now())
+            .values(status=SessionStatus.RUNNING, started_at=run_started_at)
         )
         await db.commit()
 
@@ -168,6 +169,7 @@ class SessionRunner:
                     "type": "session_status",
                     "session_id": session_id,
                     "status": SessionStatus.RUNNING,
+                    "started_at": run_started_at.isoformat(),
                 })
 
         # Log user message
@@ -198,12 +200,14 @@ class SessionRunner:
                         await ws_manager.publish(channel, status_event)
                         await _append_log(session_id, status_event)
 
+                        done_finished_at = _now()
                         if extra_channels:
                             for ch in extra_channels:
                                 await ws_manager.publish(ch, {
                                     "type": "session_status",
                                     "session_id": session_id,
                                     "status": SessionStatus.DONE,
+                                    "finished_at": done_finished_at.isoformat(),
                                     "ts": event["ts"],
                                 })
                     else:
@@ -233,7 +237,7 @@ class SessionRunner:
                 .values(
                     status=SessionStatus.DONE,
                     cody_session_id=result_cody_session_id,
-                    finished_at=_now(),
+                    finished_at=done_finished_at,
                 )
             )
             await db.commit()
@@ -246,6 +250,7 @@ class SessionRunner:
             status_event = {"type": "status_change", "status": SessionStatus.FAILED, "error": str(e), "ts": _now().isoformat()}
             await ws_manager.publish(channel, status_event)
 
+            failed_finished_at = _now()
             if extra_channels:
                 for ch in extra_channels:
                     await ws_manager.publish(ch, {
@@ -253,13 +258,14 @@ class SessionRunner:
                         "session_id": session_id,
                         "status": SessionStatus.FAILED,
                         "error": str(e),
-                        "ts": _now().isoformat(),
+                        "finished_at": failed_finished_at.isoformat(),
+                        "ts": failed_finished_at.isoformat(),
                     })
 
             await db.execute(
                 update(Session)
                 .where(Session.session_id == session_id)
-                .values(status=SessionStatus.FAILED, error=error_msg, finished_at=_now())
+                .values(status=SessionStatus.FAILED, error=error_msg, finished_at=failed_finished_at)
             )
             await db.commit()
 

@@ -1,5 +1,6 @@
 """Tests for tasks API endpoints."""
 
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, patch
 
 
@@ -190,6 +191,82 @@ class TestStageTransitions:
         assert resp.json()["status"] == TaskStatus.PLAN_LOCKED
 
 
+class TestTriggerStateGuards:
+    @_mock_bg
+    @_mock_bg2
+    async def test_trigger_plan_rejected_in_coding_state(self, mock_plan, mock_init, client, db_session):
+        """Cannot trigger plan generation when task is in CODING state."""
+        pid = await _create_project(client)
+        create_resp = await client.post("/api/tasks", json={
+            "name": "Task 1", "project_id": pid,
+        })
+        tid = create_resp.json()["id"]
+
+        from daiflow.models import Task, TaskStatus
+        task = await db_session.get(Task, tid)
+        task.status = TaskStatus.CODING
+        await db_session.commit()
+
+        resp = await client.post(f"/api/tasks/{tid}/plan")
+        assert resp.status_code == 400
+        assert "Cannot generate plan" in resp.json()["detail"]
+
+    @_mock_bg
+    @_mock_bg2
+    async def test_trigger_plan_allowed_in_planning_state(self, mock_plan, mock_init, client, db_session):
+        """Can trigger plan generation when task is in PLANNING state."""
+        pid = await _create_project(client)
+        create_resp = await client.post("/api/tasks", json={
+            "name": "Task 1", "project_id": pid,
+        })
+        tid = create_resp.json()["id"]
+
+        from daiflow.models import Task, TaskStatus
+        task = await db_session.get(Task, tid)
+        task.status = TaskStatus.PLANNING
+        await db_session.commit()
+
+        resp = await client.post(f"/api/tasks/{tid}/plan")
+        assert resp.status_code == 200
+
+    @_mock_bg
+    @_mock_bg3
+    async def test_trigger_todo_rejected_in_planning_state(self, mock_todos, mock_init, client, db_session):
+        """Cannot trigger todo generation when task is in PLANNING state."""
+        pid = await _create_project(client)
+        create_resp = await client.post("/api/tasks", json={
+            "name": "Task 1", "project_id": pid,
+        })
+        tid = create_resp.json()["id"]
+
+        from daiflow.models import Task, TaskStatus
+        task = await db_session.get(Task, tid)
+        task.status = TaskStatus.PLANNING
+        await db_session.commit()
+
+        resp = await client.post(f"/api/tasks/{tid}/todo")
+        assert resp.status_code == 400
+        assert "Cannot generate todos" in resp.json()["detail"]
+
+    @_mock_bg
+    @_mock_bg3
+    async def test_trigger_todo_allowed_in_plan_locked_state(self, mock_todos, mock_init, client, db_session):
+        """Can trigger todo generation when task is in PLAN_LOCKED state."""
+        pid = await _create_project(client)
+        create_resp = await client.post("/api/tasks", json={
+            "name": "Task 1", "project_id": pid,
+        })
+        tid = create_resp.json()["id"]
+
+        from daiflow.models import Task, TaskStatus
+        task = await db_session.get(Task, tid)
+        task.status = TaskStatus.PLAN_LOCKED
+        await db_session.commit()
+
+        resp = await client.post(f"/api/tasks/{tid}/todo")
+        assert resp.status_code == 200
+
+
 class TestGenerateCommitMessage:
     @_mock_bg
     async def test_not_found(self, mock_init, client):
@@ -213,9 +290,9 @@ class TestGenerateCommitMessage:
 
 
 class TestInitTaskTransition:
-    async def test_init_task_sets_initializing_then_planning(self, db_session):
-        """init_task should transition CREATED → INITIALIZING → PLANNING."""
-        from daiflow.models import Project, ProjectRepo, Task, TaskStatus
+    async def test_init_task_stops_at_initializing(self, db_session):
+        """init_task should transition CREATED → INITIALIZING and stop (wait for user confirm)."""
+        from daiflow.models import Project, Task, TaskStatus
 
         p = Project(name="proj")
         db_session.add(p)
@@ -225,24 +302,235 @@ class TestInitTaskTransition:
         await db_session.commit()
         task_id = t.id
 
-        # Mock generate_plan since it requires Cody SDK
-        with patch("daiflow.services.task_service.generate_plan", new_callable=AsyncMock) as mock_plan, \
-             patch("daiflow.services.task_service.sync_skills_to_task"):
+        with patch("daiflow.services.task_service.sync_skills_to_task"):
             from daiflow.services.task_service import init_task
 
-            # We need to patch get_background_db to return our test session
             from contextlib import asynccontextmanager
 
             @asynccontextmanager
             async def mock_bg_db():
                 yield db_session
 
-            with patch("daiflow.services.task_service.get_background_db", mock_bg_db):
+            with patch("daiflow.services.task_service.get_background_db", mock_bg_db), \
+                 patch("daiflow.workflow.pipeline.get_background_db", mock_bg_db):
                 await init_task(task_id)
 
-            # After init_task, status should be PLANNING (set before generate_plan call)
+            # After init_task, status should be INITIALIZING (waiting for user confirm)
             await db_session.refresh(t)
-            assert t.status == TaskStatus.PLANNING
+            assert t.status == TaskStatus.INITIALIZING
 
-            # generate_plan should have been called
-            mock_plan.assert_awaited_once_with(task_id)
+
+class TestConfirmInit:
+    @_mock_bg
+    @_mock_bg2
+    async def test_confirm_init_transitions_to_planning(self, mock_plan, mock_init, client, db_session):
+        """confirm-init should transition INITIALIZING → PLANNING and trigger plan generation."""
+        pid = await _create_project(client)
+        create_resp = await client.post("/api/tasks", json={
+            "name": "Task 1", "project_id": pid,
+        })
+        tid = create_resp.json()["id"]
+
+        from daiflow.models import Task, TaskStatus
+        task = await db_session.get(Task, tid)
+        task.status = TaskStatus.INITIALIZING
+        await db_session.commit()
+
+        resp = await client.post(f"/api/tasks/{tid}/confirm-init")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == TaskStatus.PLANNING
+
+    @_mock_bg
+    async def test_confirm_init_rejected_in_planning_state(self, mock_init, client, db_session):
+        """Cannot confirm init when task is already in PLANNING state."""
+        pid = await _create_project(client)
+        create_resp = await client.post("/api/tasks", json={
+            "name": "Task 1", "project_id": pid,
+        })
+        tid = create_resp.json()["id"]
+
+        from daiflow.models import Task, TaskStatus
+        task = await db_session.get(Task, tid)
+        task.status = TaskStatus.PLANNING
+        await db_session.commit()
+
+        resp = await client.post(f"/api/tasks/{tid}/confirm-init")
+        assert resp.status_code == 400
+
+    @_mock_bg
+    async def test_get_init_sessions(self, mock_init, client, db_session):
+        """Should return init subtask sessions for a task."""
+        pid = await _create_project(client)
+        create_resp = await client.post("/api/tasks", json={
+            "name": "Task 1", "project_id": pid,
+        })
+        tid = create_resp.json()["id"]
+
+        # Create init session records
+        from daiflow.models import Session, SessionStatus
+        db_session.add(Session(session_id=f"task:{tid}:init:fetch_code", type="task_init", ref_id=tid, task_id=tid, status=SessionStatus.DONE))
+        db_session.add(Session(session_id=f"task:{tid}:init:sync_skills", type="task_init", ref_id=tid, task_id=tid, status=SessionStatus.DONE))
+        await db_session.commit()
+
+        resp = await client.get(f"/api/tasks/{tid}/init/sessions")
+        assert resp.status_code == 200
+        sessions = resp.json()
+        assert len(sessions) == 2
+        assert all(s["status"] == SessionStatus.DONE for s in sessions)
+
+
+class TestRetryInit:
+    @_mock_bg
+    async def test_retry_init_from_created(self, mock_init, client, db_session):
+        """retry-init should re-trigger init_task when task is in CREATED state."""
+        pid = await _create_project(client)
+        create_resp = await client.post("/api/tasks", json={
+            "name": "Task 1", "project_id": pid,
+        })
+        tid = create_resp.json()["id"]
+
+        # Task starts as CREATED (mock prevented init_task from running)
+        resp = await client.post(f"/api/tasks/{tid}/retry-init")
+        assert resp.status_code == 200
+        assert resp.json()["ok"] is True
+
+    @_mock_bg
+    async def test_retry_init_rejected_in_initializing(self, mock_init, client, db_session):
+        """Cannot retry init when task is in INITIALIZING state."""
+        pid = await _create_project(client)
+        create_resp = await client.post("/api/tasks", json={
+            "name": "Task 1", "project_id": pid,
+        })
+        tid = create_resp.json()["id"]
+
+        from daiflow.models import Task, TaskStatus
+        task = await db_session.get(Task, tid)
+        task.status = TaskStatus.INITIALIZING
+        await db_session.commit()
+
+        resp = await client.post(f"/api/tasks/{tid}/retry-init")
+        assert resp.status_code == 400
+
+    @_mock_bg
+    async def test_retry_init_cleans_old_sessions(self, mock_init, client, db_session):
+        """retry-init should delete old init sessions before re-triggering."""
+        pid = await _create_project(client)
+        create_resp = await client.post("/api/tasks", json={
+            "name": "Task 1", "project_id": pid,
+        })
+        tid = create_resp.json()["id"]
+
+        # Create old failed sessions
+        from daiflow.models import Session, SessionStatus
+        db_session.add(Session(session_id=f"task:{tid}:init:fetch_code", type="task_init", ref_id=tid, task_id=tid, status=SessionStatus.FAILED))
+        db_session.add(Session(session_id=f"task:{tid}:init:sync_skills", type="task_init", ref_id=tid, task_id=tid, status=SessionStatus.WAITING))
+        await db_session.commit()
+
+        resp = await client.post(f"/api/tasks/{tid}/retry-init")
+        assert resp.status_code == 200
+
+        # Old sessions should be cleaned up
+        sessions_resp = await client.get(f"/api/tasks/{tid}/init/sessions")
+        assert sessions_resp.json() == []
+
+    async def test_retry_init_not_found(self, client):
+        resp = await client.post("/api/tasks/nonexistent/retry-init")
+        assert resp.status_code == 404
+
+
+class TestRunSimpleTaskReRaise:
+    async def test_run_simple_task_raises_on_failure(self, db_session):
+        """run_simple_task should re-raise exceptions after recording FAILED status."""
+        import pytest
+        from daiflow.models import Session, SessionStatus
+        from daiflow.workflow.pipeline import run_simple_task
+
+        sid = "test:simple:fail"
+        db_session.add(Session(session_id=sid, type="test", ref_id="x", status=SessionStatus.WAITING))
+        await db_session.commit()
+
+        @asynccontextmanager
+        async def mock_bg_db():
+            yield db_session
+
+        async def failing_fn(db, session_id):
+            raise RuntimeError("boom")
+
+        with patch("daiflow.workflow.pipeline.get_background_db", mock_bg_db):
+            with pytest.raises(RuntimeError, match="boom"):
+                await run_simple_task(sid, "test:bus", failing_fn)
+
+        # Session should be marked FAILED
+        s = await db_session.get(Session, sid)
+        assert s.status == SessionStatus.FAILED
+        assert "boom" in s.error
+
+
+class TestInitTaskFailure:
+    async def test_init_task_resets_on_subtask_failure(self, db_session):
+        """When a subtask fails, init_task should reset task to CREATED."""
+        from daiflow.models import Project, Task, TaskStatus
+
+        p = Project(name="proj")
+        db_session.add(p)
+        await db_session.flush()
+        t = Task(name="task", project_id=p.id, status=TaskStatus.CREATED, branch="main")
+        db_session.add(t)
+        await db_session.commit()
+        task_id = t.id
+
+        @asynccontextmanager
+        async def mock_bg_db():
+            yield db_session
+
+        # Make fetch_code fail
+        with patch("daiflow.services.task_service.get_background_db", mock_bg_db), \
+             patch("daiflow.workflow.pipeline.get_background_db", mock_bg_db), \
+             patch("daiflow.services.task_service._do_fetch_code", side_effect=RuntimeError("clone failed")):
+            from daiflow.services.task_service import init_task
+            await init_task(task_id)
+
+        await db_session.refresh(t)
+        # Task should be reset to CREATED after failure
+        assert t.status == TaskStatus.CREATED
+
+    async def test_init_task_skips_second_subtask_on_first_failure(self, db_session):
+        """When fetch_code fails, sync_skills should not run."""
+        from daiflow.models import Project, Session, SessionStatus, Task, TaskStatus
+
+        p = Project(name="proj")
+        db_session.add(p)
+        await db_session.flush()
+        t = Task(name="task", project_id=p.id, status=TaskStatus.CREATED, branch="main")
+        db_session.add(t)
+        await db_session.commit()
+        task_id = t.id
+
+        @asynccontextmanager
+        async def mock_bg_db():
+            yield db_session
+
+        sync_called = False
+        original_sync = None
+
+        async def track_sync(*args, **kwargs):
+            nonlocal sync_called
+            sync_called = True
+
+        with patch("daiflow.services.task_service.get_background_db", mock_bg_db), \
+             patch("daiflow.workflow.pipeline.get_background_db", mock_bg_db), \
+             patch("daiflow.services.task_service._do_fetch_code", side_effect=RuntimeError("clone failed")), \
+             patch("daiflow.services.task_service._do_sync_skills", track_sync):
+            from daiflow.services.task_service import init_task
+            await init_task(task_id)
+
+        # sync_skills should NOT have been called
+        assert sync_called is False
+
+        # fetch_code session should be FAILED
+        fetch_session = await db_session.get(Session, f"task:{task_id}:init:fetch_code")
+        assert fetch_session.status == SessionStatus.FAILED
+
+        # sync_skills session should still be WAITING
+        skills_session = await db_session.get(Session, f"task:{task_id}:init:sync_skills")
+        assert skills_session.status == SessionStatus.WAITING

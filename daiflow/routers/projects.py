@@ -277,7 +277,6 @@ async def get_init_sessions(project_id: str, db: AsyncSession = Depends(get_db))
     return layers
 
 
-
 @router.get("/{project_id}/knowledge")
 async def get_project_knowledge(project_id: str, db: AsyncSession = Depends(get_db)):
     """Get project knowledge files (project.md + skills)."""

@@ -6,15 +6,16 @@ import './StageProgress.css'
 
 interface StageProgressProps {
   taskId: string
-  currentStage: number  // 1-4 (which page we're on)
+  currentStage: number  // 1-5 (which page we're on)
   taskStatus?: number   // task.status from DB (0-7), determines which stages are reachable
 }
 
 const STAGES: { num: number; labelKey: TranslationKey; path: string; minStatus: number; maxStatus: number }[] = [
-  { num: 1, labelKey: 'stage.1', path: 'plan', minStatus: TaskStatus.PLANNING, maxStatus: TaskStatus.PLANNING },
-  { num: 2, labelKey: 'stage.2', path: 'todo', minStatus: TaskStatus.PLAN_LOCKED, maxStatus: TaskStatus.TODO_READY },
-  { num: 3, labelKey: 'stage.3', path: 'coding', minStatus: TaskStatus.CODING, maxStatus: TaskStatus.CODING },
-  { num: 4, labelKey: 'stage.4', path: 'review', minStatus: TaskStatus.REVIEWING, maxStatus: TaskStatus.REVIEWING },
+  { num: 1, labelKey: 'stage.1', path: 'init', minStatus: TaskStatus.CREATED, maxStatus: TaskStatus.INITIALIZING },
+  { num: 2, labelKey: 'stage.2', path: 'plan', minStatus: TaskStatus.PLANNING, maxStatus: TaskStatus.PLANNING },
+  { num: 3, labelKey: 'stage.3', path: 'todo', minStatus: TaskStatus.PLAN_LOCKED, maxStatus: TaskStatus.TODO_READY },
+  { num: 4, labelKey: 'stage.4', path: 'coding', minStatus: TaskStatus.CODING, maxStatus: TaskStatus.CODING },
+  { num: 5, labelKey: 'stage.5', path: 'review', minStatus: TaskStatus.REVIEWING, maxStatus: TaskStatus.REVIEWING },
 ]
 
 export default function StageProgress({ taskId, currentStage, taskStatus }: StageProgressProps) {

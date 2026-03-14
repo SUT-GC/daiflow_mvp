@@ -44,6 +44,14 @@ export default function Shell({ children }: ShellProps) {
             <span className="nav-icon">&#9776;</span>
             <span className="nav-text">{t('nav.tasks')}</span>
           </NavLink>
+          <NavLink
+            to="/debug"
+            className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+            title={collapsed ? t('nav.debug') : undefined}
+          >
+            <span className="nav-icon">&#9888;</span>
+            <span className="nav-text">{t('nav.debug')}</span>
+          </NavLink>
         </div>
 
         <div className="sidebar-bottom">
