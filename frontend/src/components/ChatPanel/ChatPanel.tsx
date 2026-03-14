@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { useLocale } from '../../hooks/useLocale'
 import type { ChatMessage } from '../../hooks/useStageChat'
 import MarkdownViewer from '../MarkdownViewer/MarkdownViewer'
@@ -64,18 +64,18 @@ export default function ChatPanel({ messages, onSend, streaming = false, title, 
 
   const isSendDisabled = disabled || streaming || !input.trim()
 
-  const handleSend = () => {
-    if (isSendDisabled) return
+  const handleSend = useCallback(() => {
+    if (disabled || streaming || !input.trim()) return
     onSend(input.trim())
     setInput('')
-  }
+  }, [disabled, streaming, input, onSend])
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSend()
     }
-  }
+  }, [handleSend])
 
   return (
     <div className="chat-panel" style={style}>

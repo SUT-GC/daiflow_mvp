@@ -5,15 +5,15 @@
  * Used by both ChatPanel (chat messages) and ProjectInit (session logs).
  */
 
-export type ToolEntry = { toolName: string; args?: any; result?: string }
+export type ToolEntry = { toolName: string; args?: Record<string, unknown>; result?: string }
 
 /**
  * Flush pending tool state into groups.
  * Core logic shared between groupChatToolEvents and groupLogBlocks.
  */
 function processTool(
-  event: { type: string; tool_name?: string; args?: any; content?: any },
-  pendingTool: { toolName: string; args?: any } | null,
+  event: { type: string; tool_name?: string; args?: Record<string, unknown>; content?: string },
+  pendingTool: { toolName: string; args?: Record<string, unknown> } | null,
   toolGroup: ToolEntry[],
 ): { pendingTool: typeof pendingTool } {
   if (event.type === 'tool_call') {
@@ -23,7 +23,7 @@ function processTool(
     return { pendingTool: { toolName: event.tool_name ?? '?', args: event.args } }
   }
   if (event.type === 'tool_result') {
-    const resultContent = typeof event.content === 'string' ? event.content : JSON.stringify(event.content)
+    const resultContent = event.content ?? ''
     if (pendingTool) {
       toolGroup.push({ toolName: pendingTool.toolName, args: pendingTool.args, result: resultContent })
     } else {
@@ -38,11 +38,11 @@ function processTool(
  * Group chat message events (thinking/tool_call/tool_result) into tool groups.
  * Used by ChatPanel for individual AI messages.
  */
-export function groupChatToolEvents(events: any[]): Array<{ kind: 'tool-group'; tools: ToolEntry[] }> {
+export function groupChatToolEvents(events: Array<{ type: string; tool_name?: string; args?: Record<string, unknown>; content?: string }>): Array<{ kind: 'tool-group'; tools: ToolEntry[] }> {
   if (!events || events.length === 0) return []
   const groups: Array<{ kind: 'tool-group'; tools: ToolEntry[] }> = []
   let toolGroup: ToolEntry[] = []
-  let pendingTool: { toolName: string; args?: any } | null = null
+  let pendingTool: { toolName: string; args?: Record<string, unknown> } | null = null
 
   const flushToolGroup = () => {
     if (pendingTool) {
@@ -77,11 +77,11 @@ export type LogBlock =
  * Group session log events into display blocks (text, tool-groups, errors, status).
  * Used by ProjectInit for session log modals.
  */
-export function groupLogBlocks(logs: Array<{ type: string; content?: any; tool_name?: string; args?: any; error?: string; status?: number }>): LogBlock[] {
+export function groupLogBlocks(logs: Array<{ type: string; content?: string; tool_name?: string; args?: Record<string, unknown>; error?: string; status?: number }>): LogBlock[] {
   const blocks: LogBlock[] = []
   let textBuf = ''
   let toolGroup: ToolEntry[] = []
-  let pendingTool: { toolName: string; args?: any } | null = null
+  let pendingTool: { toolName: string; args?: Record<string, unknown> } | null = null
 
   const flushText = () => {
     if (textBuf) { blocks.push({ kind: 'text', content: textBuf }); textBuf = '' }

@@ -3,6 +3,7 @@ import { getTask, getTodos, getTaskDiff, getTodoDiff, joinDiffs, TaskData, TodoD
 import { SessionStatus, TodoStatus } from '../types/enums'
 import { sessionIds } from '../utils/sessionIds'
 import { useAgent } from './useAgent'
+import type { WSEvent } from '../ws'
 
 /** Debounce delay (ms) before fetching diff after code_updated events. */
 const CODE_UPDATE_DEBOUNCE_MS = 500
@@ -58,8 +59,12 @@ export function useCodingStage(taskId: string | undefined) {
     }
   }, [taskId])
 
-  // When selecting a todo, load its diff
+  // When selecting a todo, load its diff and clear any pending debounce
   useEffect(() => {
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current)
+      debounceRef.current = null
+    }
     if (!selectedTodo) {
       setDiff('')
       return
@@ -70,7 +75,7 @@ export function useCodingStage(taskId: string | undefined) {
     }
   }, [selectedTodo, todos, fetchTodoDiff])
 
-  const onUpdated = useCallback(async (event: any) => {
+  const onUpdated = useCallback(async (event: WSEvent) => {
     if (event.type === 'code_updated' && taskId) {
       // During execution, use task-level diff (uncommitted changes)
       if (debounceRef.current) clearTimeout(debounceRef.current)

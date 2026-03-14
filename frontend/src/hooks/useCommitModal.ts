@@ -41,8 +41,8 @@ export function useCommitModal({ taskId, taskName, onSuccess }: UseCommitModalOp
       await submitMR(taskId, commitMessage)
       setSubmitted(true)
       onSuccess?.()
-    } catch (err: any) {
-      alert('Error: ' + err.message)
+    } catch (err) {
+      alert('Error: ' + (err instanceof Error ? err.message : String(err)))
     } finally {
       setSubmitting(false)
     }

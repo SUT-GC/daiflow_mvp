@@ -3,6 +3,7 @@ import { getTask, TaskData } from '../api'
 import { SessionStatus } from '../types/enums'
 import { sessionIds } from '../utils/sessionIds'
 import { useAgent } from './useAgent'
+import type { WSEvent } from '../ws'
 
 export function usePlanStage(taskId: string | undefined) {
   const [task, setTask] = useState<TaskData | null>(null)
@@ -24,7 +25,7 @@ export function usePlanStage(taskId: string | undefined) {
 
   const sessionId = taskId ? sessionIds.plan(taskId) : null
 
-  const onUpdated = useCallback((event: any) => {
+  const onUpdated = useCallback((event: WSEvent) => {
     if (event.type === 'plan_updated' && event.content) {
       setChatPlanContent(event.content)
     }

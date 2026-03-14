@@ -7,24 +7,31 @@ export interface SessionEvent {
   type: string
   content?: string
   tool_name?: string
-  args?: any
+  args?: Record<string, unknown>
   tool_call_id?: string
   status?: number
   error?: string
   ts?: string
+  session_id?: string
+  started_at?: string
+  finished_at?: string
+  skill_name?: string
+  usage?: { input_tokens: number; output_tokens: number }
 }
 
 // Convert API log response to SessionEvent
 function convertLogToEvent(log: Record<string, unknown>): SessionEvent {
   return {
     type: (log.event_type as string) || (log.type as string) || 'unknown',
-    content: log.content as string,
-    tool_name: log.tool_name as string,
-    args: log.args,
-    tool_call_id: log.tool_call_id as string,
-    status: log.status as number,
-    error: log.error as string,
-    ts: log.ts as string,
+    content: log.content as string | undefined,
+    tool_name: log.tool_name as string | undefined,
+    args: log.args as Record<string, unknown> | undefined,
+    tool_call_id: log.tool_call_id as string | undefined,
+    status: log.status as number | undefined,
+    error: log.error as string | undefined,
+    ts: log.ts as string | undefined,
+    session_id: log.session_id as string | undefined,
+    skill_name: log.skill_name as string | undefined,
   }
 }
 

@@ -1,17 +1,27 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { getSessionLogs } from '../api'
 import { wsClient, WSEvent } from '../ws'
+import type { SessionEvent } from './useSession'
 
 /** Generate unique message IDs using crypto.randomUUID when available, with fallback. */
 const nextMsgId = typeof crypto !== 'undefined' && crypto.randomUUID
   ? () => `msg_${crypto.randomUUID()}`
   : (() => { let c = 0; return () => `msg_${++c}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}` })()
 
+/** A tool-call or tool-result event attached to an AI message. */
+interface ChatToolEvent {
+  type: string
+  tool_name?: string
+  args?: Record<string, unknown>
+  tool_call_id?: string
+  content?: string
+}
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'ai'
   content: string
-  events?: any[]
+  events?: ChatToolEvent[]
 }
 
 interface UseStageChatOptions {
@@ -20,12 +30,21 @@ interface UseStageChatOptions {
   stage: 'plan' | 'todo' | 'todo_exec' | 'review'
   /** Entity ID: task_id for plan/todo/review, todo_id for todo_exec */
   entityId: string
-  onUpdated?: (event: any) => void
+  onUpdated?: (event: WSEvent) => void
   /** Real-time session logs from useSession — used to show initial generation progress */
-  sessionLogs?: any[]
+  sessionLogs?: SessionEvent[]
 }
 
-function rebuildMessages(logs: any[]): ChatMessage[] {
+interface LogEvent {
+  type?: string
+  event_type?: string
+  content?: string
+  tool_name?: string
+  args?: Record<string, unknown>
+  tool_call_id?: string
+}
+
+function rebuildMessages(logs: LogEvent[]): ChatMessage[] {
   const messages: ChatMessage[] = []
   let currentAI: ChatMessage | null = null
 
@@ -66,7 +85,7 @@ export function useStageChat({ sessionId, stage, entityId, onUpdated, sessionLog
 
   // Refs for rAF-throttled streaming updates
   const aiContentRef = useRef('')
-  const aiEventsRef = useRef<any[]>([])
+  const aiEventsRef = useRef<ChatToolEvent[]>([])
   const aiIdRef = useRef('')
   const rafRef = useRef<number | null>(null)
 

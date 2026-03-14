@@ -38,13 +38,19 @@ export default function Projects() {
   }
 
   useEffect(() => {
-    listProjects().then((list: ProjectData[]) => {
+    listProjects().then(async (list: ProjectData[]) => {
       setProjects(list)
-      list.forEach(p => {
-        getInitSessions(p.id)
-          .then(sessions => setInitStatuses(prev => ({ ...prev, [p.id]: computeInitStatus(sessions) })))
-          .catch(() => setInitStatuses(prev => ({ ...prev, [p.id]: 'none' })))
-      })
+      // Fetch all init statuses in parallel instead of sequential forEach
+      const results = await Promise.allSettled(
+        list.map(p => getInitSessions(p.id).then(sessions => ({ id: p.id, status: computeInitStatus(sessions) })))
+      )
+      const statuses: Record<string, InitStatus> = {}
+      for (const result of results) {
+        if (result.status === 'fulfilled') {
+          statuses[result.value.id] = result.value.status
+        }
+      }
+      setInitStatuses(statuses)
     }).catch(err => console.error('Failed to load projects:', err))
   }, [])
 

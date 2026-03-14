@@ -1,4 +1,5 @@
 import json
+import logging
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +10,8 @@ from daiflow.models import Task, TaskStatus, Todo, TodoStatus
 from daiflow.services.task_service import execute_todo
 from daiflow.services.git_service import get_diff_between
 from daiflow.workflow import TodoWorkflow
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/todos", tags=["todos"])
 
@@ -103,7 +106,7 @@ async def get_todo_diff(todo_id: str, db: AsyncSession = Depends(get_db)):
             if diff:
                 diffs.append({"repo": repo_path, "diff": diff})
         except Exception:
-            pass
+            logger.warning("Failed to get diff for repo %s (%s..%s)", repo_path, hash_before, hash_after)
 
     return {"diffs": diffs}
 
