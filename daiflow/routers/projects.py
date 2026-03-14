@@ -1,7 +1,6 @@
 import asyncio
 import json
 import shutil
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import select
@@ -12,7 +11,9 @@ from daiflow.config import PROJECTS_DIR
 from daiflow.database import get_db
 from daiflow.models import Project, ProjectRepo, Session
 from daiflow.schemas import ProjectCreate, ProjectResponse, ProjectUpdate
-from daiflow.services.project_service import compute_init_sessions, run_init, run_init_retry
+from daiflow.services.project_service import (
+    get_init_layer_status, prepare_init_sessions, run_init, run_init_retry,
+)
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
@@ -170,26 +171,8 @@ async def init_project(
     )
     repos = repos_result.scalars().all()
 
-    # Compute and batch-create session records (idempotent — skip existing)
-    session_defs = compute_init_sessions(project_id, repos)
-    for sd in session_defs:
-        existing = await db.get(Session, sd["session_id"])
-        if existing:
-            # Reset existing session for re-init
-            existing.status = 0
-            existing.error = None
-            existing.started_at = None
-            existing.finished_at = None
-            # Append run_boundary marker instead of deleting log file
-            from daiflow.session_runner import append_log
-            await append_log(sd["session_id"], {
-                "type": "run_boundary",
-                "ts": datetime.now(timezone.utc).isoformat(),
-            })
-        else:
-            session = Session(**sd, status=0)
-            db.add(session)
-    await db.commit()
+    # Delegate session pre-creation to service layer
+    session_defs = await prepare_init_sessions(db, project_id, repos)
 
     # Start background init with independent DB session
     background_tasks.add_task(run_init, project_id)
@@ -255,29 +238,8 @@ async def retry_init(
 
 @router.get("/{project_id}/init/sessions")
 async def get_init_sessions(project_id: str, db: AsyncSession = Depends(get_db)):
-    """Get all init sessions grouped by layer."""
-    result = await db.execute(
-        select(Session)
-        .where(Session.ref_id == project_id, Session.type == "init")
-        .order_by(Session.layer, Session.created_at)
-    )
-    sessions = result.scalars().all()
-
-    layers: dict[int, list] = {}
-    for s in sessions:
-        layer = s.layer or 0
-        if layer not in layers:
-            layers[layer] = []
-        layers[layer].append({
-            "session_id": s.session_id,
-            "status": s.status,
-            "layer": s.layer,
-            "error": s.error,
-            "started_at": s.started_at.isoformat() if s.started_at else None,
-            "finished_at": s.finished_at.isoformat() if s.finished_at else None,
-        })
-
-    return layers
+    """Get all init sessions grouped by layer with aggregate status."""
+    return await get_init_layer_status(db, project_id)
 
 
 @router.get("/{project_id}/knowledge")

@@ -928,7 +928,7 @@ async def get_agent_type_config(agent_type: str):
 |------|------|------|
 | 独立 `recovery.py` 模块 | 内联在 `main.py` 的 `_recover_interrupted_sessions()` | 逻辑较简单，不值得独立模块 |
 | `@app.on_event("startup")` | `lifespan` 上下文管理器 | FastAPI 推荐用 lifespan 替代已废弃的 on_event |
-| 恢复后推送 WS 事件 | 未推送 | 启动时通常还没有前端连接，推送无意义 |
+| 恢复后推送 WS 事件 | ✅ 已实现 | 通过全局 `ws_manager.publish()` 推送 `status_change` 事件 |
 | `run_boundary` 含 `attempt` 计数 | 无 `attempt` 字段 | 简化实现，查询时只关心最后一个 boundary 的位置 |
 | 恢复范围：仅 RUNNING session | 额外恢复 RUNNING 的 todo + 自动重试 init pipeline | 实际需求比设计更广 |
 
@@ -936,7 +936,7 @@ async def get_agent_type_config(agent_type: str):
 
 | 设计 | 实际 | 原因 |
 |------|------|------|
-| Stage hooks 基于 `useAgent` 重构 | Stage hooks 独立组合 `useSession` + `useStageChat` + `useStaleDetection` | 三个 hook 的产出物加载逻辑差异较大（plan: 从 logs 推导 / todo: re-fetch API / coding: debounced diff），强行用 `useAgent` 反而增加复杂度 |
+| Stage hooks 基于 `useAgent` 重构 | ✅ 已实现 — `usePlanStage`/`useTodoStage`/`useCodingStage` 均使用 `useAgent` 作为基础 | 产出物加载逻辑各 hook 自行处理，session/chat/stale 由 `useAgent` 统一 |
 | `useStaleDetection(status, logs: SessionEvent[])` | `useStaleDetection(status, logsLength: number, thresholdMs?)` | 只需 length 触发 effect，无需传整个数组；增加可配置阈值 |
 | `useAgent` 选项中 `agentType` | `stage` (union type) | 更精确的类型约束 |
 | `useAgent` 返回 `retry` | 返回 `refreshSession` + `sessionRefreshKey` | 命名更语义化 |
@@ -946,8 +946,8 @@ async def get_agent_type_config(agent_type: str):
 
 | 设计 | 实际 | 差异说明 |
 |------|------|---------|
-| Session 预创建下沉到 service 层 | 仍在 router 层（`projects.py`） | 待后续重构，当前保持稳定 |
-| `get_init_layer_status()` 聚合函数 | 仅有 `get_init_sessions` 端点返回原始数据 | 前端自行聚合，后续可优化 |
+| Session 预创建下沉到 service 层 | ✅ 已实现 — `prepare_init_sessions()` 在 `project_service.py` | Router 调用 service 函数 |
+| `get_init_layer_status()` 聚合函数 | ✅ 已实现 — 返回 per-layer aggregate status (`done`/`failed`/`running`/`waiting`) | `get_init_sessions` 端点直接调用 |
 | retry 接收 `layer` 参数 | 自动检测最早失败层并级联重试后续层 | 实际需求比逐层重试更实用 |
 | Init re-run 删除 log 文件 | 改为追加 `run_boundary` 标记 | 与崩溃恢复方案一致 |
 

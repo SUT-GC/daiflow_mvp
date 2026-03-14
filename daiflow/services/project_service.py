@@ -222,6 +222,68 @@ async def _finalize_init(db, project_id: str, project_bus: str, ws: WSManager | 
     await ws.publish(project_bus, {"type": "done"})
 
 
+async def prepare_init_sessions(db, project_id: str, repos: list) -> list[dict]:
+    """Compute and batch-create/reset init session records. Returns session defs.
+
+    Idempotent: resets existing sessions, creates missing ones.
+    Previously lived in the router layer; moved here for cleaner separation.
+    """
+    session_defs = compute_init_sessions(project_id, repos)
+    for sd in session_defs:
+        existing = await db.get(Session, sd["session_id"])
+        if existing:
+            existing.status = SessionStatus.WAITING
+            existing.error = None
+            existing.started_at = None
+            existing.finished_at = None
+            # Append run_boundary marker (preserves historical logs)
+            await append_log(sd["session_id"], {
+                "type": "run_boundary",
+                "ts": datetime.now(timezone.utc).isoformat(),
+            })
+        else:
+            db.add(Session(**sd, status=SessionStatus.WAITING))
+    await db.commit()
+    return session_defs
+
+
+async def get_init_layer_status(db, project_id: str) -> list[dict]:
+    """Return per-layer aggregate status for project init sessions."""
+    result = await db.execute(
+        select(Session).where(
+            Session.ref_id == project_id,
+            Session.type == "init",
+        ).order_by(Session.layer, Session.created_at)
+    )
+    sessions = result.scalars().all()
+
+    layers: dict[int, dict] = {}
+    for s in sessions:
+        layer_num = s.layer or 0
+        if layer_num not in layers:
+            layers[layer_num] = {"layer": layer_num, "sessions": []}
+        layers[layer_num]["sessions"].append({
+            "session_id": s.session_id,
+            "status": s.status,
+            "error": s.error,
+            "started_at": s.started_at.isoformat() if s.started_at else None,
+            "finished_at": s.finished_at.isoformat() if s.finished_at else None,
+        })
+
+    for layer in layers.values():
+        statuses = [sess["status"] for sess in layer["sessions"]]
+        if all(st == SessionStatus.DONE for st in statuses):
+            layer["status"] = "done"
+        elif any(st == SessionStatus.FAILED for st in statuses):
+            layer["status"] = "failed"
+        elif any(st == SessionStatus.RUNNING for st in statuses):
+            layer["status"] = "running"
+        else:
+            layer["status"] = "waiting"
+
+    return sorted(layers.values(), key=lambda x: x["layer"])
+
+
 async def run_init(project_id: str, ws_manager: WSManager | None = None):
     """Execute the 4-layer project knowledge generation pipeline.
 
