@@ -48,7 +48,7 @@ export default function CodingStage() {
     }
   }
 
-  const readonly = task ? isStageReadonly(task.status, 3) : false
+  const readonly = task ? isStageReadonly(task.status, 4) : false
 
   // Only the first PENDING or FAILED todo (in seq order) is actionable
   const nextActionableId = todos.find(t => t.status === 0 || t.status === 3)?.id ?? null
@@ -57,7 +57,7 @@ export default function CodingStage() {
     <StageLayout
       taskId={taskId!}
       task={task}
-      currentStage={3}
+      currentStage={4}
       content={
         <div className="coding-split">
           {/* Left: Todo Timeline */}

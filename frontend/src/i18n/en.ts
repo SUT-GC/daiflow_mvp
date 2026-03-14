@@ -150,10 +150,22 @@ const en = {
   'tasks.status.7': 'Done',
 
   // StageProgress
-  'stage.1': 'Technical Plan',
-  'stage.2': 'Task Decomposition',
-  'stage.3': 'Code Implementation',
-  'stage.4': 'Code Review',
+  'stage.1': 'Task Init',
+  'stage.2': 'Technical Plan',
+  'stage.3': 'Task Decomposition',
+  'stage.4': 'Code Implementation',
+  'stage.5': 'Code Review',
+
+  // InitStage
+  'init_stage.title': 'Task Initialization',
+  'init_stage.desc': 'Preparing development environment...',
+  'init_stage.fetch_code': 'Fetch Code',
+  'init_stage.sync_skills': 'Sync Skills',
+  'init_stage.completed': 'Completed',
+  'init_stage.in_progress': 'In Progress',
+  'init_stage.failed': 'Failed',
+  'init_stage.confirm': 'Start Plan Generation',
+  'init_stage.retry': 'Retry',
 
   // PlanStage
   'plan.title': 'Technical Plan',

@@ -1,6 +1,7 @@
 import json
 import logging
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy import select, update
@@ -15,6 +16,7 @@ from daiflow.services.project_service import repo_dir_name
 from daiflow.services.skill_service import get_project_dir, get_task_dir, get_task_skills_dir, sync_skills_to_task
 from daiflow.session_runner import SessionRunner, make_file_write_detector
 from daiflow.workflow import TaskWorkflow, TodoWorkflow
+from daiflow.ws_manager import ws_manager
 
 logger = logging.getLogger(__name__)
 
@@ -118,11 +120,54 @@ def _resolve_task_roots(task_id: str, repos: list) -> list[str]:
     return roots
 
 
-async def init_task(task_id: str):
-    """Initialize a task: sync skills, checkout branch, then generate plan.
+async def _do_fetch_code(db: AsyncSession, session_id: str, *, task_id: str, project_id: str, branch: str | None):
+    """Subtask: copy code repos and checkout branch."""
+    from daiflow.session_runner import _append_log
 
-    Uses an independent DB session for background execution.
+    repos = await fetch_project_repos(db, project_id)
+    _copy_code_to_task(project_id, task_id, repos)
+
+    now_iso = lambda: datetime.now(timezone.utc).isoformat()
+    await _append_log(session_id, {"type": "text_delta", "ts": now_iso(), "content": f"Copied {len(repos)} repo(s) to task directory\n"})
+
+    if branch:
+        for repo in repos:
+            if repo.local_path:
+                try:
+                    await checkout_branch(repo.local_path, branch)
+                    await _append_log(session_id, {"type": "text_delta", "ts": now_iso(), "content": f"✓ Checked out branch '{branch}' on {repo.local_path}\n"})
+                except Exception as e:
+                    logger.warning("Branch checkout for %s on %s: %s", branch, repo.local_path, e)
+                    await _append_log(session_id, {"type": "text_delta", "ts": now_iso(), "content": f"⚠ Branch checkout failed on {repo.local_path}: {e}\n"})
+            elif repo.git_url:
+                task_repo_path = str(get_task_dir(task_id) / "code" / repo_dir_name(repo.git_url))
+                try:
+                    await checkout_branch(task_repo_path, branch)
+                    await _append_log(session_id, {"type": "text_delta", "ts": now_iso(), "content": f"✓ Checked out branch '{branch}' on {repo_dir_name(repo.git_url)}\n"})
+                except Exception as e:
+                    logger.warning("Branch checkout for %s on %s: %s", branch, task_repo_path, e)
+                    await _append_log(session_id, {"type": "text_delta", "ts": now_iso(), "content": f"⚠ Branch checkout failed on {repo_dir_name(repo.git_url)}: {e}\n"})
+
+
+async def _do_sync_skills(db: AsyncSession, session_id: str, *, task_id: str, project_id: str):
+    """Subtask: sync project skills to task directory."""
+    from daiflow.session_runner import _append_log
+
+    sync_skills_to_task(project_id, task_id)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    await _append_log(session_id, {"type": "text_delta", "ts": now_iso, "content": "✓ Synced project skills to task\n"})
+
+
+async def init_task(task_id: str):
+    """Initialize a task: fetch code + sync skills, then wait for user confirmation.
+
+    Creates Session records for each subtask so the frontend can show progress.
+    Does NOT auto-trigger plan generation — user must confirm via /confirm-init.
     """
+    from daiflow.workflow.pipeline import run_simple_task
+
+    init_bus = f"task:init:{task_id}"
+
     try:
         async with get_background_db() as db:
             task = await db.get(Task, task_id)
@@ -136,38 +181,28 @@ async def init_task(task_id: str):
             # Transition: created → initializing
             wf = TaskWorkflow(task, db)
             await wf.initialize()
+
+            # Create session records for init subtasks
+            fetch_sid = f"task:{task_id}:init:fetch_code"
+            skills_sid = f"task:{task_id}:init:sync_skills"
+            for sid in (fetch_sid, skills_sid):
+                existing = await db.get(Session, sid)
+                if not existing:
+                    db.add(Session(session_id=sid, type="task_init", ref_id=task_id, task_id=task_id, status=SessionStatus.WAITING))
             await db.commit()
 
-            # Sync skills
-            sync_skills_to_task(task.project_id, task_id)
+        # Run subtasks sequentially
+        await run_simple_task(
+            fetch_sid, init_bus,
+            lambda db, sid: _do_fetch_code(db, sid, task_id=task_id, project_id=task.project_id, branch=task.branch),
+        )
+        await run_simple_task(
+            skills_sid, init_bus,
+            lambda db, sid: _do_sync_skills(db, sid, task_id=task_id, project_id=task.project_id),
+        )
 
-            # Fetch repos and prepare code directories
-            repos = await fetch_project_repos(db, task.project_id)
-
-            # Copy cloned code to task directory for git-only repos
-            _copy_code_to_task(task.project_id, task_id, repos)
-
-            # Checkout branch on all working directories
-            if task.branch:
-                for repo in repos:
-                    if repo.local_path:
-                        try:
-                            await checkout_branch(repo.local_path, task.branch)
-                        except Exception as e:
-                            logger.warning("Branch checkout for %s on %s: %s", task.branch, repo.local_path, e)
-                    elif repo.git_url:
-                        task_repo_path = str(get_task_dir(task_id) / "code" / repo_dir_name(repo.git_url))
-                        try:
-                            await checkout_branch(task_repo_path, task.branch)
-                        except Exception as e:
-                            logger.warning("Branch checkout for %s on %s: %s", task.branch, task_repo_path, e)
-
-            # Transition: initializing → planning
-            await wf.plan_ready()
-            await db.commit()
-
-        # Then generate plan
-        await generate_plan(task_id)
+        # Publish init done event
+        await ws_manager.publish(init_bus, {"type": "done"})
 
     except Exception:
         logger.exception("init_task failed for task %s", task_id)
@@ -175,7 +210,7 @@ async def init_task(task_id: str):
         try:
             async with get_background_db() as db:
                 task = await db.get(Task, task_id)
-                if task and task.status in (TaskStatus.INITIALIZING, TaskStatus.PLANNING):
+                if task and task.status == TaskStatus.INITIALIZING:
                     wf = TaskWorkflow(task, db)
                     await wf.reset()
                     await db.commit()

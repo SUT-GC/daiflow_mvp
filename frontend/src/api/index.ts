@@ -123,6 +123,14 @@ export const retryInit = (id: string) =>
 export const getProjectKnowledge = (id: string) =>
   request<{ project_id: string; files: { name: string; type: string; content: string }[] }>(`/projects/${id}/knowledge`)
 
+export interface InitSessionData {
+  session_id: string
+  status: number
+  error: string | null
+  started_at: string | null
+  finished_at: string | null
+}
+
 // ── Tasks ──
 export const listTasks = (projectId?: string) =>
   request<TaskData[]>(`/tasks${projectId ? `?project_id=${projectId}` : ''}`)
@@ -133,6 +141,10 @@ export const updateTask = (id: string, data: UpdateTaskData) =>
   request<TaskData>(`/tasks/${id}`, { method: 'PUT', body: JSON.stringify(data) })
 export const deleteTask = (id: string) =>
   request<{ ok: boolean }>(`/tasks/${id}`, { method: 'DELETE' })
+export const confirmInit = (id: string) =>
+  request<{ ok: boolean; status: number }>(`/tasks/${id}/confirm-init`, { method: 'POST' })
+export const getTaskInitSessions = (taskId: string) =>
+  request<InitSessionData[]>(`/tasks/${taskId}/init/sessions`)
 export const lockPlan = (id: string) =>
   request<{ ok: boolean; status: number }>(`/tasks/${id}/lock-plan`, { method: 'POST' })
 export const startCoding = (id: string) =>

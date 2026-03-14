@@ -212,6 +212,57 @@ async def start_review(task_id: str, db: AsyncSession = Depends(get_db)):
     return {"ok": True, "status": task.status}
 
 
+# ── Init Stage ──
+
+
+@router.post("/{task_id}/confirm-init")
+async def confirm_init(
+    task_id: str,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
+    """User confirms init is done, transition INITIALIZING → PLANNING and start plan generation."""
+    task = await db.get(Task, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    if task.status != TaskStatus.INITIALIZING:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot confirm init in {TaskStatus(task.status).name} state",
+        )
+
+    # Transition: initializing → planning
+    wf = TaskWorkflow(task, db)
+    await wf.plan_ready()
+    await db.commit()
+
+    background_tasks.add_task(generate_plan, task_id)
+    return {"ok": True, "status": task.status}
+
+
+@router.get("/{task_id}/init/sessions")
+async def get_init_sessions(task_id: str, db: AsyncSession = Depends(get_db)):
+    """Get init subtask sessions for a task."""
+    result = await db.execute(
+        select(Session).where(
+            Session.task_id == task_id,
+            Session.type == "task_init",
+        ).order_by(Session.session_id)
+    )
+    sessions = result.scalars().all()
+    return [
+        {
+            "session_id": s.session_id,
+            "status": s.status,
+            "error": s.error,
+            "started_at": s.started_at.isoformat() if s.started_at else None,
+            "finished_at": s.finished_at.isoformat() if s.finished_at else None,
+        }
+        for s in sessions
+    ]
+
+
 # ── Plan Stage ──
 
 
@@ -225,7 +276,7 @@ async def trigger_plan(
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     # Only allow plan generation in PLANNING state
-    if task.status not in (TaskStatus.INITIALIZING, TaskStatus.PLANNING):
+    if task.status != TaskStatus.PLANNING:
         raise HTTPException(
             status_code=400,
             detail=f"Cannot generate plan in {TaskStatus(task.status).name} state",
