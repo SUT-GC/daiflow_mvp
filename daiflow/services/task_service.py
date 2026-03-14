@@ -17,6 +17,14 @@ from daiflow.services.settings_service import get_language_setting
 from daiflow.services.skill_service import get_project_dir, get_task_dir, get_task_skills_dir, sync_skills_to_task
 from daiflow.session_runner import SessionRunner, make_file_write_detector
 from daiflow.workflow import TaskWorkflow, TodoWorkflow
+from daiflow.session_ids import (
+    task_init_bus,
+    task_init_fetch,
+    task_init_skills,
+    task_plan,
+    task_todo_exec,
+    task_todo_split,
+)
 from daiflow.ws_manager import ws_manager
 
 logger = logging.getLogger(__name__)
@@ -51,12 +59,25 @@ def _copy_code_to_task(project_id: str, task_id: str, repos: list):
                 logger.info("Copied code %s -> %s", src, dst)
 
 
-def resolve_repo_path(repo, task_id: str) -> str | None:
-    """Resolve the actual filesystem path for a repo in a task context.
+def resolve_repo_path_in(base_dir, repos: list) -> list[str]:
+    """Resolve filesystem paths for repos under a base directory.
 
-    - Repos with local_path: code lives in user's working directory
-    - Git-only repos: code lives in task/code/{repo_name} (isolated copy)
+    Shared logic used by both project init (project dir) and task execution (task dir).
+
+    - Repos with local_path: use local_path directly (user's working directory)
+    - Git-only repos: use base_dir/code/{repo_name} (isolated copy)
     """
+    roots = []
+    for r in repos:
+        if r.local_path:
+            roots.append(r.local_path)
+        elif r.git_url:
+            roots.append(str(base_dir / "code" / repo_dir_name(r.git_url)))
+    return roots
+
+
+def resolve_repo_path(repo, task_id: str) -> str | None:
+    """Resolve the actual filesystem path for a single repo in a task context."""
     if repo.local_path:
         return repo.local_path
     elif repo.git_url:
@@ -65,12 +86,8 @@ def resolve_repo_path(repo, task_id: str) -> str | None:
 
 
 def resolve_task_roots(task_id: str, repos: list) -> list[str]:
-    """Resolve allowed_roots for a task.
-
-    - Repos with local_path: use local_path directly (user's working directory)
-    - Repos with git_url only: use task/code/{repo_name} (isolated copy)
-    """
-    return [p for r in repos if (p := resolve_repo_path(r, task_id))]
+    """Resolve allowed_roots for a task."""
+    return resolve_repo_path_in(get_task_dir(task_id), repos)
 
 
 async def get_task_context(db: AsyncSession, task_id: str, project_id: str) -> tuple[list, list[str]]:
@@ -124,7 +141,7 @@ async def init_task(task_id: str):
     """
     from daiflow.workflow.pipeline import run_simple_task
 
-    init_bus = f"task:init:{task_id}"
+    init_bus = task_init_bus(task_id)
 
     try:
         async with get_background_db() as db:
@@ -141,8 +158,8 @@ async def init_task(task_id: str):
             await wf.initialize()
 
             # Create session records for init subtasks
-            fetch_sid = f"task:{task_id}:init:fetch_code"
-            skills_sid = f"task:{task_id}:init:sync_skills"
+            fetch_sid = task_init_fetch(task_id)
+            skills_sid = task_init_skills(task_id)
             for sid in (fetch_sid, skills_sid):
                 existing = await db.get(Session, sid)
                 if not existing:
@@ -197,7 +214,7 @@ async def generate_plan(task_id: str):
         allowed_roots = resolve_task_roots(task_id, repos)
 
         # Create or reset session record
-        session_id = f"task:{task_id}:plan"
+        session_id = task_plan(task_id)
         existing_session = await db.get(Session, session_id)
         if existing_session:
             existing_session.status = SessionStatus.WAITING
@@ -269,7 +286,7 @@ async def generate_todos(task_id: str):
         repos = await fetch_project_repos(db, task.project_id)
         allowed_roots = resolve_task_roots(task_id, repos)
 
-        session_id = f"task:{task_id}:todo_split"
+        session_id = task_todo_split(task_id)
         existing_session = await db.get(Session, session_id)
         if existing_session:
             existing_session.status = SessionStatus.WAITING
@@ -443,7 +460,7 @@ async def execute_todo(todo_id: str):
         repos = await fetch_project_repos(db, task.project_id)
         allowed_roots = resolve_task_roots(task.id, repos)
 
-        session_id = f"task:{task.id}:todo:{todo_id}"
+        session_id = task_todo_exec(task.id, todo_id)
         existing_session = await db.get(Session, session_id)
         if not existing_session:
             session = Session(session_id=session_id, type="todo_exec", ref_id=todo_id, task_id=task.id)

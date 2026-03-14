@@ -6,8 +6,25 @@
  * 2. sendChat(stage, entityId, message, onEvent) — bidirectional chat streaming
  */
 
+/** All known WebSocket event types from the backend. */
+export type WSEventType =
+  | 'text_delta'
+  | 'thinking'
+  | 'tool_call'
+  | 'tool_result'
+  | 'done'
+  | 'error'
+  | 'status_change'
+  | 'plan_updated'
+  | 'todo_updated'
+  | 'code_updated'
+  | 'skill_loaded'
+  | 'session_status'
+  | 'user_message'
+  | 'compact'
+
 export interface WSEvent {
-  type: string
+  type: WSEventType
   content?: string
   tool_name?: string
   args?: Record<string, any>

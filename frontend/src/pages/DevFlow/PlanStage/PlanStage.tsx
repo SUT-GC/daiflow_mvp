@@ -11,6 +11,8 @@ export default function PlanStage() {
   const { t } = useLocale()
   const { task, planContent, status, messages, sendMessage, streaming, regenerating, refreshSession } = usePlanStage(taskId)
 
+  const readonly = task ? isStageReadonly(task.status, 2) : false
+
   const handleRegenerate = async () => {
     if (!taskId) return
     await triggerPlan(taskId)
@@ -27,7 +29,6 @@ export default function PlanStage() {
     }
   }
 
-  const readonly = task ? isStageReadonly(task.status, 2) : false
   const isGenerating = status === 1 || streaming || regenerating
   const lockDisabled = !planContent || isGenerating || readonly
   const regenerateDisabled = isGenerating || readonly

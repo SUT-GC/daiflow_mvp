@@ -40,7 +40,7 @@ export default function InitStage() {
   useEffect(() => {
     if (!taskId) return
     const channel = `task:init:${taskId}`
-    wsClient.subscribe(channel, (event: any) => {
+    const unsub = wsClient.subscribe(channel, (event: any) => {
       if (event.type === 'session_status') {
         setSessions(prev => prev.map(s =>
           s.session_id === event.session_id
@@ -53,7 +53,7 @@ export default function InitStage() {
         loadData()
       }
     })
-    return () => { wsClient.unsubscribe(channel) }
+    return unsub
   }, [taskId, loadData])
 
   const totalCount = sessions.length

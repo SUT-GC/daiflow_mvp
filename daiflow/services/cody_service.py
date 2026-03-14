@@ -57,6 +57,22 @@ async def build_cody_client(
     return builder.build()
 
 
+async def build_task_cody_client(db: AsyncSession, task_id: str, project_id: str):
+    """Build a Cody client configured for a task context.
+
+    Convenience wrapper that resolves task directory, allowed roots,
+    and skill directory — the common pattern used by task_service,
+    chat_service, and review_service.
+    """
+    from daiflow.services.skill_service import get_task_dir, get_task_skills_dir
+    from daiflow.services.task_service import get_task_context
+
+    task_dir = get_task_dir(task_id)
+    _, allowed_roots = await get_task_context(db, task_id, project_id)
+    skill_dir = str(get_task_skills_dir(task_id))
+    return await build_cody_client(db, str(task_dir), allowed_roots, skill_dir=skill_dir)
+
+
 def append_path_boundary(prompt: str, workdir: str, allowed_roots: list[str]) -> str:
     """Append path boundary instructions to a prompt.
 

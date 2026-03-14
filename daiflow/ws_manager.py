@@ -70,7 +70,7 @@ class WSManager:
                 else:
                     dead.append(ws)
             except Exception:
-                logger.debug("Failed to send to WebSocket on channel %s", channel)
+                logger.warning("Failed to send to WebSocket on channel %s", channel)
                 dead.append(ws)
 
         for ws in dead:
@@ -81,7 +81,7 @@ class WSManager:
         try:
             await ws.send_json({"channel": channel, "event": event})
         except Exception:
-            logger.debug("Failed to send direct message on channel %s", channel)
+            logger.warning("Failed to send direct message on channel %s", channel)
 
     def cleanup_channel(self, channel: str):
         """Remove a channel and all its subscribers."""

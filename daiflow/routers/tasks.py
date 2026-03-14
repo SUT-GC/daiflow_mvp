@@ -6,11 +6,9 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from transitions.core import MachineError
-
 from daiflow.config import TASKS_DIR
 from daiflow.database import get_db
-from daiflow.models import Session, SessionStatus, Task, TaskStatus, Todo
+from daiflow.models import Session, Task, TaskStatus, Todo
 from daiflow.schemas import SubmitMR, TaskCreate, TaskResponse, TaskUpdate, TodoResponse
 from daiflow.services import review_service
 from daiflow.services.task_service import (
@@ -18,9 +16,15 @@ from daiflow.services.task_service import (
     generate_plan,
     generate_todos,
     init_task,
-    start_coding,
 )
 from daiflow.workflow import TaskWorkflow
+from daiflow.workflow.orchestrator import (
+    TransitionError,
+    finish_task,
+    lock_plan_and_generate_todos,
+    start_coding_stage,
+    start_review_stage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -122,15 +126,10 @@ async def lock_plan(
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    wf = TaskWorkflow(task, db)
     try:
-        await wf.lock_plan()
-    except MachineError:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Cannot transition from {TaskStatus(task.status).name} to PLAN_LOCKED",
-        )
-    await db.commit()
+        await lock_plan_and_generate_todos(db, task)
+    except TransitionError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e))
 
     background_tasks.add_task(generate_todos, task_id)
 
@@ -143,21 +142,11 @@ async def start_coding_route(task_id: str, db: AsyncSession = Depends(get_db)):
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    # Ensure todos are loaded
-    await start_coding(task_id, db)
-
-    # Transition: todo_ready → coding (with _has_todos guard)
-    wf = TaskWorkflow(task, db)
     try:
-        result = await wf.start_coding()
-    except MachineError:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Cannot transition from {TaskStatus(task.status).name} to CODING",
-        )
-    if not result:
-        raise HTTPException(status_code=400, detail="Task has no todos")
-    await db.commit()
+        await start_coding_stage(db, task)
+    except TransitionError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e))
+
     return {"ok": True, "status": task.status}
 
 
@@ -167,25 +156,11 @@ async def start_review(task_id: str, db: AsyncSession = Depends(get_db)):
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    # Transition: coding → reviewing (with _all_todos_done guard)
-    wf = TaskWorkflow(task, db)
     try:
-        result = await wf.start_review()
-    except MachineError:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Cannot transition from {TaskStatus(task.status).name} to REVIEWING",
-        )
-    if not result:
-        raise HTTPException(status_code=400, detail="All todos must be done or skipped before review")
+        await start_review_stage(db, task)
+    except TransitionError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e))
 
-    session_id = f"task:{task_id}:review"
-    existing = await db.get(Session, session_id)
-    if not existing:
-        session = Session(session_id=session_id, type="review", ref_id=task_id, task_id=task_id, status=SessionStatus.WAITING)
-        db.add(session)
-
-    await db.commit()
     return {"ok": True, "status": task.status}
 
 
@@ -357,11 +332,7 @@ async def submit_mr_route(
     # State transition: REVIEWING → DONE (consistent with other transitions in router)
     has_success = any(r["status"] == "success" for r in results)
     if has_success:
-        wf = TaskWorkflow(task, db)
-        try:
-            await wf.finish()
-        except MachineError:
-            logger.warning("Could not transition task %s to DONE", task_id)
+        await finish_task(db, task)
     task.mr_info = json.dumps(results)
     await db.commit()
 
