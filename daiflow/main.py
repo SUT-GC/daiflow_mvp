@@ -118,8 +118,9 @@ if static_dir.exists():
     @app.get("/{full_path:path}")
     async def serve_spa(request: Request, full_path: str):
         # Try to serve the exact file first (e.g. favicon, manifest)
-        file_path = static_dir / full_path
-        if full_path and file_path.is_file():
+        file_path = (static_dir / full_path).resolve()
+        # Guard against path traversal — file must be within static_dir
+        if full_path and file_path.is_relative_to(static_dir.resolve()) and file_path.is_file():
             return FileResponse(file_path)
         # Otherwise return index.html for client-side routing
         return FileResponse(static_dir / "index.html")

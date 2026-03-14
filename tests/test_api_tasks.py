@@ -190,6 +190,82 @@ class TestStageTransitions:
         assert resp.json()["status"] == TaskStatus.PLAN_LOCKED
 
 
+class TestTriggerStateGuards:
+    @_mock_bg
+    @_mock_bg2
+    async def test_trigger_plan_rejected_in_coding_state(self, mock_plan, mock_init, client, db_session):
+        """Cannot trigger plan generation when task is in CODING state."""
+        pid = await _create_project(client)
+        create_resp = await client.post("/api/tasks", json={
+            "name": "Task 1", "project_id": pid,
+        })
+        tid = create_resp.json()["id"]
+
+        from daiflow.models import Task, TaskStatus
+        task = await db_session.get(Task, tid)
+        task.status = TaskStatus.CODING
+        await db_session.commit()
+
+        resp = await client.post(f"/api/tasks/{tid}/plan")
+        assert resp.status_code == 400
+        assert "Cannot generate plan" in resp.json()["detail"]
+
+    @_mock_bg
+    @_mock_bg2
+    async def test_trigger_plan_allowed_in_planning_state(self, mock_plan, mock_init, client, db_session):
+        """Can trigger plan generation when task is in PLANNING state."""
+        pid = await _create_project(client)
+        create_resp = await client.post("/api/tasks", json={
+            "name": "Task 1", "project_id": pid,
+        })
+        tid = create_resp.json()["id"]
+
+        from daiflow.models import Task, TaskStatus
+        task = await db_session.get(Task, tid)
+        task.status = TaskStatus.PLANNING
+        await db_session.commit()
+
+        resp = await client.post(f"/api/tasks/{tid}/plan")
+        assert resp.status_code == 200
+
+    @_mock_bg
+    @_mock_bg3
+    async def test_trigger_todo_rejected_in_planning_state(self, mock_todos, mock_init, client, db_session):
+        """Cannot trigger todo generation when task is in PLANNING state."""
+        pid = await _create_project(client)
+        create_resp = await client.post("/api/tasks", json={
+            "name": "Task 1", "project_id": pid,
+        })
+        tid = create_resp.json()["id"]
+
+        from daiflow.models import Task, TaskStatus
+        task = await db_session.get(Task, tid)
+        task.status = TaskStatus.PLANNING
+        await db_session.commit()
+
+        resp = await client.post(f"/api/tasks/{tid}/todo")
+        assert resp.status_code == 400
+        assert "Cannot generate todos" in resp.json()["detail"]
+
+    @_mock_bg
+    @_mock_bg3
+    async def test_trigger_todo_allowed_in_plan_locked_state(self, mock_todos, mock_init, client, db_session):
+        """Can trigger todo generation when task is in PLAN_LOCKED state."""
+        pid = await _create_project(client)
+        create_resp = await client.post("/api/tasks", json={
+            "name": "Task 1", "project_id": pid,
+        })
+        tid = create_resp.json()["id"]
+
+        from daiflow.models import Task, TaskStatus
+        task = await db_session.get(Task, tid)
+        task.status = TaskStatus.PLAN_LOCKED
+        await db_session.commit()
+
+        resp = await client.post(f"/api/tasks/{tid}/todo")
+        assert resp.status_code == 200
+
+
 class TestGenerateCommitMessage:
     @_mock_bg
     async def test_not_found(self, mock_init, client):

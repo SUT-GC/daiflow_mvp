@@ -36,6 +36,10 @@ async def update_settings(data: SettingsUpdate, db: AsyncSession = Depends(get_d
                 status_code=400,
                 detail=f"Field '{key}' cannot be empty",
             )
+    # Skip API key update if the value is a masked placeholder
+    if "cody_api_key" in updates and "****" in updates["cody_api_key"]:
+        del updates["cody_api_key"]
+
     for key, value in updates.items():
         existing = await db.get(Setting, key)
         if existing:

@@ -108,8 +108,11 @@ async def update_task(
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
+    # Only allow updating user-editable fields (not workflow-controlled ones)
+    editable_fields = {"name", "description", "branch", "prd"}
     for field, value in data.model_dump(exclude_none=True).items():
-        setattr(task, field, value)
+        if field in editable_fields:
+            setattr(task, field, value)
     await db.commit()
     return _task_to_dict(task)
 
@@ -221,6 +224,12 @@ async def trigger_plan(
     task = await db.get(Task, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+    # Only allow plan generation in PLANNING state
+    if task.status not in (TaskStatus.INITIALIZING, TaskStatus.PLANNING):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot generate plan in {TaskStatus(task.status).name} state",
+        )
     background_tasks.add_task(generate_plan, task_id)
     return {"ok": True}
 
@@ -237,6 +246,12 @@ async def trigger_todo(
     task = await db.get(Task, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+    # Only allow todo generation in PLAN_LOCKED state
+    if task.status != TaskStatus.PLAN_LOCKED:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot generate todos in {TaskStatus(task.status).name} state",
+        )
     background_tasks.add_task(generate_todos, task_id)
     return {"ok": True}
 

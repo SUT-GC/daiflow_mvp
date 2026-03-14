@@ -68,7 +68,7 @@ async def _check_and_pull(db, job: Job) -> JobRun:
             logger.warning("Failed to check %s: %s", repo.git_url, e)
 
     # Create run record at the end (not before) to avoid orphan RUNNING records
-    status = JobRunStatus.FAILED if error_msgs and not changed else JobRunStatus.SUCCESS
+    status = JobRunStatus.FAILED if error_msgs else JobRunStatus.SUCCESS
     run = JobRun(
         job_id=job.id,
         status=status,
