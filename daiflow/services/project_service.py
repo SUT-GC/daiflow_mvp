@@ -16,7 +16,7 @@ from daiflow.services.skill_service import get_project_dir
 from daiflow.session_runner import SessionRunner, _append_log
 from daiflow.workflow.pipeline import run_simple_task
 from daiflow.session_ids import project_init as _init_sid, project_init_bus as _init_bus
-from daiflow.ws_manager import ws_manager
+from daiflow.ws_manager import WSManager, ws_manager as _default_ws_manager
 
 logger = logging.getLogger(__name__)
 
@@ -197,8 +197,9 @@ async def _run_layer4(
             await runner.run(layer4_db, sid, prompt, extra_channels=[project_bus], language=lang)
 
 
-async def _finalize_init(db, project_id: str, project_bus: str):
+async def _finalize_init(db, project_id: str, project_bus: str, ws: WSManager | None = None):
     """Mark remaining WAITING init sessions as FAILED and send final done event."""
+    ws = ws or _default_ws_manager
     result = await db.execute(
         select(Session).where(
             Session.ref_id == project_id,
@@ -210,7 +211,7 @@ async def _finalize_init(db, project_id: str, project_bus: str):
         s.status = SessionStatus.FAILED
         s.error = "Skipped due to earlier layer failures"
         s.finished_at = datetime.now(timezone.utc)
-        await ws_manager.publish(project_bus, {
+        await ws.publish(project_bus, {
             "type": "session_status",
             "session_id": s.session_id,
             "status": SessionStatus.FAILED,
@@ -218,14 +219,15 @@ async def _finalize_init(db, project_id: str, project_bus: str):
             "layer": s.layer,
         })
     await db.commit()
-    await ws_manager.publish(project_bus, {"type": "done"})
+    await ws.publish(project_bus, {"type": "done"})
 
 
-async def run_init(project_id: str):
+async def run_init(project_id: str, ws_manager: WSManager | None = None):
     """Execute the 4-layer project knowledge generation pipeline.
 
     Uses an independent DB session for background execution.
     """
+    ws = ws_manager or _default_ws_manager
     async with get_background_db() as db:
         project_dir = get_project_dir(project_id)
         project_bus = _init_bus(project_id)
@@ -276,8 +278,6 @@ async def run_init(project_id: str):
             run_simple_task(_init_sid(project_id, "repo_clone"), project_bus, _do_repo_clone),
             return_exceptions=True,
         )
-        # Log any exceptions from Layer 1 tasks (they are also recorded in
-        # session status by run_simple_task, but log here for visibility).
         for r in layer1_results:
             if isinstance(r, Exception):
                 logger.error("Layer 1 task raised: %s", r)
@@ -290,7 +290,7 @@ async def run_init(project_id: str):
         if layer1_failed:
             failed_names = ", ".join(s.session_id for s in layer1_failed)
             logger.error("Layer 1 failed (%s), aborting init for project %s", failed_names, project_id)
-            await ws_manager.publish(project_bus, {"type": "done"})
+            await ws.publish(project_bus, {"type": "done"})
             return
 
         # Resolve allowed_roots: git-cloned paths take priority over local_path
@@ -308,7 +308,7 @@ async def run_init(project_id: str):
             )
             if not layer_ok:
                 logger.error("Layer %d had failures, aborting init for project %s", layer_num, project_id)
-                await _finalize_init(db, project_id, project_bus)
+                await _finalize_init(db, project_id, project_bus, ws)
                 return
 
         # Layer 4: Generate project.md
@@ -317,7 +317,7 @@ async def run_init(project_id: str):
         except Exception as e:
             logger.error("Layer 4 project.md generation failed: %s", e)
 
-        await _finalize_init(db, project_id, project_bus)
+        await _finalize_init(db, project_id, project_bus, ws)
 
 
 async def run_init_retry(project_id: str, failed_session_ids: list[str], from_layer: int):

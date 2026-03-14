@@ -156,8 +156,9 @@ class TestSyncTodosFromFile:
         db_session.add(t)
         await db_session.commit()
 
-        # C1 fix: invalid JSON now raises ValueError instead of silently returning
-        with pytest.raises(ValueError):
+        # Invalid JSON raises InvalidStateError (DaiFlow domain exception)
+        from daiflow.exceptions import InvalidStateError
+        with pytest.raises(InvalidStateError):
             await sync_todos_from_file(db_session, t.id, "not json")
 
 

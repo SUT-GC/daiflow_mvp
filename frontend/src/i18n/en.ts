@@ -223,6 +223,8 @@ const en = {
   // ChatPanel
   'chat.default_title': 'AI Chat',
   'chat.placeholder': 'Send a message...',
+  'chat.expand': 'Expand',
+  'chat.collapse': 'Collapse',
 
   // Debug
   'debug.title': 'Debug',

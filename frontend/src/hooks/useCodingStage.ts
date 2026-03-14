@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { getTask, getTodos, getTaskDiff, getTodoDiff, joinDiffs, TaskData, TodoData } from '../api'
 import { SessionStatus, TodoStatus } from '../types/enums'
+import { sessionIds } from '../utils/sessionIds'
 import { useSession } from './useSession'
 import { useStageChat } from './useStageChat'
 
@@ -32,7 +33,7 @@ export function useCodingStage(taskId: string | undefined) {
   useEffect(() => { loadData() }, [loadData])
 
   const currentTodo = todos.find(t => t.id === selectedTodo)
-  const sessionId = currentTodo ? `task:${taskId}:todo:${currentTodo.id}` : null
+  const sessionId = currentTodo && taskId ? sessionIds.todoExec(taskId, currentTodo.id) : null
 
   const { status: todoSessionStatus, logs, error: sessionError } = useSession(sessionId)
 

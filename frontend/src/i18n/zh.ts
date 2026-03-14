@@ -225,6 +225,8 @@ const zh: Record<TranslationKey, string> = {
   // ChatPanel
   'chat.default_title': 'AI 对话',
   'chat.placeholder': '发送消息...',
+  'chat.expand': '展开',
+  'chat.collapse': '收起',
 
   // Debug
   'debug.title': '排障',

@@ -7,6 +7,7 @@ import { useStageChat } from '../../../hooks/useStageChat'
 import { useCommitModal } from '../../../hooks/useCommitModal'
 import { getTask, getTaskDiff, joinDiffs, TaskData } from '../../../api'
 import { useLocale } from '../../../hooks/useLocale'
+import { sessionIds } from '../../../utils/sessionIds'
 import './ReviewStage.css'
 
 export default function ReviewStage() {
@@ -34,7 +35,7 @@ export default function ReviewStage() {
     }
   }, [taskId])
 
-  const sessionId = taskId ? `task:${taskId}:review` : null
+  const sessionId = taskId ? sessionIds.review(taskId) : null
 
   const { messages, sendMessage, streaming } = useStageChat({
     sessionId,

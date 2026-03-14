@@ -12,6 +12,7 @@ const SCROLL_NEAR_BOTTOM_PX = 80
 const USER_MSG_COLLAPSE_LINES = 3
 
 function CollapsibleMsg({ content }: { content: string }) {
+  const { t } = useLocale()
   const lines = content.split('\n')
   const shouldCollapse = lines.length > USER_MSG_COLLAPSE_LINES
   const [collapsed, setCollapsed] = useState(shouldCollapse)
@@ -26,7 +27,7 @@ function CollapsibleMsg({ content }: { content: string }) {
           className="msg-toggle-btn"
           onClick={() => setCollapsed(c => !c)}
         >
-          {collapsed ? '展开' : '收起'}
+          {collapsed ? t('chat.expand') : t('chat.collapse')}
         </button>
       )}
     </div>

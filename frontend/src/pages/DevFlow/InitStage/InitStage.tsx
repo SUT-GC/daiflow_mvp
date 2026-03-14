@@ -4,6 +4,7 @@ import Topbar from '../../../components/Shell/Topbar'
 import StageProgress from '../../../components/StageProgress/StageProgress'
 import { getTask, getTaskInitSessions, confirmInit, retryTaskInit, type TaskData, type InitSessionData } from '../../../api'
 import { useLocale } from '../../../hooks/useLocale'
+import { sessionIds } from '../../../utils/sessionIds'
 import { wsClient } from '../../../ws'
 import type { TranslationKey } from '../../../i18n'
 import '../../Projects/ProjectInit.css'
@@ -39,7 +40,7 @@ export default function InitStage() {
   // Subscribe to init WS channel for real-time updates
   useEffect(() => {
     if (!taskId) return
-    const channel = `task:init:${taskId}`
+    const channel = sessionIds.taskInitBus(taskId)
     const unsub = wsClient.subscribe(channel, (event: any) => {
       if (event.type === 'session_status') {
         setSessions(prev => prev.map(s =>
