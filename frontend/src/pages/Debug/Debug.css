@@ -266,6 +266,32 @@
   overflow-y: auto;
 }
 
+/* All Sessions filters */
+.debug-all-sessions-filters {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 16px 8px;
+}
+.debug-select {
+  padding: 3px 6px;
+  font-size: 11px;
+  font-family: var(--sans);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-0);
+  color: var(--t0);
+  cursor: pointer;
+  outline: none;
+  flex: 1;
+  min-width: 0;
+}
+.debug-select:focus { border-color: var(--blue); }
+.debug-all-sessions-btn {
+  border-bottom: 1px solid var(--border) !important;
+  margin-bottom: 2px;
+}
+
 /* Job runs */
 .debug-job-info {
   display: flex;

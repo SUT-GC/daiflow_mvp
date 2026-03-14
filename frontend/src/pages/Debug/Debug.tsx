@@ -40,6 +40,12 @@ export default function Debug() {
   const [jobs, setJobs] = useState<JobData[]>([])
   const [jobRuns, setJobRuns] = useState<JobRunData[]>([])
 
+  // All-sessions overview
+  const [allSessions, setAllSessions] = useState<SessionStatusData[]>([])
+  const [showAllSessions, setShowAllSessions] = useState(false)
+  const [allSessionsTypeFilter, setAllSessionsTypeFilter] = useState<string>('all')
+  const [allSessionsStatusFilter, setAllSessionsStatusFilter] = useState<string>('all')
+
   // Selection
   const [selectedProject, setSelectedProject] = useState<string>('')
   const [selectedScope, setSelectedScope] = useState<string>('')  // "init", "jobs", or task_id
@@ -56,6 +62,12 @@ export default function Debug() {
   useEffect(() => {
     listProjects().then(setProjects).catch(() => {})
   }, [])
+
+  // Load all sessions when overview is shown
+  useEffect(() => {
+    if (!showAllSessions) return
+    listSessions().then(setAllSessions).catch(() => {})
+  }, [showAllSessions])
 
   // Load tasks + jobs + clear downstream when project changes
   useEffect(() => {
@@ -128,10 +140,48 @@ export default function Debug() {
     return result
   }, [logs, logTypeFilter, logSearch])
 
+  // Filtered all-sessions
+  const filteredAllSessions = useMemo(() => {
+    let result = allSessions
+    if (allSessionsTypeFilter !== 'all') {
+      result = result.filter(s => s.type === allSessionsTypeFilter)
+    }
+    if (allSessionsStatusFilter !== 'all') {
+      result = result.filter(s => s.status === Number(allSessionsStatusFilter))
+    }
+    return result
+  }, [allSessions, allSessionsTypeFilter, allSessionsStatusFilter])
+
+  const allSessionTypes = useMemo(() => {
+    const types = new Set(allSessions.map(s => s.type))
+    return ['all', ...Array.from(types).sort()]
+  }, [allSessions])
+
+  function enterAllSessions() {
+    setShowAllSessions(true)
+    setSelectedProject('')
+    setSelectedScope('')
+    setSelectedSession('')
+    setSessions([])
+    setLogs([])
+    setLogTypeFilter('all')
+    setLogSearch('')
+  }
+
+  function exitAllSessions() {
+    setShowAllSessions(false)
+    setAllSessions([])
+    setAllSessionsTypeFilter('all')
+    setAllSessionsStatusFilter('all')
+    setSelectedSession('')
+    setLogs([])
+  }
+
   // Helpers
   const selectedProjectObj = projects.find(p => p.id === selectedProject)
   const selectedTaskObj = tasks.find(t => t.id === selectedScope)
   const selectedSessionObj = sessions.find(s => s.session_id === selectedSession)
+    || allSessions.find(s => s.session_id === selectedSession)
 
   function getSessionLabel(s: SessionStatusData): string {
     if (s.type === 'init') {
@@ -170,9 +220,17 @@ export default function Debug() {
       <div className="debug-page">
         {/* Breadcrumb */}
         <div className="debug-breadcrumb">
-          <span className="breadcrumb-item" onClick={() => { setSelectedProject(''); setSelectedScope(''); setSelectedSession('') }}>
+          <span className="breadcrumb-item" onClick={() => { exitAllSessions(); setSelectedProject(''); setSelectedScope(''); setSelectedSession('') }}>
             {t('debug.all_projects')}
           </span>
+          {showAllSessions && (
+            <>
+              <span className="breadcrumb-sep">/</span>
+              <span className={selectedSession ? 'breadcrumb-item' : 'breadcrumb-current'} onClick={() => setSelectedSession('')}>
+                {t('debug.all_sessions')}
+              </span>
+            </>
+          )}
           {selectedProjectObj && (
             <>
               <span className="breadcrumb-sep">/</span>
@@ -212,10 +270,65 @@ export default function Debug() {
         <div className="debug-layout">
           {/* Left: Navigator */}
           <div className="debug-nav">
+            {/* All Sessions overview mode */}
+            {showAllSessions && (
+              <div className="debug-section">
+                <div className="debug-section-title">{t('debug.all_sessions')}</div>
+                <div className="debug-all-sessions-filters">
+                  <select
+                    className="debug-select"
+                    value={allSessionsTypeFilter}
+                    onChange={e => setAllSessionsTypeFilter(e.target.value)}
+                  >
+                    {allSessionTypes.map(t => (
+                      <option key={t} value={t}>{t === 'all' ? 'All Types' : STAGE_LABELS[t] || t}</option>
+                    ))}
+                  </select>
+                  <select
+                    className="debug-select"
+                    value={allSessionsStatusFilter}
+                    onChange={e => setAllSessionsStatusFilter(e.target.value)}
+                  >
+                    <option value="all">All Status</option>
+                    {Object.entries(SESSION_STATUS_LABELS).map(([k, v]) => (
+                      <option key={k} value={k}>{v.label}</option>
+                    ))}
+                  </select>
+                  <span className="debug-item-meta">{filteredAllSessions.length}/{allSessions.length}</span>
+                </div>
+                {filteredAllSessions.map(s => {
+                  const st = SESSION_STATUS_LABELS[s.status] || SESSION_STATUS_LABELS[0]
+                  return (
+                    <button
+                      key={s.session_id}
+                      className={`debug-item ${selectedSession === s.session_id ? 'active' : ''}`}
+                      onClick={() => setSelectedSession(s.session_id)}
+                    >
+                      <span className="debug-item-name" title={s.session_id}>
+                        {s.session_id}
+                      </span>
+                      <span className="debug-item-right">
+                        <span className={`tag ${st.cls}`}>{st.label}</span>
+                      </span>
+                    </button>
+                  )
+                })}
+                {allSessions.length === 0 && <div className="debug-empty">{t('debug.no_sessions')}</div>}
+                {allSessions.length > 0 && filteredAllSessions.length === 0 && (
+                  <div className="debug-empty">{t('debug.no_matching_sessions')}</div>
+                )}
+              </div>
+            )}
+
             {/* Project picker */}
-            {!selectedProject && (
+            {!selectedProject && !showAllSessions && (
               <div className="debug-section">
                 <div className="debug-section-title">{t('debug.select_project')}</div>
+                <button className="debug-item debug-all-sessions-btn" onClick={enterAllSessions}>
+                  <span className="debug-item-name">{t('debug.all_sessions')}</span>
+                  <span className="tag tag-purple">{t('debug.overview')}</span>
+                </button>
+                <div className="debug-section-sub">{t('debug.by_project')}</div>
                 {projects.map(p => (
                   <button key={p.id} className="debug-item" onClick={() => setSelectedProject(p.id)}>
                     <span className="debug-item-name">{p.name}</span>
@@ -306,10 +419,16 @@ export default function Debug() {
 
           {/* Right: Log viewer / Job detail */}
           <div className="debug-logs">
-            {!selectedSession && selectedScope !== 'jobs' && (
+            {!selectedSession && selectedScope !== 'jobs' && !showAllSessions && (
               <div className="debug-placeholder">
                 <div className="debug-placeholder-icon">&#128269;</div>
                 <div>{t('debug.select_session_hint')}</div>
+              </div>
+            )}
+            {!selectedSession && showAllSessions && (
+              <div className="debug-placeholder">
+                <div className="debug-placeholder-icon">&#128269;</div>
+                <div>{t('debug.select_session_from_list')}</div>
               </div>
             )}
             {selectedScope === 'jobs' && (

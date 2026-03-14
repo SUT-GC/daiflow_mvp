@@ -958,4 +958,4 @@ async def get_agent_type_config(agent_type: str):
 | 第一阶段：后端 Agent 抽象 | ✅ 完成 | AgentConfig 注册表 + `run_agent()` / `prepare_chat()` + task_service 简化 + chat_service `_STAGE_MAP` |
 | 第二阶段：崩溃恢复 | ✅ 完成 | 日志追加 + run_boundary 过滤 + cody_session_id 即时存储 + 启动恢复 |
 | 第三阶段：前端统一 Hook | ✅ 完成 | `useAgent` + `useStaleDetection` + stage hooks 集成 + StageLayout stale banner |
-| 第四阶段：Agent Dashboard | 🔲 未开始 | 可选，待需求明确后实施 |
+| 第四阶段：Agent Dashboard | ✅ 完成 | 嵌入 Debug 页面的 "All Sessions" 总览视图（按 type/status 筛选，点击查看日志） |
