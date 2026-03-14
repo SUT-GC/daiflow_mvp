@@ -275,11 +275,16 @@ async def run_init(project_id: str):
                     "content": f"✓ {repo_dir_name(r.git_url)} ready.\n",
                 })
 
-        await asyncio.gather(
+        layer1_results = await asyncio.gather(
             run_simple_task(f"init:{project_id}:skill_fetch", project_bus, _do_skill_fetch),
             run_simple_task(f"init:{project_id}:repo_clone", project_bus, _do_repo_clone),
             return_exceptions=True,
         )
+        # Log any exceptions from Layer 1 tasks (they are also recorded in
+        # session status by run_simple_task, but log here for visibility).
+        for r in layer1_results:
+            if isinstance(r, Exception):
+                logger.error("Layer 1 task raised: %s", r)
 
         # Check if Layer 1 had critical failures (repo_clone failure = no code to analyze)
         layer1_sessions = await db.execute(

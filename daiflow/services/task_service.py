@@ -73,6 +73,17 @@ def resolve_task_roots(task_id: str, repos: list) -> list[str]:
     return [p for r in repos if (p := resolve_repo_path(r, task_id))]
 
 
+async def get_task_context(db: AsyncSession, task_id: str, project_id: str) -> tuple[list, list[str]]:
+    """Fetch repos and resolve allowed_roots for a task. Common pattern used by multiple services.
+
+    Returns:
+        (repos, allowed_roots) tuple.
+    """
+    repos = await fetch_project_repos(db, project_id)
+    allowed_roots = resolve_task_roots(task_id, repos)
+    return repos, allowed_roots
+
+
 async def _do_fetch_code(db: AsyncSession, session_id: str, *, task_id: str, project_id: str, branch: str | None):
     """Subtask: copy code repos and checkout branch."""
     from daiflow.session_runner import _append_log
@@ -372,7 +383,11 @@ def _parse_todos_json(content: str) -> list[dict]:
 
 
 def _insert_todos(db: AsyncSession, task_id: str, todos_data: list[dict]):
-    """Add parsed todo items to the DB session (does not commit)."""
+    """Add parsed todo items to the DB session.
+
+    Note: This only calls db.add() (synchronous on AsyncSession).
+    The caller MUST await db.commit() to persist the changes.
+    """
     for item in todos_data:
         db.add(Todo(task_id=task_id, seq=item["seq"], title=item["title"], description=item["description"]))
 

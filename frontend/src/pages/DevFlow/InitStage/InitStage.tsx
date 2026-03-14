@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import Topbar from '../../../components/Shell/Topbar'
 import StageProgress from '../../../components/StageProgress/StageProgress'
-import { getTask, getTaskInitSessions, confirmInit, retryInit, type TaskData, type InitSessionData } from '../../../api'
+import { getTask, getTaskInitSessions, confirmInit, retryTaskInit, type TaskData, type InitSessionData } from '../../../api'
 import { useLocale } from '../../../hooks/useLocale'
 import { wsClient } from '../../../ws'
 import type { TranslationKey } from '../../../i18n'
@@ -117,7 +117,7 @@ export default function InitStage() {
     if (!taskId || retrying) return
     setRetrying(true)
     try {
-      await retryInit(taskId)
+      await retryTaskInit(taskId)
       // Reload to get fresh session data
       await loadData()
     } catch (err) {

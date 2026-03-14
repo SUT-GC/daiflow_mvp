@@ -13,6 +13,12 @@ class WSManager:
 
     Manages WebSocket connections with channel-based pub/sub,
     delivering events directly over WebSocket connections.
+
+    Concurrency note: This class is designed for single-threaded asyncio use.
+    The publish() method yields control via ``await ws.send_json()``, so
+    concurrent publishes on the same channel are possible. The implementation
+    collects dead connections into a separate list before cleanup to avoid
+    mutating the iterated set. All callers must run on the same event loop.
     """
 
     def __init__(self):

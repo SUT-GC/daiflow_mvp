@@ -15,7 +15,7 @@ from daiflow.prompts import PLAN_CHAT_PREFIX, TODO_CHAT_PREFIX
 from daiflow.services.cody_service import build_cody_client
 from daiflow.services.settings_service import get_language_setting
 from daiflow.services.skill_service import get_task_dir, get_task_skills_dir
-from daiflow.services.task_service import resolve_task_roots, fetch_project_repos, sync_todos_from_file
+from daiflow.services.task_service import get_task_context, resolve_task_roots, fetch_project_repos, sync_todos_from_file
 from daiflow.session_runner import make_file_write_detector
 
 
@@ -31,8 +31,8 @@ class StageChatContext:
 
 async def _get_task_allowed_roots(db: AsyncSession, task_id: str, project_id: str) -> list[str]:
     """Get allowed_roots for a task, including both local repos and git-cloned copies."""
-    repos = await fetch_project_repos(db, project_id)
-    return resolve_task_roots(task_id, repos)
+    _, allowed_roots = await get_task_context(db, task_id, project_id)
+    return allowed_roots
 
 
 async def prepare_stage_chat(

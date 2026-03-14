@@ -118,7 +118,7 @@ export const initProject = (id: string) =>
   request<{ ok: boolean }>(`/projects/${id}/init`, { method: 'POST' })
 export const getInitSessions = (id: string) =>
   request<Record<number, SessionStatusData[]>>(`/projects/${id}/init/sessions`)
-export const retryInit = (id: string) =>
+export const retryProjectInit = (id: string) =>
   request<{ ok: boolean }>(`/projects/${id}/init/retry`, { method: 'POST' })
 export const getProjectKnowledge = (id: string) =>
   request<{ project_id: string; files: { name: string; type: string; content: string }[] }>(`/projects/${id}/knowledge`)
@@ -143,7 +143,7 @@ export const deleteTask = (id: string) =>
   request<{ ok: boolean }>(`/tasks/${id}`, { method: 'DELETE' })
 export const confirmInit = (id: string) =>
   request<{ ok: boolean; status: number }>(`/tasks/${id}/confirm-init`, { method: 'POST' })
-export const retryInit = (id: string) =>
+export const retryTaskInit = (id: string) =>
   request<{ ok: boolean; status: number }>(`/tasks/${id}/retry-init`, { method: 'POST' })
 export const getTaskInitSessions = (taskId: string) =>
   request<InitSessionData[]>(`/tasks/${taskId}/init/sessions`)

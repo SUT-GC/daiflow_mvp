@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from daiflow.config import init_daiflow_dir
+from daiflow.config import cleanup_old_logs, init_daiflow_dir
 from daiflow.database import init_db
 from daiflow.routers import jobs, projects, sessions, settings, tasks, todos, ws
 
@@ -74,6 +74,11 @@ async def lifespan(app: FastAPI):
     await init_db()
     await _recover_interrupted_sessions()
 
+    # Clean up old session logs
+    removed = cleanup_old_logs()
+    if removed:
+        logger.info("Cleaned up %d old session log(s)", removed)
+
     # Start repo monitor background job
     from daiflow.services.repo_monitor import start_monitor, stop_monitor
     start_monitor()
@@ -117,6 +122,10 @@ if static_dir.exists():
     # SPA fallback: serve index.html for all non-API routes
     @app.get("/{full_path:path}")
     async def serve_spa(request: Request, full_path: str):
+        # Never intercept API routes — let them return 404 naturally
+        if full_path.startswith("api/"):
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=404, content={"detail": "Not found"})
         # Try to serve the exact file first (e.g. favicon, manifest)
         file_path = (static_dir / full_path).resolve()
         # Guard against path traversal — file must be within static_dir

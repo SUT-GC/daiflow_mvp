@@ -178,6 +178,7 @@ class SessionRunner:
 
         try:
             result_cody_session_id = None
+            done_finished_at = _now()  # Default; overwritten when done chunk arrives
             stream_kwargs = {}
             if cody_session_id:
                 stream_kwargs["session_id"] = cody_session_id

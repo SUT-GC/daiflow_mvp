@@ -6,7 +6,7 @@ import ToolGroupBlock from '../../components/ToolGroupBlock/ToolGroupBlock'
 import { groupLogBlocks } from '../../utils/groupToolEvents'
 import { useInitProgress, type InitSession } from '../../hooks/useInitProgress'
 import { useSession } from '../../hooks/useSession'
-import { getProject, retryInit, initProject } from '../../api'
+import { getProject, retryProjectInit, initProject } from '../../api'
 import { useLocale } from '../../hooks/useLocale'
 import type { TranslationKey } from '../../i18n'
 import './ProjectInit.css'
@@ -127,7 +127,7 @@ export default function ProjectInit() {
     if (!projectId || retrying) return
     setRetrying(true)
     try {
-      await retryInit(projectId)
+      await retryProjectInit(projectId)
       window.location.reload()
     } catch (err) {
       console.error('Retry failed:', err)

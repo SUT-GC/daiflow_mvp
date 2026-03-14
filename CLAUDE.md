@@ -85,9 +85,9 @@ All AI interactions share a unified pattern: **SessionRunner** executes Cody →
 ### Cody Session Strategy
 
 - Project knowledge generation: independent Cody session per knowledge type (concurrent)
-- Tech plan + todo decomposition: shared single Cody session (context continuity via `tasks.plan_cody_session_id`)
+- Tech plan + todo decomposition: shared single Cody session (context continuity via `sessions` table lookup: `task_id` + `type="plan"`)
 - Individual todo execution: independent Cody session per todo (plan.md as shared context)
-- Code review: independent Cody session (`tasks.review_cody_session_id`)
+- Code review: independent Cody session (tracked via `sessions` table: `task_id` + `type="review"`)
 
 ### Project Knowledge (Four-Layer Generation)
 
@@ -119,23 +119,27 @@ Output: `~/.daiflow/projects/{project_id}/skills/{knowledge_type}/SKILL.md`
 | Sessions | `GET /api/sessions/{id}/status`, `GET .../logs` |
 | WebSocket | `WS /api/ws` — subscribe to channels, real-time events, stage chat |
 | Review | `GET /api/tasks/{id}/diff`, `POST /api/tasks/{id}/submit-mr` |
+| Jobs | CRUD `/api/jobs`, `GET .../runs`, `POST .../trigger` |
 
-## Database Schema (6 tables)
+## Database Schema (8 tables)
 
 Defined in `daiflow/models.py`. All primary keys use UUID hex strings (`uuid.uuid4().hex`).
 
 - **projects** — id, name, description, skill_names (JSON array string)
-- **project_repos** — id, project_id (FK), git_url, local_path, repo_type (frontend/backend/custom), repo_type_label, description
-- **tasks** — id, name, project_id (FK), description, branch, prd, tech_plan, status (int), plan_cody_session_id, review_cody_session_id, mr_info (JSON string)
-- **todos** — id, task_id (FK), seq, title, description, status (int), cody_session_id, result
-- **sessions** — session_id (PK, business ID), cody_session_id, type, ref_id, layer (1-4 for init, NULL otherwise), status (int), error, started_at, finished_at
-- **settings** — key/value pairs: `cody_model`, `cody_base_url`, `cody_api_key`, `theme`
+- **project_repos** — id, project_id (FK), git_url, local_path, repo_type (frontend/backend/custom), repo_type_label, description, master_hash
+- **tasks** — id, name, project_id (FK), description, branch, prd, tech_plan, status (int), mr_info (JSON string)
+- **todos** — id, task_id (FK), seq, title, description, status (int), cody_session_id, commit_before (JSON), commit_after (JSON), result
+- **sessions** — session_id (PK, business ID), task_id (FK nullable), cody_session_id, type, ref_id, layer (1-4 for init, NULL otherwise), status (int), error, started_at, finished_at
+- **jobs** — id, project_id (FK), type, enabled, interval, config (JSON)
+- **job_runs** — id, job_id (FK), status (int), result (JSON), error, started_at, finished_at
+- **settings** — key/value pairs: `cody_model`, `cody_base_url`, `cody_api_key`, `theme`, `language`
 
 ## Status Enums (IntEnum in models.py)
 
 - **TaskStatus:** 0=CREATED, 1=INITIALIZING, 2=PLANNING, 3=PLAN_LOCKED, 4=TODO_READY, 5=CODING, 6=REVIEWING, 7=DONE
-- **TodoStatus:** 0=PENDING, 1=RUNNING, 2=DONE, 3=FAILED
+- **TodoStatus:** 0=PENDING, 1=RUNNING, 2=DONE, 3=FAILED, 4=SKIPPED
 - **SessionStatus:** 0=WAITING, 1=RUNNING, 2=DONE, 3=FAILED
+- **JobRunStatus:** 0=RUNNING, 1=SUCCESS, 2=FAILED
 
 ## Key File Locations
 
