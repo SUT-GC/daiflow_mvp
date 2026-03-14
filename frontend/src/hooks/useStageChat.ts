@@ -22,6 +22,7 @@ export interface ChatMessage {
   role: 'user' | 'ai'
   content: string
   events?: ChatToolEvent[]
+  done?: boolean
 }
 
 interface UseStageChatOptions {
@@ -65,9 +66,10 @@ function rebuildMessages(logs: LogEvent[]): ChatMessage[] {
         currentAI = { id: nextMsgId(), role: 'ai', content: '', events: [] }
       }
       currentAI.events = currentAI.events || []
-      currentAI.events.push(event)
+      currentAI.events.push(event as ChatToolEvent)
     } else if (event.type === 'done' || event.type === 'status_change') {
       if (currentAI) {
+        currentAI.done = true
         messages.push(currentAI)
         currentAI = null
       }
@@ -160,12 +162,18 @@ export function useStageChat({ sessionId, stage, entityId, onUpdated, sessionLog
         aiContentRef.current += `\n\n[Error: ${event.content || 'Unknown error'}]`
         scheduleFlush()
       } else if (event.type === 'done') {
-        // Final flush to ensure last state is rendered
         if (rafRef.current !== null) {
           cancelAnimationFrame(rafRef.current)
           rafRef.current = null
         }
-        flushAIMessage()
+        // Mark message as done before final flush
+        setMessages(prev => {
+          const last = prev[prev.length - 1]
+          if (last && last.role === 'ai') {
+            return [...prev.slice(0, -1), { ...last, content: aiContentRef.current, events: [...aiEventsRef.current], done: true }]
+          }
+          return prev
+        })
         setStreaming(false)
         cancelRef.current = null
       }

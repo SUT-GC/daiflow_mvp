@@ -356,7 +356,7 @@ async def run_init(project_id: str, ws_manager: WSManager | None = None):
             return
 
         # Resolve allowed_roots: git-cloned paths take priority over local_path
-        allowed_roots = await _resolve_allowed_roots(project_dir, repos)
+        allowed_roots = _resolve_allowed_roots(project_dir, repos)
         lang = await get_language_setting(db)
 
         # Layers 2 & 3: knowledge generation (concurrent within each layer, serial across)
@@ -393,7 +393,7 @@ async def run_init_retry(project_id: str, failed_session_ids: list[str], from_la
             select(ProjectRepo).where(ProjectRepo.project_id == project_id)
         )
         repos = result.scalars().all()
-        allowed_roots = await _resolve_allowed_roots(project_dir, repos)
+        allowed_roots = _resolve_allowed_roots(project_dir, repos)
 
         lang = await get_language_setting(db)
 

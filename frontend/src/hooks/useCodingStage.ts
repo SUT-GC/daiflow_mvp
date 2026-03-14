@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { getTask, getTodos, getTaskDiff, getTodoDiff, joinDiffs, TaskData, TodoData } from '../api'
+import { getTask, getTodos, getTaskDiff, getTodoDiff, joinDiffs, executeTodo, TaskData, TodoData } from '../api'
 import { SessionStatus, TodoStatus } from '../types/enums'
 import { sessionIds } from '../utils/sessionIds'
 import { useAgent } from './useAgent'
@@ -120,11 +120,24 @@ export function useCodingStage(taskId: string | undefined) {
 
   const allDone = todos.length > 0 && todos.every(t => t.status === TodoStatus.DONE || t.status === TodoStatus.SKIPPED)
 
+  /** Select a todo, mark it RUNNING optimistically, then trigger execution. */
+  const execute = useCallback(async (todoId: string) => {
+    setSelectedTodo(todoId)
+    setTodos(prev => prev.map(t => t.id === todoId ? { ...t, status: TodoStatus.RUNNING } : t))
+    try {
+      await executeTodo(todoId)
+    } catch (err: any) {
+      console.error('Failed to execute todo:', err)
+      loadData() // revert optimistic update on error
+    }
+  }, [loadData])
+
   return {
     task,
     todos,
     selectedTodo,
     setSelectedTodo,
+    execute,
     diff,
     todoSessionStatus: agent.status,
     logs: agent.logs,
@@ -134,6 +147,6 @@ export function useCodingStage(taskId: string | undefined) {
     error: localError || agent.error,
     messages: agent.messages,
     sendMessage: agent.sendMessage,
-    streaming: agent.streaming,
+    responding: agent.responding,
   }
 }

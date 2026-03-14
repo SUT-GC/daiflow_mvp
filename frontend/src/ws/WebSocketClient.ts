@@ -34,6 +34,8 @@ export interface WSEvent {
   session_id?: string
   ts?: string
   usage?: { input_tokens: number; output_tokens: number }
+  started_at?: string
+  finished_at?: string
 }
 
 interface ServerMessage {

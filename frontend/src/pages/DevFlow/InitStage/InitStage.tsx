@@ -7,6 +7,7 @@ import { useLocale } from '../../../hooks/useLocale'
 import { sessionIds } from '../../../utils/sessionIds'
 import { wsClient, type WSEvent } from '../../../ws'
 import type { TranslationKey } from '../../../i18n'
+import SessionLogModal from '../../../components/SessionLogModal/SessionLogModal'
 import '../../Projects/ProjectInit.css'
 
 const SESSION_LABELS: Record<string, TranslationKey> = {
@@ -24,6 +25,7 @@ export default function InitStage() {
   const [sessions, setSessions] = useState<InitSessionData[]>([])
   const [confirming, setConfirming] = useState(false)
   const [retrying, setRetrying] = useState(false)
+  const [viewSession, setViewSession] = useState<{ id: string; label: string } | null>(null)
 
   const loadData = useCallback(async () => {
     if (!taskId) return
@@ -45,7 +47,7 @@ export default function InitStage() {
       if (event.type === 'session_status') {
         setSessions(prev => prev.map(s =>
           s.session_id === event.session_id
-            ? { ...s, status: event.status, error: event.error || null, started_at: event.started_at || s.started_at, finished_at: event.finished_at || s.finished_at }
+            ? { ...s, status: event.status ?? s.status, error: event.error || null, started_at: event.started_at || s.started_at, finished_at: event.finished_at || s.finished_at }
             : s
         ))
       }
@@ -136,6 +138,7 @@ export default function InitStage() {
   const statusKeys: TranslationKey[] = ['init.status.waiting', 'init.status.running', 'init.status.done', 'init.status.failed']
 
   return (
+    <>
     <div className="stage-page">
       <Topbar
         title={task?.name || ''}
@@ -183,7 +186,10 @@ export default function InitStage() {
                       {t('init_stage.title')} {i + 1}
                     </div>
                     <div className="layer-children">
-                      <div className={`know-item ${statusClass}`}>
+                      <div
+                        className={`know-item ${statusClass} ${s.status > 0 ? 'clickable' : ''}`}
+                        onClick={() => s.status > 0 && setViewSession({ id: s.session_id, label })}
+                      >
                         <div className="know-icon">
                           {s.status === 2 ? '✓' : s.status === 1 ? <span className="spinner" /> : s.status === 3 ? '✗' : '○'}
                         </div>
@@ -223,5 +229,13 @@ export default function InitStage() {
         </div>
       </div>
     </div>
+      {viewSession && (
+        <SessionLogModal
+          sessionId={viewSession.id}
+          label={viewSession.label}
+          onClose={() => setViewSession(null)}
+        />
+      )}
+    </>
   )
 }

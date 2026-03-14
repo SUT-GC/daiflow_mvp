@@ -19,6 +19,11 @@ export function getStageFromStatus(status: number): number {
   return 5                   // REVIEWING / DONE → Review
 }
 
+/** Map devflow URL path segment to stage number. */
+export const STAGE_PATH_TO_NUM: Record<string, number> = {
+  init: 1, plan: 2, todo: 3, coding: 4, review: 5,
+}
+
 /** Get the devflow page path for a task based on its current status. */
 export function getDevFlowPath(taskId: string, status: number): string {
   if (status <= 1) return `/devflow/${taskId}/init`

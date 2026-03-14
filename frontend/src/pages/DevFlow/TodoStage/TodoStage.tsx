@@ -11,7 +11,8 @@ export default function TodoStage() {
   const { taskId } = useParams()
   const navigate = useNavigate()
   const { t } = useLocale()
-  const { task, todos, status, messages, sendMessage, streaming, refreshSession, isStale } = useTodoStage(taskId)
+  const { task, todos, status, messages, sendMessage, responding, refreshSession, isStale } = useTodoStage(taskId)
+
   const [selectedTodo, setSelectedTodo] = useState<TodoData | null>(null)
 
   const handleRedecompose = async () => {
@@ -31,7 +32,7 @@ export default function TodoStage() {
   }
 
   const readonly = task ? isStageReadonly(task.status, 3) : false
-  const isGenerating = status === 1 || streaming
+  const isGenerating = responding
   const startCodingDisabled = todos.length === 0 || isGenerating || readonly
   const redecomposeDisabled = isGenerating || readonly
 
@@ -81,7 +82,7 @@ export default function TodoStage() {
         chatTitle={t('todo.chat_title')}
         chatMessages={messages}
         chatOnSend={sendMessage}
-        chatStreaming={streaming}
+        chatResponding={responding}
         isStale={isStale}
         onRetry={refreshSession}
       />

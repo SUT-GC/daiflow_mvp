@@ -37,13 +37,14 @@ function CollapsibleMsg({ content }: { content: string }) {
 interface ChatPanelProps {
   messages: ChatMessage[]
   onSend: (text: string) => void
-  streaming?: boolean
+  /** True when AI is actively generating: initial session running or user chat streaming. */
+  responding?: boolean
   title?: string
   disabled?: boolean
   style?: React.CSSProperties
 }
 
-export default function ChatPanel({ messages, onSend, streaming = false, title, disabled = false, style }: ChatPanelProps) {
+export default function ChatPanel({ messages, onSend, responding = false, title, disabled = false, style }: ChatPanelProps) {
   const { t } = useLocale()
   const [input, setInput] = useState('')
   const messagesRef = useRef<HTMLDivElement>(null)
@@ -62,13 +63,13 @@ export default function ChatPanel({ messages, onSend, streaming = false, title, 
     }
   }, [messages])
 
-  const isSendDisabled = disabled || streaming || !input.trim()
+  const isSendDisabled = disabled || responding || !input.trim()
 
   const handleSend = useCallback(() => {
-    if (disabled || streaming || !input.trim()) return
+    if (disabled || responding || !input.trim()) return
     onSend(input.trim())
     setInput('')
-  }, [disabled, streaming, input, onSend])
+  }, [disabled, responding, input, onSend])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -87,8 +88,8 @@ export default function ChatPanel({ messages, onSend, streaming = false, title, 
         {messages.map((msg, i) => {
           const toolGroups = msg.role === 'ai' ? groupChatToolEvents(msg.events || []) : []
           const isLastAi = msg.role === 'ai' && i === messages.length - 1
-          const isAiStreaming = isLastAi && streaming
-          const isAiDone = msg.role === 'ai' && !isAiStreaming
+          const isAiStreaming = isLastAi && responding
+          const isAiDone = msg.role === 'ai' && msg.done === true
 
           return (
             <div key={msg.id} className={`msg ${msg.role === 'user' ? 'user' : ''}`}>
@@ -133,7 +134,7 @@ export default function ChatPanel({ messages, onSend, streaming = false, title, 
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
-          disabled={disabled || streaming}
+          disabled={disabled || responding}
         />
         <button className="send-btn" onClick={handleSend} disabled={isSendDisabled}>
           <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" /></svg>

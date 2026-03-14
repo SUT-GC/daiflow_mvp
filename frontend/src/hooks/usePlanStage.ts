@@ -76,6 +76,6 @@ export function usePlanStage(taskId: string | undefined) {
     isStale: agent.isStale,
     messages: agent.messages,
     sendMessage: agent.sendMessage,
-    streaming: agent.streaming,
+    responding: agent.responding,
   }
 }

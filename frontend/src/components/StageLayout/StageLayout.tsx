@@ -36,7 +36,7 @@ interface StageLayoutProps {
   chatTitle: string
   chatMessages: ChatMessage[]
   chatOnSend: (msg: string) => void
-  chatStreaming: boolean
+  chatResponding: boolean
   /** Whether the session appears stale (no events for 60s while RUNNING) */
   isStale?: boolean
   /** Called when user clicks retry on the stale banner */
@@ -52,7 +52,7 @@ export default function StageLayout({
   chatTitle,
   chatMessages,
   chatOnSend,
-  chatStreaming,
+  chatResponding,
   isStale,
   onRetry,
 }: StageLayoutProps) {
@@ -84,7 +84,7 @@ export default function StageLayout({
             <ChatPanel
               messages={chatMessages}
               onSend={chatOnSend}
-              streaming={chatStreaming}
+              responding={chatResponding}
               title={chatTitle}
               disabled={readonly}
             />

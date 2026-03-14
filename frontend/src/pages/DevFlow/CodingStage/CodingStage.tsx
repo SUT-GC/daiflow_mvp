@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import StageLayout, { isStageReadonly } from '../../../components/StageLayout/StageLayout'
 import DiffViewer from '../../../components/DiffViewer/DiffViewer'
 import { useCodingStage } from '../../../hooks/useCodingStage'
-import { executeTodo, skipTodo, startReview } from '../../../api'
+import { skipTodo, startReview } from '../../../api'
 import { useLocale } from '../../../hooks/useLocale'
 import { TaskStatus } from '../../../types/enums'
 import './CodingStage.css'
@@ -17,17 +17,10 @@ export default function CodingStage() {
   const {
     task, todos, selectedTodo, setSelectedTodo, diff,
     todoSessionStatus, allDone, loadData, isStale,
-    messages, sendMessage, streaming,
+    messages, sendMessage, responding, execute,
   } = useCodingStage(taskId)
 
-  const handleExecute = async (todoId: string) => {
-    setSelectedTodo(todoId)
-    try {
-      await executeTodo(todoId)
-    } catch (err: any) {
-      console.error('Failed to execute todo:', err)
-    }
-  }
+  const handleExecute = (todoId: string) => execute(todoId)
 
   const handleSkip = async (todoId: string) => {
     try {
@@ -50,8 +43,9 @@ export default function CodingStage() {
 
   const readonly = task ? isStageReadonly(task.status, 4) : false
 
-  // Only the first PENDING or FAILED todo (in seq order) is actionable
-  const nextActionableId = todos.find(t => t.status === 0 || t.status === 3)?.id ?? null
+  // Only the first PENDING or FAILED todo is actionable, and only when nothing is running
+  const anyRunning = todos.some(t => t.status === 1)
+  const nextActionableId = anyRunning ? null : (todos.find(t => t.status === 0 || t.status === 3)?.id ?? null)
 
   return (
     <StageLayout
@@ -178,7 +172,7 @@ export default function CodingStage() {
       chatTitle={t('coding.chat_title')}
       chatMessages={messages}
       chatOnSend={sendMessage}
-      chatStreaming={streaming}
+      chatResponding={responding}
       isStale={isStale}
     />
   )

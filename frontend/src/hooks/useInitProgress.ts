@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { getInitSessions, SessionStatusData } from '../api'
+import { getInitSessions } from '../api'
 import { SessionStatus } from '../types/enums'
 import { wsClient } from '../ws'
 
@@ -25,14 +25,13 @@ export function useInitProgress(projectId: string | null) {
     async function load() {
       try {
         const data = await getInitSessions(projectId!)
-        // API already returns Record<number, SessionStatusData[]>, just convert to InitSession[]
+        // API returns array: [{layer, sessions, status}, ...]
         const converted: Record<number, InitSession[]> = {}
-        for (const [layerStr, sessions] of Object.entries(data)) {
-          const layer = Number(layerStr)
-          converted[layer] = sessions.map(s => ({
+        for (const layerData of data) {
+          converted[layerData.layer] = layerData.sessions.map(s => ({
             session_id: s.session_id,
             status: s.status,
-            layer: s.layer ?? layer,
+            layer: layerData.layer,
             error: s.error,
             started_at: s.started_at,
             finished_at: s.finished_at,

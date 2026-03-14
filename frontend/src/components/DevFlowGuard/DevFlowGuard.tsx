@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { getTask, type TaskData } from '../../api'
-import { getDevFlowPath } from '../../utils/taskStages'
+import { getDevFlowPath, getStageFromStatus, STAGE_PATH_TO_NUM } from '../../utils/taskStages'
 import Loading from '../Loading/Loading'
 
 /**
@@ -30,12 +30,12 @@ export default function DevFlowGuard({
     getTask(taskId)
       .then((task: TaskData) => {
         if (cancelled) return
-        const correctPath = getDevFlowPath(taskId, task.status)
-        const currentBase = `/devflow/${taskId}/${stagePath}`
+        const requestedStage = STAGE_PATH_TO_NUM[stagePath] ?? 1
+        const currentStage = getStageFromStatus(task.status)
 
-        // If the correct path doesn't match the current stage, redirect
-        if (!correctPath.startsWith(currentBase.replace(/\/$/, ''))) {
-          navigate(correctPath, { replace: true })
+        // Only redirect if trying to access a stage ahead of the task's current progress
+        if (requestedStage > currentStage) {
+          navigate(getDevFlowPath(taskId, task.status), { replace: true })
         } else {
           setChecked(true)
         }

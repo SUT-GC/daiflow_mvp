@@ -139,8 +139,13 @@ export const deleteProject = (id: string) =>
   request<{ ok: boolean }>(`/projects/${id}`, { method: 'DELETE' })
 export const initProject = (id: string) =>
   request<{ ok: boolean }>(`/projects/${id}/init`, { method: 'POST' })
+export interface InitLayerData {
+  layer: number
+  sessions: (Pick<SessionStatusData, 'session_id' | 'status' | 'error' | 'started_at' | 'finished_at'>)[]
+  status: string
+}
 export const getInitSessions = (id: string) =>
-  request<Record<number, SessionStatusData[]>>(`/projects/${id}/init/sessions`)
+  request<InitLayerData[]>(`/projects/${id}/init/sessions`)
 export const retryProjectInit = (id: string) =>
   request<{ ok: boolean }>(`/projects/${id}/init/retry`, { method: 'POST' })
 export const getProjectKnowledge = (id: string) =>

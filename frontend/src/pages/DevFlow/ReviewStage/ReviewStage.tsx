@@ -98,7 +98,7 @@ export default function ReviewStage() {
         chatTitle={t('review.chat_title')}
         chatMessages={agent.messages}
         chatOnSend={agent.sendMessage}
-        chatStreaming={agent.streaming}
+        chatResponding={agent.responding}
         isStale={agent.isStale}
         onRetry={agent.refreshSession}
       />

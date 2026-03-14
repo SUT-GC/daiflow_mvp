@@ -23,7 +23,8 @@ export interface UseAgentReturn {
   isStale: boolean
   // Chat
   messages: ChatMessage[]
-  streaming: boolean
+  /** True when AI is actively generating: either initial session running or user chat streaming. */
+  responding: boolean
   sendMessage: (text: string) => void
   // Actions
   refreshSession: () => void
@@ -70,7 +71,7 @@ export function useAgent({
     error,
     isStale,
     messages: chat.messages,
-    streaming: chat.streaming,
+    responding: status === 1 || chat.streaming,
     sendMessage: chat.sendMessage,
     refreshSession,
     sessionRefreshKey,
