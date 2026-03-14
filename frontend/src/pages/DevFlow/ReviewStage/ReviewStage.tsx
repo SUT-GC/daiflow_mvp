@@ -4,6 +4,8 @@ import StageLayout, { isStageReadonly } from '../../../components/StageLayout/St
 import DiffViewer, { parseDiff } from '../../../components/DiffViewer/DiffViewer'
 import Modal from '../../../components/Modal/Modal'
 import { useStageChat } from '../../../hooks/useStageChat'
+import { useSession } from '../../../hooks/useSession'
+import { useStaleDetection } from '../../../hooks/useStaleDetection'
 import { useCommitModal } from '../../../hooks/useCommitModal'
 import { getTask, getTaskDiff, joinDiffs, TaskData } from '../../../api'
 import { useLocale } from '../../../hooks/useLocale'
@@ -36,6 +38,8 @@ export default function ReviewStage() {
   }, [taskId])
 
   const sessionId = taskId ? sessionIds.review(taskId) : null
+  const { status: reviewStatus, logs: reviewLogs } = useSession(sessionId)
+  const isStale = useStaleDetection(reviewStatus, reviewLogs.length)
 
   const { messages, sendMessage, streaming } = useStageChat({
     sessionId,
@@ -99,6 +103,7 @@ export default function ReviewStage() {
         chatMessages={messages}
         chatOnSend={sendMessage}
         chatStreaming={streaming}
+        isStale={isStale}
       />
 
       {/* Commit Modal */}
