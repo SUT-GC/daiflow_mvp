@@ -2,7 +2,7 @@ import { useNavigate } from 'react-router-dom'
 import { useTheme } from '../../hooks/useTheme'
 import { useLocale } from '../../hooks/useLocale'
 import { TaskStatus } from '../../types/enums'
-import type { TranslationKey } from '../../i18n/en'
+import type { TranslationKey } from '../../i18n'
 
 const STATUS_CONFIG: Record<number, { labelKey: TranslationKey; cls: string }> = {
   [TaskStatus.CREATED]:      { labelKey: 'tasks.status.0', cls: 'status-grey' },

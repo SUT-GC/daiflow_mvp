@@ -20,8 +20,8 @@ export default function ReviewStage() {
 
   const loadData = useCallback(async () => {
     if (!taskId) return
-    const t = await getTask(taskId)
-    setTask(t)
+    const taskData = await getTask(taskId)
+    setTask(taskData)
     const diffData = await getTaskDiff(taskId)
     setDiff(joinDiffs(diffData))
   }, [taskId])
