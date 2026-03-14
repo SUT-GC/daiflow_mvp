@@ -219,6 +219,7 @@ const en = {
   'review.success_sub': 'Code has been committed and pushed to remote',
   'review.close': 'Close',
   'review.return_tasks': 'Return to Tasks',
+  'review.generating_commit': 'Generating commit message...',
 
   // ChatPanel
   'chat.default_title': 'AI Chat',

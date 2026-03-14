@@ -112,7 +112,7 @@ export default function ReviewStage() {
               <textarea
                 className="input"
                 rows={6}
-                value={commitModal.generating ? 'Generating commit message...' : commitModal.commitMessage}
+                value={commitModal.generating ? t('review.generating_commit') : commitModal.commitMessage}
                 onChange={e => commitModal.setCommitMessage(e.target.value)}
                 disabled={commitModal.generating}
                 style={{ fontFamily: 'var(--mono)', fontSize: '12px' }}
