@@ -1,6 +1,7 @@
 {
   "name": "daiflow-desktop",
   "version": "0.1.0",
+  "private": true,
   "description": "DaiFlow Desktop - AI-powered programming workbench",
   "main": "main/index.js",
   "scripts": {
@@ -12,6 +13,8 @@
     "dist:win": "electron-builder --win",
     "dist:linux": "electron-builder --linux"
   },
+  "author": "DaiFlow",
+  "license": "MIT",
   "devDependencies": {
     "electron": "^33.0.0",
     "electron-builder": "^25.0.0",

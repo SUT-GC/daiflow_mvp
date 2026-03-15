@@ -8,6 +8,7 @@
  *
  * 未设置环境变量时跳过公证（适用于本地开发构建）。
  */
+const path = require('path');
 const { notarize } = require('@electron/notarize');
 
 exports.default = async function notarizing(context) {
@@ -28,7 +29,7 @@ exports.default = async function notarizing(context) {
   }
 
   const appName = context.packager.appInfo.productFilename;
-  const appPath = `${appOutDir}/${appName}.app`;
+  const appPath = path.join(appOutDir, `${appName}.app`);
 
   console.log(`Notarizing ${appPath}...`);
 

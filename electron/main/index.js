@@ -66,6 +66,7 @@ async function runMigrations(venvDir) {
     env: {
       ...process.env,
       DAIFLOW_HOME: DATA_DIR,
+      PATH: path.dirname(pythonPath) + path.delimiter + (process.env.PATH || ''),
     },
     timeout: 60000,
   });
@@ -210,13 +211,19 @@ function handleBackendCrash(code, signal) {
 
   const focusWindow = mainWindow || splashWindow;
 
-  dialog.showMessageBox(focusWindow, {
+  const msgBoxOpts = {
     type: 'error',
     title: '后端服务异常',
     message: `DaiFlow 后端意外退出（代码: ${code}）。是否重新启动？`,
     buttons: ['重新启动', '退出'],
     defaultId: 0,
-  }).then(({ response: buttonIndex }) => {
+  };
+
+  const msgBoxPromise = focusWindow
+    ? dialog.showMessageBox(focusWindow, msgBoxOpts)
+    : dialog.showMessageBox(msgBoxOpts);
+
+  msgBoxPromise.then(({ response: buttonIndex }) => {
     if (buttonIndex === 0) {
       // 重新启动
       app.relaunch();
@@ -238,6 +245,7 @@ app.on('window-all-closed', () => {
 app.on('activate', () => {
   // macOS：点击 Dock 图标时重新创建窗口
   if (mainWindow === null && backendPort) {
+    isQuitting = false; // 重建窗口后恢复关闭保护
     createMainWindow();
   }
 });

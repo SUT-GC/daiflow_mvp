@@ -65,14 +65,25 @@ function startBackend({ venvDir, port, dataDir, corsOrigins, onCrash }) {
     return new Promise((resolve) => {
       child.once('exit', () => resolve());
 
+      // 兜底超时：无论哪个平台，10 秒后强制 resolve 防止 promise 挂住
+      const fallbackTimer = setTimeout(() => {
+        console.warn('[backend] stop() timed out after 10s, forcing resolve');
+        resolve();
+      }, 10000);
+
+      const cleanup = () => clearTimeout(fallbackTimer);
+      child.once('exit', cleanup);
+
       if (process.platform === 'win32') {
         // Windows: 使用 taskkill 终止整个进程树
         const { execFile } = require('child_process');
         execFile('taskkill', ['/T', '/F', '/PID', String(child.pid)], (err) => {
           if (err) {
             console.error('[backend] taskkill failed:', err.message);
+            cleanup();
             resolve();
           }
+          // taskkill 成功时等待 exit 事件或兜底超时
         });
       } else {
         // Unix: SIGTERM + 5 秒超时兜底 SIGKILL
@@ -98,7 +109,7 @@ function startBackend({ venvDir, port, dataDir, corsOrigins, onCrash }) {
  * 轮询后端健康检查接口，等待后端就绪。
  * 使用 Electron 内置的 net.fetch（不受 CORS 限制）。
  */
-async function waitForBackend(port, maxRetries = 30, intervalMs = 500) {
+async function waitForBackend(port, maxRetries = 60, intervalMs = 500) {
   const { net } = require('electron');
   const url = `http://127.0.0.1:${port}/api/settings/check`;
 

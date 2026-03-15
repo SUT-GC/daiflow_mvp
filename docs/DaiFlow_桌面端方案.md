@@ -1,7 +1,15 @@
 # DaiFlow 桌面端方案
 
-> 版本：v0.1
+> 版本：v0.2
 > 更新时间：2026-03-15
+>
+> **注意：** 实际实现代码在 `electron/` 目录中，与本文档有以下差异：
+> - 打包改用 `extraResources`（而非 `asarUnpack`），后端文件复制到 `resources/backend/`
+> - `APP_ROOT` 打包后指向 `path.join(process.resourcesPath, 'backend')`
+> - `stop()` 增加了 10 秒兜底超时 + 进程已退出检测
+> - `handleBackendCrash` 支持无父窗口的对话框
+> - macOS `activate` 时重置 `isQuitting` 标志
+> - `waitForBackend` 超时从 15 秒增加到 30 秒
 
 ---
 
