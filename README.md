@@ -74,9 +74,14 @@ daiflow/
 │   ├── main.py               # FastAPI 入口
 │   ├── config.py             # 全局配置（~/.daiflow 路径等）
 │   ├── database.py           # SQLAlchemy 初始化
-│   ├── models.py             # ORM 模型（6 张表）
+│   ├── models.py             # ORM 模型（8 张表）
 │   ├── ws_manager.py         # WebSocket 发布订阅管理器
 │   ├── session_runner.py     # AI 任务统一执行器
+│   ├── agent_executor.py     # Agent 统一执行器
+│   ├── session_ids.py        # Session ID 构造辅助
+│   ├── schemas.py            # Pydantic 请求/响应模型
+│   ├── agents/               # Agent 配置注册（plan/todo/review/init）
+│   ├── workflow/             # 状态机（TaskWorkflow + TodoWorkflow + Orchestrator）
 │   ├── cli.py                # CLI 入口（daiflow start）
 │   ├── routers/              # HTTP 路由层
 │   │   ├── settings.py       # 设置 API
@@ -84,6 +89,7 @@ daiflow/
 │   │   ├── tasks.py          # 任务 CRUD + 阶段转换 + 对话
 │   │   ├── todos.py          # Todo 执行 + 对话
 │   │   ├── sessions.py       # Session 状态/日志/流
+│   │   ├── jobs.py           # 定时任务 CRUD + 执行
 │   │   └── ws.py             # WebSocket 端点
 │   └── services/             # 业务逻辑层
 │       ├── project_service.py  # 项目初始化（四层知识生成）
@@ -91,14 +97,19 @@ daiflow/
 │       ├── cody_service.py     # Cody SDK 封装
 │       ├── chat_service.py     # 阶段对话公共逻辑
 │       ├── git_service.py      # Git 操作
-│       └── skill_service.py    # Skill 文件管理
+│       ├── skill_service.py    # Skill 文件管理
+│       ├── review_service.py   # 代码审查（Diff 聚合、提交信息、MR）
+│       ├── repo_monitor.py     # 仓库监控定时任务
+│       └── settings_service.py # 设置读写辅助
 ├── frontend/                 # 前端 React SPA
 │   └── src/
 │       ├── pages/            # 页面组件
 │       │   ├── Settings/     # 模型配置
 │       │   ├── Projects/     # 项目管理
 │       │   ├── Tasks/        # 任务列表
+│       │   ├── Debug/        # Session 调试工具
 │       │   └── DevFlow/      # 四阶段工作流
+│       │       ├── InitStage/
 │       │       ├── PlanStage/
 │       │       ├── TodoStage/
 │       │       ├── CodingStage/
@@ -144,6 +155,7 @@ daiflow/
 
 | 阶段 | 功能 | Cody Session 策略 |
 |------|------|------------------|
+| 0. 任务初始化 | 代码拉取 + Skill 同步 | 独立 session |
 | 1. 技术方案 | AI 生成 + 对话调整 | 独立 session |
 | 2. 任务拆解 | AI 拆解为 Todo 列表 | 复用方案阶段 session |
 | 3. 编码实现 | 逐个 Todo 执行 + Diff | 每个 Todo 独立 session |
@@ -160,7 +172,7 @@ daiflow/
 
 ## 数据库
 
-6 张表：`projects`、`project_repos`、`tasks`、`todos`、`sessions`、`settings`
+8 张表：`projects`、`project_repos`、`tasks`、`todos`、`sessions`、`settings`、`jobs`、`job_runs`
 
 ### 迁移
 
@@ -177,12 +189,13 @@ alembic upgrade head
 | 分类 | 端点 |
 |------|------|
 | 设置 | `GET/PUT /api/settings`, `GET /api/settings/check` |
-| 项目 | CRUD `/api/projects`, `POST .../init`, `GET .../init/sessions` |
-| 任务 | CRUD `/api/tasks`, `POST .../lock-plan`, `POST .../start-coding`, `POST .../start-review` |
-| DevFlow | `POST /api/tasks/{id}/plan`, `.../plan/chat`, `.../todo`, `.../todo/chat`, `POST /api/todos/{id}/execute`, `.../chat`, `.../review/chat` |
+| 项目 | CRUD `/api/projects`, `POST .../init`, `GET .../init/sessions`, `GET .../knowledge` |
+| 任务 | CRUD `/api/tasks`, `POST .../confirm-init`, `POST .../retry-init`, `POST .../lock-plan`, `POST .../start-coding`, `POST .../start-review` |
+| DevFlow | `POST /api/tasks/{id}/plan`, `POST .../todo`, `POST /api/todos/{id}/execute`, `POST .../skip` |
 | Session | `GET /api/sessions/{id}/status`, `.../logs` |
 | WebSocket | `WS /api/ws`（subscribe / chat / ping） |
-| 审查 | `GET /api/tasks/{id}/diff`, `POST /api/tasks/{id}/submit-mr` |
+| 审查 | `GET /api/tasks/{id}/diff`, `POST /api/tasks/{id}/submit-mr`, `POST .../generate-commit-message` |
+| Jobs | CRUD `/api/jobs`, `GET .../runs`, `POST .../trigger` |
 
 ## 测试
 
