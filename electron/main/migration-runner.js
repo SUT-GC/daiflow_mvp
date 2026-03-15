@@ -84,6 +84,7 @@ async function runMigrations(appRoot, venvDir, dataDir, onStatus) {
         completedMigrations++;
         const migrationName = upgradeMatch[1];
 
+        // progress 事件自带 detail，splash 端已在 progress handler 中 addLog
         if (onStatus) {
           onStatus({
             type: 'progress',
@@ -97,9 +98,10 @@ async function runMigrations(appRoot, venvDir, dataDir, onStatus) {
             detail: line,
           });
         }
+      } else {
+        // 非迁移行：仅发送日志（避免与 progress 事件重复 addLog）
+        if (onStatus) onStatus({ type: 'log', detail: line });
       }
-
-      if (onStatus) onStatus({ type: 'log', detail: line });
     },
     onStderr(line) {
       if (onStatus) onStatus({ type: 'log', detail: line });

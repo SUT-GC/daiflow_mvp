@@ -66,10 +66,10 @@ function meetsMinVersion(version, minVersion = MIN_PYTHON_VERSION) {
  */
 function getBundledPythonPath() {
   const { app } = require('electron');
+  const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
 
   if (!app.isPackaged) {
     // 开发模式：检查本地 python-runtime 目录
-    const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
     const devPythonPath = path.join(__dirname, '..', 'python-runtime', `darwin-${arch}`, 'bin', 'python3');
     if (fs.existsSync(devPythonPath)) {
       return devPythonPath;
@@ -78,7 +78,6 @@ function getBundledPythonPath() {
   }
 
   // 打包模式：从 resources 目录获取
-  const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
   const bundledPythonPath = path.join(
     process.resourcesPath,
     `python-${arch}`,
@@ -214,6 +213,7 @@ function installPipPackages(pipPath, args, requirementsPath, onStatus, timeout) 
           estimatedTotal = installedCount + 5;
         }
 
+        // progress 事件自带 detail，splash 端已在 progress handler 中 addLog
         onStatus({
           type: 'progress',
           stage: 'pip-install',
@@ -225,10 +225,10 @@ function installPipPackages(pipPath, args, requirementsPath, onStatus, timeout) 
           },
           detail: line,
         });
+      } else {
+        // 非包行：仅发送日志（避免与 progress 事件重复 addLog）
+        onStatus({ type: 'log', detail: line });
       }
-
-      // 发送详细日志
-      onStatus({ type: 'log', detail: line });
     },
     onStderr(line) {
       onStatus({ type: 'log', detail: line });
