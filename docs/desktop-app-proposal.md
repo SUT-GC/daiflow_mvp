@@ -38,7 +38,7 @@ DaiFlow 当前是一个 Web 应用（React SPA + FastAPI 后端），通过 `dai
 │             │                                    │
 │             ▼                                    │
 │  ┌──────────────────────┐                        │
-│  │  ~/.daiflow-desktop/  │  (DAIFLOW_HOME)       │
+│  │  {userData}/data/     │  (DAIFLOW_HOME)       │
 │  │  ├── daiflow.db       │                        │
 │  │  ├── sessions/        │                        │
 │  │  ├── projects/        │                        │
@@ -57,7 +57,8 @@ daiflow_mvp/
 ├── frontend/                 # 现有前端（不改动）
 ├── electron/                 # 新增：Electron 壳
 │   ├── main.js               # 主进程入口
-│   ├── preload.js            # 预加载脚本（安全桥接）
+│   ├── preload.js            # 主窗口预加载脚本（安全桥接）
+│   ├── splash-preload.js     # Splash 窗口预加载脚本（接收状态更新 IPC）
 │   ├── splash.html           # 启动加载页
 │   ├── python-manager.js     # Python/venv 管理模块
 │   ├── port-manager.js       # 端口管理模块
@@ -96,7 +97,8 @@ async function findPython() {
     try {
       const result = spawnSync(cmd, ['--version'], { encoding: 'utf-8' })
       // 输出格式：Python 3.11.5
-      const match = result.stdout.match(/Python (\d+)\.(\d+)\.(\d+)/)
+      const output = result.stdout || result.stderr || ''
+      const match = output.match(/Python (\d+)\.(\d+)\.(\d+)/)
       if (match) {
         const [major, minor] = [parseInt(match[1]), parseInt(match[2])]
         if (major > MIN_PYTHON_VERSION[0] ||
@@ -134,21 +136,28 @@ async function findPython() {
 
 **哈希校验机制：**
 
-在 venv 目录下保存 `.req-hash` 文件，存储 `requirements.txt` 的 SHA256。每次启动比对，变化才重新安装，避免每次都跑 pip（节省 3-5 秒）。
+在 venv 目录下保存 `.deps-hash` 文件，存储 `requirements.txt` + `pyproject.toml` 的联合 SHA256。任一文件变化即触发重新安装，避免遗漏 `pyproject.toml` 中的依赖变更。
 
 ```javascript
 const crypto = require('crypto')
 
-function getRequirementsHash() {
-  const content = fs.readFileSync(path.join(appRoot, 'requirements.txt'))
-  return crypto.createHash('sha256').update(content).digest('hex')
+function getDepsHash() {
+  const hash = crypto.createHash('sha256')
+  // 同时覆盖 requirements.txt 和 pyproject.toml
+  for (const file of ['requirements.txt', 'pyproject.toml']) {
+    const filePath = path.join(appRoot, file)
+    if (fs.existsSync(filePath)) {
+      hash.update(fs.readFileSync(filePath))
+    }
+  }
+  return hash.digest('hex')
 }
 
 async function ensureVenv(pythonCmd) {
   const venvDir = path.join(app.getPath('userData'), 'python-env')
   const pipCmd = getPipPath(venvDir)       // bin/pip 或 Scripts/pip.exe
   const pythonInVenv = getPythonPath(venvDir)
-  const hashFile = path.join(venvDir, '.req-hash')
+  const hashFile = path.join(venvDir, '.deps-hash')
 
   // Step 1: 创建 venv（如不存在）
   if (!fs.existsSync(venvDir)) {
@@ -156,14 +165,16 @@ async function ensureVenv(pythonCmd) {
   }
 
   // Step 2: 检查依赖是否需要更新
-  const currentHash = getRequirementsHash()
+  const currentHash = getDepsHash()
   const cachedHash = fs.existsSync(hashFile) ? fs.readFileSync(hashFile, 'utf-8') : ''
 
   if (currentHash !== cachedHash) {
     // 安装依赖
     await execAsync(`"${pipCmd}" install -r "${requirementsPath}"`)
-    // 安装 daiflow 包本身（开发模式）
-    await execAsync(`"${pipCmd}" install -e "${appRoot}"`)
+    // 安装 daiflow 包本身
+    // 开发模式用 -e，打包后用普通 install（editable symlink 在打包后路径可能失效）
+    const installMode = app.isPackaged ? 'install' : 'install -e'
+    await execAsync(`"${pipCmd}" ${installMode} "${appRoot}"`)
     // 更新哈希
     fs.writeFileSync(hashFile, currentHash)
   }
@@ -301,7 +312,7 @@ async function stopBackend(backendProcess) {
 **文件：** `electron/main.js`
 
 ```javascript
-const { app, BrowserWindow, dialog } = require('electron')
+const { app, BrowserWindow, dialog, net } = require('electron')
 const path = require('path')
 const { findPython, ensureVenv } = require('./python-manager')
 const { findAvailablePort } = require('./port-manager')
@@ -312,16 +323,32 @@ let mainWindow = null
 let splashWindow = null
 let backendProcess = null
 let backendPort = null
+let isQuitting = false  // 防止 stopBackend 被重复调用
 
 // 数据目录：与 CLI 模式隔离，避免冲突
 const DAIFLOW_HOME = path.join(app.getPath('userData'), 'data')
+
+// --- 关闭保护：检查是否有运行中的 Session ---
+async function checkRunningSessions(port) {
+  try {
+    const resp = await net.fetch(`http://127.0.0.1:${port}/api/sessions/running`)
+    const data = await resp.json()
+    return data.count > 0
+  } catch {
+    return false  // 后端无响应时不阻止关闭
+  }
+}
 
 function createSplashWindow() {
   splashWindow = new BrowserWindow({
     width: 480, height: 360,
     frame: false, resizable: false,
     transparent: true,
-    webPreferences: { nodeIntegration: false, contextIsolation: true },
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, 'splash-preload.js'),  // Splash 专用 preload
+    },
   })
   splashWindow.loadFile(path.join(__dirname, 'splash.html'))
 }
@@ -330,7 +357,8 @@ function createMainWindow() {
   mainWindow = new BrowserWindow({
     width: 1440, height: 900,
     minWidth: 1024, minHeight: 680,
-    titleBarStyle: 'hiddenInset',  // macOS 沉浸式标题栏
+    // macOS 使用默认标题栏，避免需要前端额外适配拖拽区域
+    // 如需沉浸式标题栏，须在前端顶部添加 -webkit-app-region: drag 的拖拽条
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
@@ -339,6 +367,32 @@ function createMainWindow() {
   })
 
   mainWindow.loadURL(`http://127.0.0.1:${backendPort}`)
+
+  // 关闭前检查是否有正在运行的 session
+  mainWindow.on('close', async (e) => {
+    if (isQuitting) return  // 用户已确认强制关闭，不再拦截
+
+    e.preventDefault()
+    const hasRunning = await checkRunningSessions(backendPort)
+    if (hasRunning) {
+      const { response } = await dialog.showMessageBox(mainWindow, {
+        type: 'warning',
+        buttons: ['继续等待', '强制关闭'],
+        defaultId: 0,
+        cancelId: 0,
+        title: '任务运行中',
+        message: '当前有 AI 任务正在执行',
+        detail: '强制关闭可能导致任务中断和数据不一致。建议等待任务完成后再关闭。',
+      })
+      if (response === 1) {
+        isQuitting = true
+        mainWindow.close()  // 重新触发 close，此时 isQuitting=true 会放行
+      }
+    } else {
+      isQuitting = true
+      mainWindow.close()
+    }
+  })
 
   mainWindow.on('closed', () => { mainWindow = null })
 }
@@ -373,7 +427,11 @@ async function bootstrap() {
     // Step 5: 等待后端就绪
     await waitForBackend(backendPort)
 
-    // Step 6: 打开主窗口
+    // Step 6: 运行数据库迁移（确保 schema 与最新版本一致）
+    updateSplash('正在检查数据库...')
+    await runMigrations(pythonPath)
+
+    // Step 7: 打开主窗口
     createMainWindow()
     splashWindow.close()
 
@@ -381,6 +439,11 @@ async function bootstrap() {
     dialog.showErrorBox('启动失败', err.message)
     app.quit()
   }
+}
+
+// 运行 Alembic 数据库迁移
+async function runMigrations(pythonPath) {
+  return execAsync(`"${pythonPath}" -m alembic upgrade head`, { cwd: APP_ROOT })
 }
 
 function updateSplash(message) {
@@ -396,34 +459,10 @@ app.on('window-all-closed', async () => {
   app.quit()
 })
 
-app.on('before-quit', async () => {
-  await stopBackend(backendProcess)
-})
-
-// 关闭前检查是否有正在运行的 session
-mainWindow.on('close', async (e) => {
-  const hasRunning = await checkRunningSessions(backendPort)
-  if (hasRunning) {
-    e.preventDefault()
-    const { response } = await dialog.showMessageBox(mainWindow, {
-      type: 'warning',
-      buttons: ['继续等待', '强制关闭'],
-      defaultId: 0,
-      cancelId: 0,
-      title: '任务运行中',
-      message: '当前有 AI 任务正在执行',
-      detail: '强制关闭可能导致任务中断和数据不一致。建议等待任务完成后再关闭。',
-    })
-    if (response === 1) {
-      // 用户选择强制关闭
-      mainWindow.destroy()
-    }
-  }
-})
-
 // macOS: 点击 dock 图标重新打开窗口
 app.on('activate', () => {
   if (mainWindow === null && backendProcess) {
+    isQuitting = false  // 重置标志，新窗口需要重新拦截
     createMainWindow()
   }
 })
@@ -444,7 +483,17 @@ app.on('activate', () => {
 即将就绪...
 ```
 
-Splash 页面通过 IPC 接收状态更新（需要配合 `preload.js` 暴露接口）。
+Splash 页面通过 IPC 接收状态更新，需要 `splash-preload.js` 暴露接口：
+
+```javascript
+// electron/splash-preload.js
+const { contextBridge, ipcRenderer } = require('electron')
+contextBridge.exposeInMainWorld('electronAPI', {
+  onStatus: (callback) => ipcRenderer.on('status', (_event, msg) => callback(msg)),
+})
+```
+
+Splash HTML 中通过 `window.electronAPI.onStatus(msg => ...)` 更新文案。
 
 ### 4.6 关闭保护：运行中 Session 检测
 
@@ -553,7 +602,7 @@ private getWsUrl(): string {
 └── python-env/              # venv（独立于 DAIFLOW_HOME）
     ├── bin/ (或 Scripts/)
     ├── lib/
-    └── .req-hash
+    └── .deps-hash
 ```
 
 ### 4.10 前端构建产物集成
@@ -661,6 +710,7 @@ nsis:
 | 改动 | 说明 | 影响范围 |
 |------|------|---------|
 | 运行中 Session 查询接口 | `GET /api/sessions/running` — 返回当前运行中的 session 数量，供关闭保护使用 | `routers/sessions.py` ~10 行 |
+| 数据库迁移集成 | Electron 启动时自动运行 `alembic upgrade head`，确保应用更新后 schema 与代码一致 | 无代码改动，复用现有 Alembic |
 | CLI 增加 `--port 0` 支持 | 让 uvicorn 自动选端口，简化端口管理 | `cli.py` 1 行（可选） |
 | 健康检查接口 | 可在 `/api/health` 新增一个轻量端点（返回 `{"ok": true}`），避免依赖 settings 逻辑 | `main.py` 3 行（可选） |
 
