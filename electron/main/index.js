@@ -65,11 +65,13 @@ async function onAppReady() {
 
   /**
    * 向 Splash 窗口发送状态消息。
+   * @param {string|object} data - 状态消息（字符串）或进度对象
    */
-  function sendStatus(message) {
+  function sendStatus(data) {
     if (splashWindow && !splashWindow.isDestroyed()) {
-      splashWindow.webContents.send('status', message);
+      splashWindow.webContents.send('status', data);
     }
+    const message = typeof data === 'string' ? data : data.message;
     console.log(`[startup] ${message}`);
   }
 
@@ -77,34 +79,41 @@ async function onAppReady() {
     // 2. Python 环境准备
     const venvDir = path.join(app.getPath('userData'), 'python-env');
     await ensurePythonEnv(APP_ROOT, venvDir, sendStatus);
+    sendStatus({ type: 'stage-complete' });
 
     // 3. 数据库迁移
     sendStatus('正在更新数据库...');
-    await runMigrations(APP_ROOT, venvDir, DATA_DIR);
+    await runMigrations(APP_ROOT, venvDir, DATA_DIR, sendStatus);
+    sendStatus({ type: 'stage-complete' });
 
     // 4. 端口分配
     sendStatus('正在分配端口...');
     backendPort = await findAvailablePort();
+    sendStatus({ type: 'stage-complete' });
 
     // 5. 启动后端
     sendStatus('正在启动后端服务...');
     const corsOrigins = `http://127.0.0.1:${backendPort},http://localhost:${backendPort}`;
 
     backend = startBackend({
+      appRoot: APP_ROOT,
       venvDir,
       port: backendPort,
       dataDir: DATA_DIR,
       corsOrigins,
       onCrash: handleBackendCrash,
     });
+    sendStatus({ type: 'stage-complete' });
 
     // 6. 等待后端就绪
     sendStatus('等待后端就绪...');
     await waitForBackend(backendPort);
+    sendStatus({ type: 'stage-complete' });
 
     // 7. 创建主窗口
     sendStatus('正在加载界面...');
     createMainWindow();
+    sendStatus({ type: 'stage-complete' });
 
     // 8. 关闭 Splash
     if (splashWindow && !splashWindow.isDestroyed()) {

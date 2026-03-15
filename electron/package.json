@@ -7,6 +7,13 @@
   "scripts": {
     "dev": "electron .",
     "build:frontend": "cd ../frontend && npm run build",
+    "download:python": "bash scripts/download-python.sh",
+    "prebuild": "npm run build:frontend && npm run download:python",
+    "prepack": "npm run build:frontend && npm run download:python",
+    "predist": "npm run build:frontend && npm run download:python",
+    "predist:mac": "npm run build:frontend && npm run download:python",
+    "predist:win": "npm run build:frontend && npm run download:python",
+    "predist:linux": "npm run build:frontend && npm run download:python",
     "pack": "electron-builder --dir",
     "dist": "electron-builder",
     "dist:mac": "electron-builder --mac",

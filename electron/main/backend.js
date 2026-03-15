@@ -5,6 +5,7 @@ const { getPythonPath, buildVenvEnv } = require('./python-env');
  * 启动 uvicorn 后端子进程。
  *
  * @param {object} options
+ * @param {string} options.appRoot - 应用根目录（backend 目录）
  * @param {string} options.venvDir - venv 目录路径
  * @param {number} options.port - 监听端口
  * @param {string} options.dataDir - DAIFLOW_HOME 数据目录
@@ -12,8 +13,10 @@ const { getPythonPath, buildVenvEnv } = require('./python-env');
  * @param {() => void} options.onCrash - 进程意外退出回调
  * @returns {{ process: ChildProcess, stop: () => Promise<void> }}
  */
-function startBackend({ venvDir, port, dataDir, corsOrigins, onCrash }) {
+function startBackend({ appRoot, venvDir, port, dataDir, corsOrigins, onCrash }) {
   const pythonPath = getPythonPath(venvDir);
+
+  console.log(`[backend] Starting uvicorn in directory: ${appRoot}`);
 
   const child = spawn(pythonPath, [
     '-m', 'uvicorn',
@@ -22,6 +25,7 @@ function startBackend({ venvDir, port, dataDir, corsOrigins, onCrash }) {
     '--port', String(port),
     '--no-access-log',
   ], {
+    cwd: appRoot,  // 设置工作目录
     env: {
       ...buildVenvEnv(venvDir, dataDir),
       DAIFLOW_CORS_ORIGINS: corsOrigins,

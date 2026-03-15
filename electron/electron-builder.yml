@@ -33,6 +33,15 @@ extraResources:
     to: "backend/requirements.txt"
   - from: "../pyproject.toml"
     to: "backend/pyproject.toml"
+  # Bundled Python runtime (arm64 & x64)
+  - from: "python-runtime/darwin-arm64"
+    to: "python-arm64"
+    filter:
+      - "**/*"
+  - from: "python-runtime/darwin-x64"
+    to: "python-x64"
+    filter:
+      - "**/*"
 
 mac:
   category: public.app-category.developer-tools
