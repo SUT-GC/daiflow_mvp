@@ -148,4 +148,51 @@ async function ensurePythonEnv(appRoot, venvDir, onStatus) {
   return venvDir;
 }
 
-module.exports = { findPython, ensurePythonEnv, getPythonPath, getPipPath };
+/**
+ * 构造子进程的环境变量：将 venv bin 目录加到 PATH 最前面 + 设置 DAIFLOW_HOME。
+ * 所有需要在 venv 中执行 Python 命令的地方都应该使用此函数，避免重复构造。
+ */
+function buildVenvEnv(venvDir, dataDir) {
+  const pythonPath = getPythonPath(venvDir);
+  return {
+    ...process.env,
+    DAIFLOW_HOME: dataDir,
+    PATH: path.dirname(pythonPath) + path.delimiter + (process.env.PATH || ''),
+  };
+}
+
+/**
+ * 执行 Alembic 数据库迁移（upgrade head）。
+ *
+ * @param {string} appRoot - 项目根目录（含 alembic.ini）
+ * @param {string} venvDir - venv 目录
+ * @param {string} dataDir - DAIFLOW_HOME 数据目录
+ */
+async function runMigrations(appRoot, venvDir, dataDir) {
+  const alembicDir = path.join(appRoot, 'alembic');
+
+  if (!fs.existsSync(alembicDir)) {
+    console.log('[migration] alembic directory not found, skipping');
+    return;
+  }
+
+  console.log('[migration] Running alembic upgrade head...');
+  const pythonPath = getPythonPath(venvDir);
+  await execFileAsync(pythonPath, [
+    '-m', 'alembic', 'upgrade', 'head'
+  ], {
+    cwd: appRoot,
+    env: buildVenvEnv(venvDir, dataDir),
+    timeout: 60000,
+  });
+  console.log('[migration] Done');
+}
+
+module.exports = {
+  findPython,
+  ensurePythonEnv,
+  getPythonPath,
+  getPipPath,
+  buildVenvEnv,
+  runMigrations,
+};

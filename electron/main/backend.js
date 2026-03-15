@@ -1,6 +1,5 @@
 const { spawn } = require('child_process');
-const path = require('path');
-const { getPythonPath } = require('./python-env');
+const { getPythonPath, buildVenvEnv } = require('./python-env');
 
 /**
  * 启动 uvicorn 后端子进程。
@@ -24,11 +23,8 @@ function startBackend({ venvDir, port, dataDir, corsOrigins, onCrash }) {
     '--no-access-log',
   ], {
     env: {
-      ...process.env,
-      DAIFLOW_HOME: dataDir,
+      ...buildVenvEnv(venvDir, dataDir),
       DAIFLOW_CORS_ORIGINS: corsOrigins,
-      // 确保 venv 的 Python 优先
-      PATH: path.dirname(pythonPath) + path.delimiter + (process.env.PATH || ''),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -63,16 +59,20 @@ function startBackend({ venvDir, port, dataDir, corsOrigins, onCrash }) {
     if (child.exitCode !== null || child.signalCode !== null) return;
 
     return new Promise((resolve) => {
-      child.once('exit', () => resolve());
+      let killTimer = null;
 
-      // 兜底超时：无论哪个平台，10 秒后强制 resolve 防止 promise 挂住
+      // 兜底超时：10 秒后强制 resolve 防止 promise 挂住
       const fallbackTimer = setTimeout(() => {
         console.warn('[backend] stop() timed out after 10s, forcing resolve');
         resolve();
       }, 10000);
 
-      const cleanup = () => clearTimeout(fallbackTimer);
-      child.once('exit', cleanup);
+      // 统一的退出回调：清理所有定时器 + resolve
+      child.once('exit', () => {
+        clearTimeout(fallbackTimer);
+        if (killTimer) clearTimeout(killTimer);
+        resolve();
+      });
 
       if (process.platform === 'win32') {
         // Windows: 使用 taskkill 终止整个进程树
@@ -80,24 +80,21 @@ function startBackend({ venvDir, port, dataDir, corsOrigins, onCrash }) {
         execFile('taskkill', ['/T', '/F', '/PID', String(child.pid)], (err) => {
           if (err) {
             console.error('[backend] taskkill failed:', err.message);
-            cleanup();
+            clearTimeout(fallbackTimer);
             resolve();
           }
           // taskkill 成功时等待 exit 事件或兜底超时
         });
       } else {
-        // Unix: SIGTERM + 5 秒超时兜底 SIGKILL
+        // Unix: SIGTERM + 5 秒后兜底 SIGKILL
         child.kill('SIGTERM');
-        const killTimer = setTimeout(() => {
+        killTimer = setTimeout(() => {
           try {
             child.kill('SIGKILL');
           } catch {
             // 进程可能已退出
           }
         }, 5000);
-        child.once('exit', () => {
-          clearTimeout(killTimer);
-        });
       }
     });
   }

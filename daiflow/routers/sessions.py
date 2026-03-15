@@ -3,7 +3,7 @@ import json
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from daiflow.config import SESSIONS_DIR, safe_filename
@@ -18,10 +18,11 @@ router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 async def get_running_sessions(db: AsyncSession = Depends(get_db)):
     """Return count of currently running sessions (for desktop close protection)."""
     result = await db.execute(
-        select(Session).where(Session.status == SessionStatus.RUNNING)
+        select(func.count()).select_from(Session).where(
+            Session.status == SessionStatus.RUNNING
+        )
     )
-    sessions = result.scalars().all()
-    return {"count": len(sessions)}
+    return {"count": result.scalar()}
 
 
 @router.get("")

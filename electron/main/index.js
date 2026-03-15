@@ -2,7 +2,7 @@ const { app, BrowserWindow, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
-const { ensurePythonEnv } = require('./python-env');
+const { ensurePythonEnv, runMigrations } = require('./python-env');
 const { findAvailablePort } = require('./port-manager');
 const { startBackend, waitForBackend } = require('./backend');
 
@@ -40,37 +40,6 @@ if (!gotTheLock) {
   });
 
   app.whenReady().then(onAppReady);
-}
-
-// ─── Alembic 数据库迁移 ───
-async function runMigrations(venvDir) {
-  const { execFile } = require('child_process');
-  const { promisify } = require('util');
-  const execFileAsync = promisify(execFile);
-  const { getPythonPath } = require('./python-env');
-
-  const pythonPath = getPythonPath(venvDir);
-  const alembicDir = path.join(APP_ROOT, 'alembic');
-
-  // 仅当 alembic 目录存在时执行迁移
-  if (!fs.existsSync(alembicDir)) {
-    console.log('[migration] alembic directory not found, skipping');
-    return;
-  }
-
-  console.log('[migration] Running alembic upgrade head...');
-  await execFileAsync(pythonPath, [
-    '-m', 'alembic', 'upgrade', 'head'
-  ], {
-    cwd: APP_ROOT,
-    env: {
-      ...process.env,
-      DAIFLOW_HOME: DATA_DIR,
-      PATH: path.dirname(pythonPath) + path.delimiter + (process.env.PATH || ''),
-    },
-    timeout: 60000,
-  });
-  console.log('[migration] Done');
 }
 
 // ─── 应用启动 ───
@@ -111,7 +80,7 @@ async function onAppReady() {
 
     // 3. 数据库迁移
     sendStatus('正在更新数据库...');
-    await runMigrations(venvDir);
+    await runMigrations(APP_ROOT, venvDir, DATA_DIR);
 
     // 4. 端口分配
     sendStatus('正在分配端口...');
