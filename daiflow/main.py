@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
+from importlib.metadata import version as pkg_version
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -111,7 +112,7 @@ async def lifespan(app: FastAPI):
     stop_monitor()
 
 
-app = FastAPI(title="DaiFlow", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="DaiFlow", version=pkg_version("daiflow"), lifespan=lifespan)
 
 # CORS — restrict to local dev origins
 _allowed_origins = os.environ.get(
@@ -137,7 +138,11 @@ app.include_router(ws.router)
 
 # Serve React build as static files (production mode)
 static_dir = Path(__file__).parent / "static"
+logger.info(f"Static directory path: {static_dir}")
+logger.info(f"Static directory exists: {static_dir.exists()}")
+
 if static_dir.exists():
+    logger.info(f"Serving static files from: {static_dir}")
     # Mount static assets (js, css, images, etc.)
     app.mount("/assets", StaticFiles(directory=str(static_dir / "assets")), name="assets")
 
@@ -155,3 +160,5 @@ if static_dir.exists():
             return FileResponse(file_path)
         # Otherwise return index.html for client-side routing
         return FileResponse(static_dir / "index.html")
+else:
+    logger.warning(f"Static directory not found: {static_dir}")

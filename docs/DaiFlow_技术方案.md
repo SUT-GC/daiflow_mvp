@@ -1,7 +1,7 @@
 # DaiFlow 技术方案文档
 
 > 版本：v0.1 MVP
-> 更新时间：2026-03-11
+> 更新时间：2026-03-15
 
 ---
 
@@ -119,6 +119,7 @@ CREATE TABLE project_repos (
     repo_type        TEXT,              -- frontend / backend / custom
     repo_type_label  TEXT,              -- custom 时人工输入的类型名称
     description      TEXT,              -- 仓库介绍，供 AI 参考
+    master_hash      TEXT DEFAULT '',   -- 最近一次已知的 master/main HEAD hash
     created_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (project_id) REFERENCES projects(id)
 );
@@ -145,8 +146,6 @@ CREATE TABLE tasks (
     -- 5 = coding        编码中
     -- 6 = reviewing     代码审查中
     -- 7 = done          已提交 MR
-    plan_cody_session_id TEXT,         -- 技术方案+任务拆解共享的 Cody session id（Cody SDK 返回）
-    review_cody_session_id TEXT,      -- 代码审查阶段独立的 Cody session id
     mr_info         TEXT,              -- MR 相关信息，JSON
     created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -164,8 +163,10 @@ CREATE TABLE todos (
     title       TEXT NOT NULL,
     description TEXT,              -- 详细描述
     status      INTEGER DEFAULT 0,
-    -- status 枚举：0 = pending / 1 = running / 2 = done / 3 = failed
+    -- status 枚举：0 = pending / 1 = running / 2 = done / 3 = failed / 4 = skipped
     cody_session_id TEXT,          -- 该 todo 对应的 Cody session id（Cody SDK 返回）
+    commit_before TEXT DEFAULT '', -- JSON: {"repo_path": "hash", ...} 执行前各仓库 HEAD
+    commit_after  TEXT DEFAULT '', -- JSON: {"repo_path": "hash", ...} 执行后各仓库 HEAD
     result      TEXT,              -- 执行结果摘要
     created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -191,6 +192,7 @@ CREATE TABLE settings (
 | `cody_base_url` | 模型 API 地址，如 `https://open.bigmodel.cn/api/paas/v4/` |
 | `cody_api_key` | API Key |
 | `theme` | 界面主题，`dark`（默认）或 `light` |
+| `language` | 输出语言，`zh`（中文）或 `en`（英文） |
 
 ### 2.6 sessions 统一会话表
 
@@ -208,9 +210,10 @@ DaiFlow 中所有 AI 交互场景（项目初始化、技术方案、Todo 拆解
 ```sql
 CREATE TABLE sessions (
     session_id       TEXT PRIMARY KEY,  -- DaiFlow 业务 ID，如 "init:proj_1:frontend_structure"
+    task_id          TEXT,              -- 关联 tasks.id（可为空，init 类型时为 NULL）
     cody_session_id  TEXT,              -- Cody SDK 返回的对话 ID
     type             TEXT NOT NULL,     -- 类型：init / plan / todo_split / todo_exec / review
-    ref_id           TEXT NOT NULL,     -- 关联的业务实体 ID（project_id 或 task_id 或 todo_id）
+    ref_id           TEXT,              -- 关联的业务实体 ID（project_id 或 task_id 或 todo_id）
     layer            INTEGER,           -- 初始化场景的层级：1/2/3/4，其他场景为 NULL
     status           INTEGER DEFAULT 0,
     -- status 枚举：0 = waiting / 1 = running / 2 = done / 3 = failed
@@ -233,6 +236,38 @@ CREATE TABLE sessions (
 | Todo 编码执行 | `task:{task_id}:todo:{todo_id}` | todo_exec | todo_id |
 | Code Review | `task:{task_id}:review` | review | task_id |
 
+### 2.7 jobs 定时任务表
+
+```sql
+CREATE TABLE jobs (
+    id          TEXT PRIMARY KEY,  -- UUID
+    project_id  TEXT NOT NULL,     -- 关联 projects.id
+    type        TEXT NOT NULL,     -- 任务类型，如 "repo_monitor"
+    enabled     INTEGER DEFAULT 1, -- 是否启用，1=是 0=否
+    interval    INTEGER,           -- 执行间隔（秒）
+    config      TEXT,              -- JSON 配置
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (project_id) REFERENCES projects(id)
+);
+```
+
+### 2.8 job_runs 任务运行记录表
+
+```sql
+CREATE TABLE job_runs (
+    id          TEXT PRIMARY KEY,  -- UUID
+    job_id      TEXT NOT NULL,     -- 关联 jobs.id
+    status      INTEGER DEFAULT 0,
+    -- status 枚举（JobRunStatus）：0 = running / 1 = success / 2 = failed
+    result      TEXT,              -- JSON 运行结果
+    error       TEXT,              -- 失败时的错误信息
+    started_at  DATETIME,
+    finished_at DATETIME,
+    FOREIGN KEY (job_id) REFERENCES jobs(id)
+);
+```
+
 ---
 
 ## 三、后端设计
@@ -243,23 +278,43 @@ CREATE TABLE sessions (
 daiflow/
 ├── main.py                  # FastAPI 入口，挂载静态文件
 ├── database.py              # SQLAlchemy 初始化
-├── models.py                # ORM 模型
+├── models.py                # ORM 模型（8 张表）
+├── schemas.py               # Pydantic 请求/响应模型
 ├── config.py                # 全局配置（daiflow 根目录路径等）
 ├── ws_manager.py            # WSManager 进程内 pub/sub 消息总线（WebSocket）
 ├── session_runner.py        # SessionRunner 统一 AI 任务执行器
+├── agent_executor.py        # Agent 统一执行器 + Chat 准备
+├── session_ids.py           # Session ID 构造辅助函数
+├── cli.py                   # CLI 入口（daiflow start）
+├── agents/                  # Agent 配置注册
+│   ├── __init__.py          # AgentConfig 基类 + 注册机制
+│   ├── plan_agent.py        # 技术方案 Agent
+│   ├── todo_split_agent.py  # 任务拆解 Agent
+│   ├── todo_exec_agent.py   # Todo 执行 Agent
+│   ├── review_agent.py      # 代码审查 Agent
+│   └── init_agent.py        # 项目初始化 Agent
+├── workflow/                # 状态机
+│   ├── orchestrator.py      # 阶段转换编排器
+│   ├── task_machine.py      # TaskWorkflow 状态机
+│   └── todo_machine.py      # TodoWorkflow 状态机
 ├── routers/
 │   ├── settings.py          # 配置相关 API
 │   ├── projects.py          # 项目相关 API
 │   ├── tasks.py             # 任务相关 API
 │   ├── todos.py             # Todo 相关 API
 │   ├── sessions.py          # 统一 Session API（status / logs）
+│   ├── jobs.py              # 定时任务 CRUD + 运行记录 + 触发
 │   └── ws.py                # WebSocket 端点（单连接多路复用）
 ├── services/
 │   ├── project_service.py   # 项目业务逻辑（含初始化 4 层编排）
 │   ├── task_service.py      # 任务业务逻辑
 │   ├── cody_service.py      # Cody SDK 封装（build_cody_client）
+│   ├── chat_service.py      # 阶段对话公共逻辑
 │   ├── git_service.py       # git 操作封装
-│   └── skill_service.py     # Skill 管理（同步、mock 拉取）
+│   ├── review_service.py    # 代码审查（Diff 聚合、提交信息、MR）
+│   ├── skill_service.py     # Skill 管理（同步、mock 拉取）
+│   ├── repo_monitor.py      # 仓库监控定时任务
+│   └── settings_service.py  # 设置读写辅助
 └── static/                  # React 构建产物（前端打包后放这里）
 ```
 
@@ -636,7 +691,9 @@ git_service.push(local_path, branch)               # git push
 | PUT | `/api/projects/{id}` | 更新项目 |
 | DELETE | `/api/projects/{id}` | 删除项目 |
 | POST | `/api/projects/{id}/init` | 触发项目初始化（批量创建 sessions + 后台任务，立即返回 sessions 列表） |
+| POST | `/api/projects/{id}/init/retry` | 重试失败的初始化 session |
 | GET | `/api/projects/{id}/init/sessions` | 查询该项目所有初始化 sessions（按 layer 分组） |
+| GET | `/api/projects/{id}/knowledge` | 获取项目知识库内容 |
 
 #### 任务相关
 
@@ -645,10 +702,14 @@ git_service.push(local_path, branch)               # git push
 | GET | `/api/tasks` | 获取任务列表 |
 | POST | `/api/tasks` | 创建任务（含初始化：同步 skill + 切分支） |
 | GET | `/api/tasks/{id}` | 获取任务详情 |
+| PUT | `/api/tasks/{id}` | 更新任务 |
 | DELETE | `/api/tasks/{id}` | 删除任务 |
+| POST | `/api/tasks/{id}/confirm-init` | 确认初始化完成，进入方案阶段 |
+| POST | `/api/tasks/{id}/retry-init` | 重试失败的初始化 |
+| GET | `/api/tasks/{id}/init/sessions` | 查询任务初始化 sessions |
 | POST | `/api/tasks/{id}/lock-plan` | 锁定技术方案，进入任务拆解 |
-| POST | `/api/tasks/{id}/start-coding` | 确认 todo，task status → 4 |
-| POST | `/api/tasks/{id}/start-review` | 所有 todo 完成后进入审查，task status → 6 |
+| POST | `/api/tasks/{id}/start-coding` | 确认 todo，task status → CODING |
+| POST | `/api/tasks/{id}/start-review` | 所有 todo 完成后进入审查，task status → REVIEWING |
 
 #### 开发流程
 
@@ -658,16 +719,33 @@ git_service.push(local_path, branch)               # git push
 | POST | `/api/tasks/{id}/todo` | 触发生成 todo 列表（后台任务） |
 | GET | `/api/tasks/{id}/todos` | 获取 todo 列表 |
 | POST | `/api/todos/{id}/execute` | 触发执行单个 todo（后台任务） |
-| GET | `/api/tasks/{id}/diff` | 获取整体 git diff |
-| POST | `/api/tasks/{id}/submit-mr` | 生成 commit message 并提交 MR |
+| POST | `/api/todos/{id}/skip` | 跳过单个 todo |
+| GET | `/api/todos/{id}/diff` | 获取单个 todo 的 git diff |
+| GET | `/api/tasks/{id}/diff` | 获取整体 git diff（所有仓库聚合） |
+| POST | `/api/tasks/{id}/generate-commit-message` | AI 生成 commit message |
+| POST | `/api/tasks/{id}/submit-mr` | 提交 MR（commit + push） |
 
 #### 统一 Session API + WebSocket（所有 AI 任务通用）
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
+| GET | `/api/sessions` | 查询 session 列表 |
 | GET | `/api/sessions/{session_id}/status` | 查询 session 状态（从 DB 读，支持刷新恢复） |
 | GET | `/api/sessions/{session_id}/logs` | 获取历史日志（从 .jsonl 文件读，支持回放） |
 | WS | `/api/ws` | WebSocket 单连接多路复用（subscribe 频道实时接收 + chat 双向通信） |
+
+#### 定时任务
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/jobs` | 获取定时任务列表 |
+| POST | `/api/jobs` | 创建定时任务 |
+| PUT | `/api/jobs/{id}` | 更新定时任务 |
+| DELETE | `/api/jobs/{id}` | 删除定时任务 |
+| GET | `/api/jobs/{id}/runs` | 获取任务执行记录 |
+| GET | `/api/jobs/runs/recent` | 获取最近执行记录 |
+| POST | `/api/jobs/{id}/trigger` | 手动触发定时任务 |
+| POST | `/api/jobs/trigger-all` | 触发所有启用的任务 |
 
 ---
 
@@ -678,35 +756,63 @@ git_service.push(local_path, branch)               # git push
 ```
 src/
 ├── pages/
-│   ├── Settings/            # 全局配置页（model / base_url / api_key / theme）
+│   ├── Settings/            # 全局配置页（model / base_url / api_key / theme / language）
 │   ├── Projects/            # 项目管理页
+│   │   ├── Projects.tsx     # 项目列表
+│   │   ├── CreateProject.tsx # 创建项目
+│   │   ├── EditProject.tsx  # 编辑项目
+│   │   ├── ProjectForm.tsx  # 项目表单组件
+│   │   ├── ProjectInit.tsx  # 项目初始化页
+│   │   └── ProjectKnowledge.tsx # 项目知识库查看
 │   ├── Tasks/               # 任务管理页
+│   ├── Debug/               # 调试页面
 │   └── DevFlow/             # 开发流程页
+│       ├── InitStage/       # 初始化阶段
 │       ├── PlanStage/       # 技术方案阶段
 │       ├── TodoStage/       # 任务拆解阶段
 │       ├── CodingStage/     # 编写代码阶段
 │       └── ReviewStage/     # 代码审查阶段
 ├── components/
-│   ├── StageProgress/       # 顶部阶段进度条
+│   ├── Shell/               # 应用外壳（侧边栏 + 导航 + Topbar）
+│   ├── StageLayout/         # 阶段统一布局组件
+│   ├── StageProgress/       # 顶部阶段进度条（5 阶段步进器）
 │   ├── ChatPanel/           # 右侧 AI 对话框（通用）
-│   ├── MarkdownViewer/      # Markdown 渲染
-│   ├── DiffViewer/          # 代码 diff 展示（react-diff-viewer）
-│   ├── TodoList/            # Todo 列表
-│   └── StreamLog/           # 执行过程展示
+│   ├── ToolGroupBlock/      # 工具调用分组渲染
+│   ├── MarkdownViewer/      # Markdown 渲染（react-markdown + 语法高亮）
+│   ├── DiffViewer/          # 代码 diff 展示（unified / split 模式）
+│   ├── ResizableSplitPane/  # 左右可拖拽分割面板
+│   ├── Modal/               # Portal 弹窗组件
+│   ├── Loading/             # 加载动画
+│   ├── DevFlowGuard/        # DevFlow 阶段路由守卫
+│   ├── ErrorBoundary/       # 全局错误边界
+│   ├── StageErrorBoundary/  # 阶段级错误边界
+│   └── SessionLogModal/     # Session 日志详情弹窗
 ├── hooks/
+│   ├── useAgent.ts          # AI 交互组合 Hook（useSession + useStageChat + useStaleDetection）
 │   ├── useSession.ts        # 统一 Session 封装（状态恢复 + 日志回放 + WebSocket 续接）
 │   ├── useStageChat.ts      # 通用阶段对话 Hook（各阶段 chat 的公共逻辑）
+│   ├── useStaleDetection.ts # Session 超时检测（5 分钟无事件告警）
 │   ├── useInitProgress.ts   # 初始化进度 Hook（项目级 WebSocket 总线）
 │   ├── usePlanStage.ts      # 技术方案 Hook（plan 内容 + 对话 + plan_updated）
 │   ├── useTodoStage.ts      # 任务拆解 Hook（todo 列表 + 对话 + todo_updated）
 │   ├── useCodingStage.ts    # 编码 Hook（todo 执行 + diff + 对话 + code_updated）
-│   └── useChat.ts           # 对话逻辑封装
+│   ├── useCommitModal.ts    # Commit 提交逻辑（生成 message + 提交 MR）
+│   ├── useTheme.ts          # 主题切换（dark / light）
+│   └── useLocale.ts         # 国际化（en / zh）
 ├── ws/
-│   ├── WebSocketClient.ts   # 单例 WebSocket 客户端（连接管理 + 频道订阅 + chat）
-│   ├── useWebSocket.ts      # App 级 WebSocket 连接生命周期 Hook
-│   └── index.ts             # barrel export
-└── api/
-    └── index.ts             # API 请求封装
+│   └── WebSocketClient.ts   # 单例 WebSocket 客户端（连接管理 + 频道订阅 + chat）
+├── api/
+│   └── index.ts             # API 请求封装
+├── i18n/
+│   ├── en.ts                # 英文翻译
+│   └── zh.ts                # 中文翻译
+├── types/
+│   └── enums.ts             # 状态枚举镜像（TaskStatus / TodoStatus / SessionStatus）
+├── utils/
+│   ├── sessionIds.ts        # Session ID 构造（镜像后端）
+│   └── taskStages.ts        # 阶段映射工具
+└── styles/
+    └── global.css           # 全局样式 + 设计令牌
 ```
 
 ### 4.2 启动配置检查

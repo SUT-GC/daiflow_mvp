@@ -1,7 +1,7 @@
 # DaiFlow MVP 验收文档
 
 > 版本：v0.1 MVP
-> 更新时间：2026-03-11
+> 更新时间：2026-03-15
 
 ---
 
@@ -21,7 +21,7 @@
 | 项目 | 要求 |
 |------|------|
 | Python | 3.11+ |
-| Node.js | 16+ |
+| Node.js | 18+ |
 | Git | 已安装，且有可用的本地代码仓库 |
 | AI 模型 | 可用的模型 API（model 名称、base_url、api_key） |
 | 测试仓库 | 至少准备一个前端仓库 + 一个后端仓库，已 clone 到本地 |
@@ -34,7 +34,7 @@
 
 | 编号 | 用例 | 操作步骤 | 预期结果 | 通过 |
 |------|------|---------|---------|------|
-| S-01 | 首次启动 | 执行 `daiflow start` | 1. 自动创建 `~/.daiflow/` 目录<br>2. 初始化 SQLite 数据库（6 张表）<br>3. 启动 FastAPI 服务，监听 `http://localhost:8000`<br>4. 自动打开浏览器 | ☐ |
+| S-01 | 首次启动 | 执行 `daiflow start` | 1. 自动创建 `~/.daiflow/` 目录<br>2. 初始化 SQLite 数据库（8 张表）<br>3. 启动 FastAPI 服务，监听 `http://localhost:8000`<br>4. 自动打开浏览器 | ☐ |
 | S-02 | 首次访问重定向 | 浏览器访问 `http://localhost:8000` | 未配置 AI 模型时，自动跳转到 `/settings` 配置页 | ☐ |
 | S-03 | 再次启动 | 关闭服务后再次执行 `daiflow start` | 不重复创建目录和数据库，正常启动，数据保留 | ☐ |
 
@@ -187,7 +187,7 @@
 
 | 编号 | 用例 | 验证项 | 通过 |
 |------|------|--------|------|
-| D-01 | 表结构 | 确认 6 张表已正确创建：projects、project_repos、tasks、todos、settings、project_init_sessions | ☐ |
+| D-01 | 表结构 | 确认 8 张表已正确创建：projects、project_repos、tasks、todos、sessions、settings、jobs、job_runs | ☐ |
 | D-02 | 外键关系 | project_repos.project_id → projects.id<br>tasks.project_id → projects.id<br>todos.task_id → tasks.id<br>project_init_sessions.project_id → projects.id | ☐ |
 | D-03 | 状态枚举一致性 | tasks.status 使用 0-7 枚举，todos.status 使用 0-3 枚举，project_init_sessions.status 使用 0-3 枚举 | ☐ |
 
