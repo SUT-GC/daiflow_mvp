@@ -48,7 +48,7 @@ export function useCommitModal({ taskId, taskName, onSuccess, onError }: UseComm
     } finally {
       setSubmitting(false)
     }
-  }, [taskId, commitMessage, onSuccess])
+  }, [taskId, commitMessage, onSuccess, onError])
 
   return {
     open,

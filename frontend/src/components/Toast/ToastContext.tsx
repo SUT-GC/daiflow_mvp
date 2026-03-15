@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useState } from 'react'
+import { createContext, useCallback, useContext, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import './Toast.css'
 
@@ -43,17 +43,20 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     setToasts(prev => prev.filter(t => t.id !== id))
   }, [])
 
-  const value: ToastContextValue = {
-    success: useCallback((msg: string) => add('success', msg), [add]),
-    error: useCallback((msg: string) => add('error', msg), [add]),
-    warning: useCallback((msg: string) => add('warning', msg), [add]),
-    info: useCallback((msg: string) => add('info', msg), [add]),
-  }
+  const success = useCallback((msg: string) => add('success', msg), [add])
+  const error = useCallback((msg: string) => add('error', msg), [add])
+  const warning = useCallback((msg: string) => add('warning', msg), [add])
+  const info = useCallback((msg: string) => add('info', msg), [add])
+
+  const value = useMemo<ToastContextValue>(
+    () => ({ success, error, warning, info }),
+    [success, error, warning, info],
+  )
 
   return (
     <ToastContext.Provider value={value}>
       {children}
-      {createPortal(
+      {toasts.length > 0 && createPortal(
         <div className="toast-container">
           {toasts.map(t => (
             <div key={t.id} className={`toast toast-${t.type}`} onClick={() => dismiss(t.id)}>
