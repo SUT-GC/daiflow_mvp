@@ -142,6 +142,29 @@ Electron Main Process
   └── 兜底 SIGKILL / taskkill
 ```
 
+### 版本管理
+
+版本号统一维护在根目录 `VERSION` 文件中（semver 格式），通过脚本一键同步到所有子模块：
+
+```bash
+# 升级版本（例如升到 0.6.0）
+./scripts/bump-version.sh 0.6.0
+
+# 重新安装 Python 包，使后端版本号生效
+pip install -e .
+```
+
+**脚本会更新以下文件：**
+
+| 文件 | 用途 |
+|------|------|
+| `VERSION` | 唯一版本来源 |
+| `frontend/package.json` | 前端 npm 版本 |
+| `frontend/package-lock.json` | lock 文件一致性 |
+| `electron/package.json` | 桌面端版本 |
+
+Python 侧通过 `pyproject.toml` 的 `dynamic = ["version"]` 直接读取 `VERSION` 文件，无需手动编辑，但需要 `pip install -e .` 刷新安装元数据。
+
 ### 首次使用
 
 1. 进入 Settings 页面，配置 AI 模型、Base URL、API Key
