@@ -4,11 +4,13 @@ import MarkdownViewer from '../../../components/MarkdownViewer/MarkdownViewer'
 import { usePlanStage } from '../../../hooks/usePlanStage'
 import { lockPlan, triggerPlan } from '../../../api'
 import { useLocale } from '../../../hooks/useLocale'
+import { useToast } from '../../../components/Toast/ToastContext'
 
 export default function PlanStage() {
   const { taskId } = useParams()
   const navigate = useNavigate()
   const { t } = useLocale()
+  const toast = useToast()
   const { task, planContent, status, messages, sendMessage, responding, regenerating, refreshSession, isStale } = usePlanStage(taskId)
 
   const readonly = task ? isStageReadonly(task.status, 2) : false
@@ -25,7 +27,7 @@ export default function PlanStage() {
       await lockPlan(taskId)
       navigate(`/devflow/${taskId}/todo`)
     } catch (err: any) {
-      console.error('Failed to lock plan:', err)
+      toast.error(err.message || t('toast.operation_failed'))
     }
   }
 

@@ -267,6 +267,9 @@ const zh: Record<TranslationKey, string> = {
   // Stale session
   'stale.message': '会话可能已中断 — 超过 5 分钟无活动。',
   'stale.retry': '重试',
+
+  // Toast
+  'toast.operation_failed': '操作失败',
 }
 
 export default zh

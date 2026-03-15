@@ -21,6 +21,7 @@ import ErrorBoundary from './components/ErrorBoundary/ErrorBoundary'
 import { ThemeContext, useThemeProvider } from './hooks/useTheme'
 import { LocaleContext, useLocaleProvider } from './hooks/useLocale'
 import { useWebSocket } from './ws'
+import { ToastProvider } from './components/Toast/ToastContext'
 
 // Cache settings check result to avoid repeated API calls
 const SettingsContext = createContext<{ configured: boolean; model: string; recheck: () => void }>({
@@ -72,6 +73,7 @@ export default function App() {
     <BrowserRouter>
       <ThemeContext.Provider value={themeValue}>
       <LocaleContext.Provider value={localeValue}>
+      <ToastProvider>
       <SettingsProvider>
         <Shell>
           <ErrorBoundary>
@@ -94,6 +96,7 @@ export default function App() {
           </ErrorBoundary>
         </Shell>
       </SettingsProvider>
+      </ToastProvider>
       </LocaleContext.Provider>
       </ThemeContext.Provider>
     </BrowserRouter>

@@ -3,6 +3,8 @@
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, patch
 
+from daiflow.models import Session, SessionStatus
+
 
 async def _create_project(client):
     resp = await client.post("/api/projects", json={"name": "TestProj"})
@@ -534,3 +536,57 @@ class TestInitTaskFailure:
         # sync_skills session should still be WAITING
         skills_session = await db_session.get(Session, f"task:{task_id}:init:sync_skills")
         assert skills_session.status == SessionStatus.WAITING
+
+
+class TestProjectLockOnCreateTask:
+    """Test that task creation is blocked when project init is running."""
+
+    @_mock_bg
+    async def test_create_task_blocked_during_init(self, mock_init, client, db_session):
+        """Cannot create a task when project knowledge is being generated."""
+        pid = await _create_project(client)
+
+        # Simulate running init session
+        db_session.add(Session(
+            session_id=f"init:{pid}:frontend-structure", type="init", ref_id=pid,
+            layer=2, status=SessionStatus.RUNNING,
+        ))
+        await db_session.commit()
+
+        resp = await client.post("/api/tasks", json={
+            "name": "Task 1", "project_id": pid,
+        })
+        assert resp.status_code == 409
+        assert "knowledge" in resp.json()["detail"].lower()
+
+    @_mock_bg
+    async def test_create_task_blocked_during_init_waiting(self, mock_init, client, db_session):
+        """Cannot create a task when init sessions are waiting."""
+        pid = await _create_project(client)
+
+        db_session.add(Session(
+            session_id=f"init:{pid}:backend-structure", type="init", ref_id=pid,
+            layer=2, status=SessionStatus.WAITING,
+        ))
+        await db_session.commit()
+
+        resp = await client.post("/api/tasks", json={
+            "name": "Task 1", "project_id": pid,
+        })
+        assert resp.status_code == 409
+
+    @_mock_bg
+    async def test_create_task_allowed_after_init_done(self, mock_init, client, db_session):
+        """Can create a task when all init sessions are done."""
+        pid = await _create_project(client)
+
+        db_session.add(Session(
+            session_id=f"init:{pid}:frontend-structure", type="init", ref_id=pid,
+            layer=2, status=SessionStatus.DONE,
+        ))
+        await db_session.commit()
+
+        resp = await client.post("/api/tasks", json={
+            "name": "Task 1", "project_id": pid,
+        })
+        assert resp.status_code == 200

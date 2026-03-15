@@ -4,6 +4,7 @@ import Topbar from '../../../components/Shell/Topbar'
 import StageProgress from '../../../components/StageProgress/StageProgress'
 import { getTask, getTaskInitSessions, confirmInit, retryTaskInit, type TaskData, type InitSessionData } from '../../../api'
 import { useLocale } from '../../../hooks/useLocale'
+import { useToast } from '../../../components/Toast/ToastContext'
 import { sessionIds } from '../../../utils/sessionIds'
 import { wsClient, type WSEvent } from '../../../ws'
 import type { TranslationKey } from '../../../i18n'
@@ -21,6 +22,7 @@ export default function InitStage() {
   const { taskId } = useParams()
   const navigate = useNavigate()
   const { t } = useLocale()
+  const toast = useToast()
   const [task, setTask] = useState<TaskData | null>(null)
   const [sessions, setSessions] = useState<InitSessionData[]>([])
   const [confirming, setConfirming] = useState(false)
@@ -110,8 +112,8 @@ export default function InitStage() {
     try {
       await confirmInit(taskId)
       navigate(`/devflow/${taskId}/plan`)
-    } catch (err) {
-      console.error('Failed to confirm init:', err)
+    } catch (err: any) {
+      toast.error(err.message || t('toast.operation_failed'))
       setConfirming(false)
     }
   }
@@ -123,8 +125,8 @@ export default function InitStage() {
       await retryTaskInit(taskId)
       // Reload to get fresh session data
       await loadData()
-    } catch (err) {
-      console.error('Failed to retry init:', err)
+    } catch (err: any) {
+      toast.error(err.message || t('toast.operation_failed'))
     } finally {
       setRetrying(false)
     }

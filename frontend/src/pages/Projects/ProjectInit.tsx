@@ -5,6 +5,7 @@ import SessionLogModal from '../../components/SessionLogModal/SessionLogModal'
 import { useInitProgress, type InitSession } from '../../hooks/useInitProgress'
 import { getProject, retryProjectInit, initProject } from '../../api'
 import { useLocale } from '../../hooks/useLocale'
+import { useToast } from '../../components/Toast/ToastContext'
 import type { TranslationKey } from '../../i18n'
 import './ProjectInit.css'
 
@@ -29,6 +30,7 @@ export default function ProjectInit() {
   const { projectId } = useParams()
   const navigate = useNavigate()
   const { t } = useLocale()
+  const toast = useToast()
   const { layers, done } = useInitProgress(projectId || null)
   const [projectName, setProjectName] = useState('')
 
@@ -88,8 +90,8 @@ export default function ProjectInit() {
     try {
       await retryProjectInit(projectId)
       window.location.reload()
-    } catch (err) {
-      console.error('Retry failed:', err)
+    } catch (err: any) {
+      toast.error(err.message || t('toast.operation_failed'))
       setRetrying(false)
     }
   }
@@ -100,8 +102,8 @@ export default function ProjectInit() {
     try {
       await initProject(projectId)
       window.location.reload()
-    } catch (err) {
-      console.error('Regenerate failed:', err)
+    } catch (err: any) {
+      toast.error(err.message || t('toast.operation_failed'))
       setRegenerating(false)
     }
   }

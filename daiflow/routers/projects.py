@@ -9,13 +9,39 @@ from sqlalchemy.orm import selectinload
 
 from daiflow.config import PROJECTS_DIR
 from daiflow.database import get_db
-from daiflow.models import Project, ProjectRepo, Session
+from daiflow.models import Project, ProjectRepo, Session, Task, TaskStatus
 from daiflow.schemas import ProjectCreate, ProjectResponse, ProjectUpdate
 from daiflow.services.project_service import (
     get_init_layer_status, prepare_init_sessions, run_init, run_init_retry,
 )
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
+
+# Task statuses that indicate active development (block knowledge regeneration)
+_ACTIVE_TASK_STATUSES = [
+    TaskStatus.INITIALIZING,
+    TaskStatus.PLANNING,
+    TaskStatus.PLAN_LOCKED,
+    TaskStatus.TODO_READY,
+    TaskStatus.CODING,
+    TaskStatus.REVIEWING,
+]
+
+
+async def _check_no_active_tasks(db: AsyncSession, project_id: str):
+    """Raise 409 if the project has tasks in active development."""
+    result = await db.execute(
+        select(Task).where(
+            Task.project_id == project_id,
+            Task.status.in_(_ACTIVE_TASK_STATUSES),
+        )
+    )
+    active = result.scalars().first()
+    if active:
+        raise HTTPException(
+            status_code=409,
+            detail="Project has active tasks in development. Please wait for them to finish before regenerating knowledge.",
+        )
 
 
 def _project_to_dict(p: Project, repos: list | None = None) -> dict:
@@ -166,6 +192,8 @@ async def init_project(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
+    await _check_no_active_tasks(db, project_id)
+
     repos_result = await db.execute(
         select(ProjectRepo).where(ProjectRepo.project_id == project_id)
     )
@@ -190,6 +218,8 @@ async def retry_init(
     project = await db.get(Project, project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
+
+    await _check_no_active_tasks(db, project_id)
 
     # Find failed sessions
     result = await db.execute(
