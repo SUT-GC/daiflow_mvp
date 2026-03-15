@@ -1,10 +1,15 @@
-const { execFile, spawn } = require('child_process');
+const { execFile } = require('child_process');
 const { promisify } = require('util');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 
+const { runProcess } = require('./process-runner');
+
 const execFileAsync = promisify(execFile);
+
+// ─── Python 最低版本要求 ───
+const MIN_PYTHON_VERSION = [3, 11];
 
 /**
  * 候选 Python 命令列表（按平台）。
@@ -45,15 +50,26 @@ function parseVersion(versionStr) {
 }
 
 /**
+ * 检查 Python 版本是否满足最低要求。
+ * @param {number[]} version - [major, minor, patch]
+ * @param {number[]} minVersion - [major, minor]
+ */
+function meetsMinVersion(version, minVersion = MIN_PYTHON_VERSION) {
+  if (!version) return false;
+  return version[0] > minVersion[0]
+    || (version[0] === minVersion[0] && version[1] >= minVersion[1]);
+}
+
+/**
  * 获取内置 Python 的路径（如果应用已打包）。
  * 根据当前架构选择对应的 Python 版本。
  */
 function getBundledPythonPath() {
   const { app } = require('electron');
+  const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
 
   if (!app.isPackaged) {
     // 开发模式：检查本地 python-runtime 目录
-    const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
     const devPythonPath = path.join(__dirname, '..', 'python-runtime', `darwin-${arch}`, 'bin', 'python3');
     if (fs.existsSync(devPythonPath)) {
       return devPythonPath;
@@ -62,7 +78,6 @@ function getBundledPythonPath() {
   }
 
   // 打包模式：从 resources 目录获取
-  const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
   const bundledPythonPath = path.join(
     process.resourcesPath,
     `python-${arch}`,
@@ -85,7 +100,7 @@ async function findPython() {
       const result = await execFileAsync(bundledPython, ['--version'], { timeout: 5000 });
       const output = result.stdout || result.stderr;
       const version = parseVersion(output);
-      if (version && (version[0] > 3 || (version[0] === 3 && version[1] >= 11))) {
+      if (meetsMinVersion(version)) {
         console.log(`[python] Using bundled Python: ${bundledPython} (${output.trim()})`);
         return { cmd: bundledPython, args: [] };
       }
@@ -104,7 +119,7 @@ async function findPython() {
       const result = await execFileAsync(cmd, args, { timeout: 10000 });
       const output = result.stdout || result.stderr;
       const version = parseVersion(output);
-      if (version && (version[0] > 3 || (version[0] === 3 && version[1] >= 11))) {
+      if (meetsMinVersion(version)) {
         console.log(`[python] Using system Python: ${cmd} (${output.trim()})`);
         // py launcher 需要带 -3 参数执行
         return process.platform === 'win32' && cmd === 'py'
@@ -157,106 +172,75 @@ function computeDepsHash(appRoot) {
 }
 
 /**
- * 使用 spawn 安装 pip 包，捕获实时输出并解析进度。
+ * 使用 runProcess 安装 pip 包，捕获实时输出并解析进度。
  *
- * @param {string} pipPath - pip 可执行文件路径
- * @param {string[]} args - pip 命令参数
- * @param {string} requirementsPath - requirements.txt 路径（用于预估总数）
- * @param {function} onStatus - 进度回调函数
- * @param {number} timeout - 超时时间（毫秒）
+ * @param {string}   pipPath          - pip 可执行文件路径
+ * @param {string[]} args             - pip 命令参数
+ * @param {string}   requirementsPath - requirements.txt 路径（用于预估总数）
+ * @param {function} onStatus         - 进度回调函数
+ * @param {number}   timeout          - 超时时间（毫秒）
  */
 function installPipPackages(pipPath, args, requirementsPath, onStatus, timeout) {
-  return new Promise((resolve, reject) => {
-    // 预估总包数：读取 requirements.txt 行数 × 3.5（传递依赖系数）
-    let estimatedTotal = 40;
-    if (requirementsPath && fs.existsSync(requirementsPath)) {
-      const lines = fs.readFileSync(requirementsPath, 'utf-8')
-        .split('\n')
-        .filter(line => line.trim() && !line.trim().startsWith('#'));
-      estimatedTotal = Math.ceil(lines.length * 3.5);
-    }
+  // 预估总包数：读取 requirements.txt 行数 × 3.5（传递依赖系数）
+  let estimatedTotal = 40;
+  if (requirementsPath && fs.existsSync(requirementsPath)) {
+    const lines = fs.readFileSync(requirementsPath, 'utf-8')
+      .split('\n')
+      .filter(line => line.trim() && !line.trim().startsWith('#'));
+    estimatedTotal = Math.ceil(lines.length * 3.5);
+  }
 
-    let installedCount = 0;
-    let currentPackage = '';
+  let installedCount = 0;
 
-    const pip = spawn(pipPath, args, { timeout });
+  return runProcess({
+    command: pipPath,
+    args,
+    timeout,
+    label: 'Pip install',
+    onStdout(line) {
+      // 解析包名：匹配 "Collecting <package>" 或 "Downloading <package>"
+      const collectingMatch = line.match(/Collecting\s+([^\s(]+)/);
+      const downloadingMatch = line.match(/Downloading\s+([^\s-]+)/);
 
-    // 超时处理
-    const timer = setTimeout(() => {
-      pip.kill('SIGTERM');
-      reject(new Error('Pip install timeout'));
-    }, timeout);
+      if (collectingMatch || downloadingMatch) {
+        const packageName = (collectingMatch || downloadingMatch)[1];
+        // 过滤掉版本号和特殊字符
+        const currentPackage = packageName.split('>=')[0].split('==')[0].split('<')[0];
+        installedCount++;
 
-    pip.stdout.on('data', (data) => {
-      const lines = data.toString().split('\n');
-
-      for (const line of lines) {
-        if (!line.trim()) continue;
-
-        // 解析包名：匹配 "Collecting <package>" 或 "Downloading <package>"
-        const collectingMatch = line.match(/Collecting\s+([^\s(]+)/);
-        const downloadingMatch = line.match(/Downloading\s+([^\s-]+)/);
-
-        if (collectingMatch || downloadingMatch) {
-          const packageName = (collectingMatch || downloadingMatch)[1];
-
-          // 过滤掉版本号和特殊字符
-          currentPackage = packageName.split('>=')[0].split('==')[0].split('<')[0];
-          installedCount++;
-
-          // 动态调整总数（如果超出预估）
-          if (installedCount > estimatedTotal) {
-            estimatedTotal = installedCount + 5;
-          }
-
-          onStatus({
-            type: 'progress',
-            stage: 'pip-install',
-            message: `正在安装 ${currentPackage}...`,
-            progress: {
-              current: installedCount,
-              total: estimatedTotal,
-              label: currentPackage
-            },
-            detail: line.trim()
-          });
+        // 动态调整总数（如果超出预估）
+        if (installedCount > estimatedTotal) {
+          estimatedTotal = installedCount + 5;
         }
 
-        // 发送详细日志
-        onStatus({ type: 'log', detail: line.trim() });
-      }
-    });
-
-    pip.stderr.on('data', (data) => {
-      const lines = data.toString().split('\n');
-      for (const line of lines) {
-        if (line.trim()) {
-          onStatus({ type: 'log', detail: line.trim() });
-        }
-      }
-    });
-
-    pip.on('close', (code) => {
-      clearTimeout(timer);
-      if (code === 0) {
-        resolve();
+        // progress 事件自带 detail，splash 端已在 progress handler 中 addLog
+        onStatus({
+          type: 'progress',
+          stage: 'pip-install',
+          message: `正在安装 ${currentPackage}...`,
+          progress: {
+            current: installedCount,
+            total: estimatedTotal,
+            label: currentPackage,
+          },
+          detail: line,
+        });
       } else {
-        reject(new Error(`Pip install failed with code ${code}`));
+        // 非包行：仅发送日志（避免与 progress 事件重复 addLog）
+        onStatus({ type: 'log', detail: line });
       }
-    });
-
-    pip.on('error', (err) => {
-      clearTimeout(timer);
-      reject(err);
-    });
+    },
+    onStderr(line) {
+      onStatus({ type: 'log', detail: line });
+    },
   });
 }
 
 /**
  * 确保 Python venv 就绪，返回 venv 目录路径。
  *
- * @param {string} appRoot - 项目根目录（含 requirements.txt 等）
- * @param {string} venvDir - venv 存放目录
+ * @param {string} appRoot  - 项目根目录（含 requirements.txt 等）
+ * @param {string} venvDir  - venv 存放目录
  * @param {(msg: string|object) => void} onStatus - 状态回调（更新 Splash 显示）
  */
 async function ensurePythonEnv(appRoot, venvDir, onStatus) {
@@ -324,147 +308,10 @@ function buildVenvEnv(venvDir, dataDir) {
   };
 }
 
-/**
- * 执行 Alembic 数据库迁移（upgrade head）。
- *
- * @param {string} appRoot - 项目根目录（含 alembic.ini）
- * @param {string} venvDir - venv 目录
- * @param {string} dataDir - DAIFLOW_HOME 数据目录
- * @param {function} onProgress - 进度回调函数（可选）
- */
-async function runMigrations(appRoot, venvDir, dataDir, onProgress) {
-  const alembicDir = path.join(appRoot, 'alembic');
-
-  if (!fs.existsSync(alembicDir)) {
-    console.log('[migration] alembic directory not found, skipping');
-    return;
-  }
-
-  const pythonPath = getPythonPath(venvDir);
-  const env = buildVenvEnv(venvDir, dataDir);
-
-  // 1. 检查数据库是否存在
-  const dbPath = path.join(dataDir, 'daiflow.db');
-  const dbExists = fs.existsSync(dbPath);
-
-  // 如果数据库不存在，先初始化表，然后标记所有迁移为已应用
-  if (!dbExists) {
-    console.log('[migration] Database does not exist, initializing...');
-    if (onProgress) onProgress({ type: 'status', message: '初始化数据库...' });
-
-    const initScript = path.join(appRoot, 'daiflow', 'init_db_script.py');
-    if (fs.existsSync(initScript)) {
-      await execFileAsync(pythonPath, [initScript], {
-        cwd: appRoot,
-        env,
-        timeout: 30000,
-      });
-
-      // 标记所有迁移为已应用（stamp head）
-      console.log('[migration] Marking migrations as applied...');
-      await execFileAsync(pythonPath, ['-m', 'alembic', 'stamp', 'head'], {
-        cwd: appRoot,
-        env,
-        timeout: 10000,
-      });
-
-      console.log('[migration] Database initialized successfully');
-      return; // 初始化完成，无需运行迁移
-    }
-  }
-
-  // 2. 获取迁移总数
-  const versionsDir = path.join(alembicDir, 'versions');
-  let totalMigrations = 0;
-  if (fs.existsSync(versionsDir)) {
-    const migrationFiles = fs.readdirSync(versionsDir).filter(f => f.endsWith('.py'));
-    totalMigrations = migrationFiles.length;
-  }
-
-  // 3. 运行 Alembic 迁移（使用 spawn 捕获输出）
-  console.log('[migration] Running alembic upgrade head...');
-  if (onProgress) onProgress({ type: 'status', message: '正在应用数据库迁移...' });
-
-  return new Promise((resolve, reject) => {
-    const alembic = spawn(pythonPath, ['-m', 'alembic', 'upgrade', 'head'], {
-      cwd: appRoot,
-      env,
-      timeout: 60000
-    });
-
-    let completedMigrations = 0;
-
-    // 超时处理
-    const timer = setTimeout(() => {
-      alembic.kill('SIGTERM');
-      reject(new Error('Alembic migration timeout'));
-    }, 60000);
-
-    alembic.stdout.on('data', (data) => {
-      const lines = data.toString().split('\n');
-
-      for (const line of lines) {
-        if (!line.trim()) continue;
-
-        // 解析迁移步骤：匹配 "Running upgrade ... -> <revision>, <description>"
-        const upgradeMatch = line.match(/Running upgrade .* -> \w+, (.+)/);
-        if (upgradeMatch) {
-          completedMigrations++;
-          const migrationName = upgradeMatch[1];
-
-          if (onProgress) {
-            onProgress({
-              type: 'progress',
-              stage: 'db-migrate',
-              message: `应用迁移 ${completedMigrations}/${totalMigrations}...`,
-              progress: {
-                current: completedMigrations,
-                total: totalMigrations,
-                label: migrationName
-              },
-              detail: line.trim()
-            });
-          }
-        }
-
-        // 发送详细日志
-        if (onProgress) {
-          onProgress({ type: 'log', detail: line.trim() });
-        }
-      }
-    });
-
-    alembic.stderr.on('data', (data) => {
-      const lines = data.toString().split('\n');
-      for (const line of lines) {
-        if (line.trim() && onProgress) {
-          onProgress({ type: 'log', detail: line.trim() });
-        }
-      }
-    });
-
-    alembic.on('close', (code) => {
-      clearTimeout(timer);
-      console.log('[migration] Done');
-      if (code === 0) {
-        resolve();
-      } else {
-        reject(new Error(`Alembic migration failed with code ${code}`));
-      }
-    });
-
-    alembic.on('error', (err) => {
-      clearTimeout(timer);
-      reject(err);
-    });
-  });
-}
-
 module.exports = {
   findPython,
   ensurePythonEnv,
   getPythonPath,
   getPipPath,
   buildVenvEnv,
-  runMigrations,
 };

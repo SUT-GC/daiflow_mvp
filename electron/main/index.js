@@ -2,7 +2,8 @@ const { app, BrowserWindow, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
-const { ensurePythonEnv, runMigrations } = require('./python-env');
+const { ensurePythonEnv } = require('./python-env');
+const { runMigrations } = require('./migration-runner');
 const { findAvailablePort } = require('./port-manager');
 const { startBackend, waitForBackend } = require('./backend');
 
@@ -71,8 +72,11 @@ async function onAppReady() {
     if (splashWindow && !splashWindow.isDestroyed()) {
       splashWindow.webContents.send('status', data);
     }
+    // 仅在有实际消息时输出日志（log/stage-complete 等无 message 字段的事件不输出）
     const message = typeof data === 'string' ? data : data.message;
-    console.log(`[startup] ${message}`);
+    if (message) {
+      console.log(`[startup] ${message}`);
+    }
   }
 
   try {
