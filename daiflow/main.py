@@ -111,7 +111,7 @@ async def lifespan(app: FastAPI):
     stop_monitor()
 
 
-app = FastAPI(title="DaiFlow", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="DaiFlow", version="0.5.0", lifespan=lifespan)
 
 # CORS — restrict to local dev origins
 _allowed_origins = os.environ.get(
