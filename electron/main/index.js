@@ -2,7 +2,8 @@ const { app, BrowserWindow, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
-const { ensurePythonEnv, runMigrations } = require('./python-env');
+const { ensurePythonEnv } = require('./python-env');
+const { runMigrations } = require('./migration-runner');
 const { findAvailablePort } = require('./port-manager');
 const { startBackend, waitForBackend } = require('./backend');
 
