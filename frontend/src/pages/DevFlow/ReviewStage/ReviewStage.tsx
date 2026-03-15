@@ -7,6 +7,7 @@ import { useAgent } from '../../../hooks/useAgent'
 import { useCommitModal } from '../../../hooks/useCommitModal'
 import { getTask, getTaskDiff, joinDiffs, TaskData } from '../../../api'
 import { useLocale } from '../../../hooks/useLocale'
+import { useToast } from '../../../components/Toast/ToastContext'
 import { sessionIds } from '../../../utils/sessionIds'
 import './ReviewStage.css'
 
@@ -14,6 +15,7 @@ export default function ReviewStage() {
   const { taskId } = useParams()
   const navigate = useNavigate()
   const { t } = useLocale()
+  const toast = useToast()
   const [task, setTask] = useState<TaskData | null>(null)
   const [diff, setDiff] = useState('')
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
@@ -44,7 +46,7 @@ export default function ReviewStage() {
     onUpdated,
   })
 
-  const commitModal = useCommitModal({ taskId, taskName: task?.name })
+  const commitModal = useCommitModal({ taskId, taskName: task?.name, onError: toast.error })
 
   const { additions, deletions, files } = useMemo(() => {
     const parsed = parseDiff(diff)

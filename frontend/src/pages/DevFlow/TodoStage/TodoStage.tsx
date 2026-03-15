@@ -4,6 +4,7 @@ import StageLayout, { isStageReadonly } from '../../../components/StageLayout/St
 import { useTodoStage } from '../../../hooks/useTodoStage'
 import { startCoding, triggerTodo } from '../../../api'
 import { useLocale } from '../../../hooks/useLocale'
+import { useToast } from '../../../components/Toast/ToastContext'
 import type { TodoData } from '../../../api'
 import './TodoStage.css'
 
@@ -11,6 +12,7 @@ export default function TodoStage() {
   const { taskId } = useParams()
   const navigate = useNavigate()
   const { t } = useLocale()
+  const toast = useToast()
   const { task, todos, status, messages, sendMessage, responding, refreshSession, isStale } = useTodoStage(taskId)
 
   const [selectedTodo, setSelectedTodo] = useState<TodoData | null>(null)
@@ -27,7 +29,7 @@ export default function TodoStage() {
       await startCoding(taskId)
       navigate(`/devflow/${taskId}/coding`)
     } catch (err: any) {
-      console.error('Failed to start coding:', err)
+      toast.error(err.message || t('toast.operation_failed'))
     }
   }
 

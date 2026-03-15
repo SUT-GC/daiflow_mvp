@@ -5,9 +5,10 @@ interface UseCommitModalOptions {
   taskId: string | undefined
   taskName?: string
   onSuccess?: () => void
+  onError?: (message: string) => void
 }
 
-export function useCommitModal({ taskId, taskName, onSuccess }: UseCommitModalOptions) {
+export function useCommitModal({ taskId, taskName, onSuccess, onError }: UseCommitModalOptions) {
   const [open, setOpen] = useState(false)
   const [commitMessage, setCommitMessage] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -42,7 +43,8 @@ export function useCommitModal({ taskId, taskName, onSuccess }: UseCommitModalOp
       setSubmitted(true)
       onSuccess?.()
     } catch (err) {
-      alert('Error: ' + (err instanceof Error ? err.message : String(err)))
+      const msg = err instanceof Error ? err.message : String(err)
+      onError ? onError(msg) : console.error('Submit MR failed:', msg)
     } finally {
       setSubmitting(false)
     }

@@ -4,6 +4,7 @@ import { getSettings, updateSettings } from '../../api'
 import { useTheme } from '../../hooks/useTheme'
 import { useLocale } from '../../hooks/useLocale'
 import { useSettingsContext } from '../../App'
+import { useToast } from '../../components/Toast/ToastContext'
 import type { Locale } from '../../i18n'
 import './Settings.css'
 
@@ -11,12 +12,12 @@ export default function Settings() {
   const { theme, toggleTheme } = useTheme()
   const { locale, setLocale, t } = useLocale()
   const { recheck } = useSettingsContext()
+  const toast = useToast()
   const [model, setModel] = useState('')
   const [baseUrl, setBaseUrl] = useState('')
   const [apiKey, setApiKey] = useState('')
   const [apiKeyChanged, setApiKeyChanged] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [message, setMessage] = useState('')
 
   useEffect(() => {
     getSettings().then(data => {
@@ -34,7 +35,6 @@ export default function Settings() {
 
   const handleSave = async () => {
     setSaving(true)
-    setMessage('')
     try {
       const data: Record<string, string> = {
         cody_model: model,
@@ -47,11 +47,11 @@ export default function Settings() {
         data.cody_api_key = apiKey
       }
       await updateSettings(data)
-      setMessage(t('settings.saved'))
+      toast.success(t('settings.saved'))
       setApiKeyChanged(false)
       recheck()
     } catch (err: any) {
-      setMessage(`Error: ${err.message}`)
+      toast.error(err.message)
     } finally {
       setSaving(false)
     }
@@ -112,11 +112,6 @@ export default function Settings() {
                 {saving ? t('settings.saving') : t('settings.save')}
               </button>
             </div>
-            {message && (
-              <p style={{ marginTop: 12, fontSize: 12, color: message.startsWith('Error') ? 'var(--red)' : 'var(--green)' }}>
-                {message}
-              </p>
-            )}
           </div>
 
           <div className="section-head">{t('settings.appearance')}</div>

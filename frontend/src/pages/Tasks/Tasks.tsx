@@ -4,6 +4,7 @@ import Topbar from '../../components/Shell/Topbar'
 import { listTasks, createTask, deleteTask, listProjects } from '../../api'
 import { useLocale } from '../../hooks/useLocale'
 import { STATUS_TAGS, getStageFromStatus, getDevFlowPath } from '../../utils/taskStages'
+import { useToast } from '../../components/Toast/ToastContext'
 import type { TaskData } from '../../api'
 import type { TranslationKey } from '../../i18n'
 import './Tasks.css'
@@ -11,6 +12,7 @@ import './Tasks.css'
 export default function Tasks() {
   const navigate = useNavigate()
   const { t } = useLocale()
+  const toast = useToast()
   const [searchParams] = useSearchParams()
   const projectId = searchParams.get('project_id') || undefined
   const [tasks, setTasks] = useState<TaskData[]>([])
@@ -54,7 +56,7 @@ export default function Tasks() {
       setShowDrawer(false)
       navigate(getDevFlowPath(task.id, task.status))
     } catch (err: any) {
-      alert('Error: ' + err.message)
+      toast.error(err.message)
     } finally {
       setCreating(false)
     }

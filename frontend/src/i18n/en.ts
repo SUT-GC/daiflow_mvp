@@ -265,6 +265,9 @@ const en = {
   // Stale session
   'stale.message': 'Session may have been interrupted — no activity for 5 minutes.',
   'stale.retry': 'Retry',
+
+  // Toast
+  'toast.operation_failed': 'Operation failed',
 } as const
 
 export type TranslationKey = keyof typeof en
