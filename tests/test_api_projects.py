@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 
 from sqlalchemy import select
 
-from daiflow.models import Project, ProjectRepo, Session, SessionStatus
+from daiflow.models import Project, ProjectRepo, Session, SessionStatus, Task, TaskStatus
 
 
 class TestProjectsCRUD:
@@ -221,6 +221,92 @@ class TestInitRetry:
             assert s.status == SessionStatus.DONE
             s = await db.get(Session, f"init:{pid}:frontend-structure")
             assert s.status == SessionStatus.DONE
+
+
+class TestInitBlockedByActiveTasks:
+    """Test that project init is blocked when tasks are in active development."""
+
+    async def test_init_blocked_by_coding_task(self, client, db_session):
+        """Cannot init when a task is in CODING state."""
+        resp = await client.post("/api/projects", json={"name": "P1"})
+        pid = resp.json()["id"]
+
+        db_session.add(Task(name="active", project_id=pid, status=TaskStatus.CODING))
+        await db_session.commit()
+
+        resp = await client.post(f"/api/projects/{pid}/init")
+        assert resp.status_code == 409
+        assert "active tasks" in resp.json()["detail"].lower()
+
+    async def test_init_blocked_by_planning_task(self, client, db_session):
+        """Cannot init when a task is in PLANNING state."""
+        resp = await client.post("/api/projects", json={"name": "P1"})
+        pid = resp.json()["id"]
+
+        db_session.add(Task(name="planning", project_id=pid, status=TaskStatus.PLANNING))
+        await db_session.commit()
+
+        resp = await client.post(f"/api/projects/{pid}/init")
+        assert resp.status_code == 409
+
+    async def test_init_blocked_by_initializing_task(self, client, db_session):
+        """Cannot init when a task is in INITIALIZING state."""
+        resp = await client.post("/api/projects", json={"name": "P1"})
+        pid = resp.json()["id"]
+
+        db_session.add(Task(name="initing", project_id=pid, status=TaskStatus.INITIALIZING))
+        await db_session.commit()
+
+        resp = await client.post(f"/api/projects/{pid}/init")
+        assert resp.status_code == 409
+
+    async def test_init_allowed_with_done_tasks(self, client, db_session):
+        """Can init when all tasks are DONE."""
+        resp = await client.post("/api/projects", json={
+            "name": "P1",
+            "repos": [{"local_path": "/tmp/repo", "repo_type": "backend"}],
+        })
+        pid = resp.json()["id"]
+
+        db_session.add(Task(name="done", project_id=pid, status=TaskStatus.DONE))
+        await db_session.commit()
+
+        with patch("daiflow.routers.projects.prepare_init_sessions", new_callable=AsyncMock, return_value=[]), \
+             patch("daiflow.routers.projects.run_init", new_callable=AsyncMock):
+            resp = await client.post(f"/api/projects/{pid}/init")
+        assert resp.status_code == 200
+
+    async def test_init_allowed_with_created_tasks(self, client, db_session):
+        """Can init when tasks are only in CREATED state."""
+        resp = await client.post("/api/projects", json={
+            "name": "P1",
+            "repos": [{"local_path": "/tmp/repo", "repo_type": "backend"}],
+        })
+        pid = resp.json()["id"]
+
+        db_session.add(Task(name="created", project_id=pid, status=TaskStatus.CREATED))
+        await db_session.commit()
+
+        with patch("daiflow.routers.projects.prepare_init_sessions", new_callable=AsyncMock, return_value=[]), \
+             patch("daiflow.routers.projects.run_init", new_callable=AsyncMock):
+            resp = await client.post(f"/api/projects/{pid}/init")
+        assert resp.status_code == 200
+
+    async def test_retry_init_blocked_by_active_task(self, client, db_session, db_engine):
+        """Retry init should also be blocked by active tasks."""
+        resp = await client.post("/api/projects", json={"name": "P1"})
+        pid = resp.json()["id"]
+
+        # Add a failed init session so retry has something to retry
+        db_session.add(Session(
+            session_id=f"init:{pid}:backend-structure", type="init", ref_id=pid,
+            layer=2, status=SessionStatus.FAILED, error="some error",
+        ))
+        db_session.add(Task(name="reviewing", project_id=pid, status=TaskStatus.REVIEWING))
+        await db_session.commit()
+
+        resp = await client.post(f"/api/projects/{pid}/init/retry")
+        assert resp.status_code == 409
 
 
 class TestProjectKnowledge:

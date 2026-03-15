@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from daiflow.config import TASKS_DIR
 from daiflow.database import get_db
-from daiflow.models import Session, Task, TaskStatus, Todo
+from daiflow.models import Session, SessionStatus, Task, TaskStatus, Todo
 from daiflow.schemas import SubmitMR, TaskCreate, TaskResponse, TaskUpdate, TodoResponse
 from daiflow.services import review_service
 from daiflow.services.task_service import (
@@ -63,6 +63,20 @@ async def create_task(
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
+    # Block if project is currently generating knowledge
+    running_init = await db.execute(
+        select(Session).where(
+            Session.ref_id == data.project_id,
+            Session.type == "init",
+            Session.status.in_([SessionStatus.WAITING, SessionStatus.RUNNING]),
+        )
+    )
+    if running_init.scalars().first():
+        raise HTTPException(
+            status_code=409,
+            detail="Project knowledge is being generated. Please wait for it to finish before creating a task.",
+        )
+
     task = Task(
         name=data.name,
         project_id=data.project_id,

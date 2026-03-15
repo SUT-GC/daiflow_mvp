@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useLocale } from '../../hooks/useLocale'
+import { useToast } from '../../components/Toast/ToastContext'
 import './CreateProject.css'
 
 export interface RepoEntry {
@@ -31,6 +32,7 @@ export default function ProjectForm({
   saveLabel,
 }: ProjectFormProps) {
   const { t } = useLocale()
+  const toast = useToast()
   const [name, setName] = useState(initialName)
   const [description, setDescription] = useState(initialDescription)
   const [repos, setRepos] = useState<RepoEntry[]>(
@@ -70,7 +72,7 @@ export default function ProjectForm({
         skill_names: skills,
       })
     } catch (err: any) {
-      alert('Error: ' + err.message)
+      toast.error(err.message)
     } finally {
       setSaving(false)
     }

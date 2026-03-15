@@ -5,6 +5,7 @@ import DiffViewer from '../../../components/DiffViewer/DiffViewer'
 import { useCodingStage } from '../../../hooks/useCodingStage'
 import { skipTodo, startReview } from '../../../api'
 import { useLocale } from '../../../hooks/useLocale'
+import { useToast } from '../../../components/Toast/ToastContext'
 import { TaskStatus } from '../../../types/enums'
 import './CodingStage.css'
 
@@ -12,6 +13,7 @@ export default function CodingStage() {
   const { taskId } = useParams()
   const navigate = useNavigate()
   const { t } = useLocale()
+  const toast = useToast()
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
 
   const {
@@ -27,7 +29,7 @@ export default function CodingStage() {
       await skipTodo(todoId)
       loadData()
     } catch (err: any) {
-      console.error('Failed to skip todo:', err)
+      toast.error(err.message || t('toast.operation_failed'))
     }
   }
 
@@ -37,7 +39,7 @@ export default function CodingStage() {
       await startReview(taskId)
       navigate(`/devflow/${taskId}/review`)
     } catch (err: any) {
-      console.error('Failed to start review:', err)
+      toast.error(err.message || t('toast.operation_failed'))
     }
   }
 
