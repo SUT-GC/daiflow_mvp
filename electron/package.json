@@ -1,0 +1,20 @@
+{
+  "name": "daiflow-desktop",
+  "version": "0.1.0",
+  "description": "DaiFlow Desktop - AI-powered programming workbench",
+  "main": "main/index.js",
+  "scripts": {
+    "dev": "electron .",
+    "build:frontend": "cd ../frontend && npm run build",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "dist:mac": "electron-builder --mac",
+    "dist:win": "electron-builder --win",
+    "dist:linux": "electron-builder --linux"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0",
+    "@electron/notarize": "^2.5.0"
+  }
+}

@@ -8,10 +8,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from daiflow.config import SESSIONS_DIR, safe_filename
 from daiflow.database import get_db
-from daiflow.models import Session
+from daiflow.models import Session, SessionStatus
 from daiflow.schemas import SessionStatusResponse
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
+
+
+@router.get("/running")
+async def get_running_sessions(db: AsyncSession = Depends(get_db)):
+    """Return count of currently running sessions (for desktop close protection)."""
+    result = await db.execute(
+        select(Session).where(Session.status == SessionStatus.RUNNING)
+    )
+    sessions = result.scalars().all()
+    return {"count": len(sessions)}
 
 
 @router.get("")
