@@ -83,13 +83,19 @@ daiflow_mvp/
 启动时检测用户系统中的 Python 版本，按优先级查找：
 
 ```
-查找顺序：python3 → python → 自定义路径（用户设置）
+macOS/Linux：python3 → python
+Windows：    python → py
 ```
 
 **检测逻辑：**
 
 ```javascript
-const PYTHON_CANDIDATES = ['python3', 'python']
+const { spawnSync } = require('child_process')
+
+// Windows 上 python3 通常不存在，需包含 py launcher
+const PYTHON_CANDIDATES = process.platform === 'win32'
+  ? ['python', 'py']
+  : ['python3', 'python']
 const MIN_PYTHON_VERSION = [3, 11]
 
 async function findPython() {
@@ -126,10 +132,10 @@ async function findPython() {
 
 ```
 首次启动：
-  检测 Python → 创建 venv → pip install -r requirements.txt → pip install -e .
+  检测 Python → 创建 venv → pip install -r requirements.txt → pip install daiflow 包
 
 后续启动：
-  检测 venv 是否存在 → 校验 requirements.txt 哈希是否变化
+  检测 venv 是否存在 → 校验 requirements.txt + pyproject.toml 联合哈希是否变化
     → 未变化：直接启动
     → 已变化：重新 pip install → 更新哈希缓存
 ```
@@ -139,9 +145,32 @@ async function findPython() {
 在 venv 目录下保存 `.deps-hash` 文件，存储 `requirements.txt` + `pyproject.toml` 的联合 SHA256。任一文件变化即触发重新安装，避免遗漏 `pyproject.toml` 中的依赖变更。
 
 ```javascript
+const { app } = require('electron')
+const { execFile } = require('child_process')
+const { promisify } = require('util')
 const crypto = require('crypto')
+const fs = require('fs')
+const path = require('path')
 
-function getDepsHash() {
+const execFileAsync = promisify(execFile)
+
+// --- 跨平台路径辅助 ---
+const IS_WIN = process.platform === 'win32'
+
+function getPythonPath(venvDir) {
+  return IS_WIN
+    ? path.join(venvDir, 'Scripts', 'python.exe')
+    : path.join(venvDir, 'bin', 'python')
+}
+
+function getPipPath(venvDir) {
+  return IS_WIN
+    ? path.join(venvDir, 'Scripts', 'pip.exe')
+    : path.join(venvDir, 'bin', 'pip')
+}
+
+// --- 依赖哈希校验 ---
+function getDepsHash(appRoot) {
   const hash = crypto.createHash('sha256')
   // 同时覆盖 requirements.txt 和 pyproject.toml
   for (const file of ['requirements.txt', 'pyproject.toml']) {
@@ -153,35 +182,41 @@ function getDepsHash() {
   return hash.digest('hex')
 }
 
-async function ensureVenv(pythonCmd) {
+// --- venv 创建与依赖安装 ---
+async function ensureVenv(pythonCmd, appRoot) {
   const venvDir = path.join(app.getPath('userData'), 'python-env')
-  const pipCmd = getPipPath(venvDir)       // bin/pip 或 Scripts/pip.exe
-  const pythonInVenv = getPythonPath(venvDir)
+  const pipPath = getPipPath(venvDir)
+  const pythonPath = getPythonPath(venvDir)
+  const requirementsPath = path.join(appRoot, 'requirements.txt')
   const hashFile = path.join(venvDir, '.deps-hash')
 
   // Step 1: 创建 venv（如不存在）
   if (!fs.existsSync(venvDir)) {
-    await execAsync(`${pythonCmd} -m venv "${venvDir}"`)
+    await execFileAsync(pythonCmd, ['-m', 'venv', venvDir])
   }
 
   // Step 2: 检查依赖是否需要更新
-  const currentHash = getDepsHash()
+  const currentHash = getDepsHash(appRoot)
   const cachedHash = fs.existsSync(hashFile) ? fs.readFileSync(hashFile, 'utf-8') : ''
 
   if (currentHash !== cachedHash) {
-    // 安装依赖
-    await execAsync(`"${pipCmd}" install -r "${requirementsPath}"`)
+    // 安装依赖（--prefer-binary 加速，避免编译 C 扩展）
+    await execFileAsync(pipPath, ['install', '--prefer-binary', '-r', requirementsPath])
     // 安装 daiflow 包本身
     // 开发模式用 -e，打包后用普通 install（editable symlink 在打包后路径可能失效）
-    const installMode = app.isPackaged ? 'install' : 'install -e'
-    await execAsync(`"${pipCmd}" ${installMode} "${appRoot}"`)
+    const installArgs = app.isPackaged
+      ? ['install', appRoot]
+      : ['install', '-e', appRoot]
+    await execFileAsync(pipPath, installArgs)
     // 更新哈希
     fs.writeFileSync(hashFile, currentHash)
   }
 
-  return { pythonPath: pythonInVenv, venvDir }
+  return { pythonPath, venvDir }
 }
 ```
+
+> **注意：** 使用 `execFileAsync`（基于 `child_process.execFile`）而非 `exec`，避免 shell 注入风险，且路径含空格时无需手动引号转义。
 
 **跨平台路径差异：**
 
@@ -223,7 +258,18 @@ function findAvailablePort(startPort = 18900, endPort = 18999) {
 #### 4.3.1 启动后端
 
 ```javascript
-function startBackend(pythonPath, port, daiflowHome) {
+const { spawn } = require('child_process')
+const { dialog, net } = require('electron')
+
+/**
+ * @param {object} options
+ * @param {string} options.pythonPath - venv 中的 Python 路径
+ * @param {number} options.port
+ * @param {string} options.daiflowHome - DAIFLOW_HOME
+ * @param {string} options.appRoot - 项目根目录
+ * @param {function} options.onCrash - 后端异常退出回调（用于重启或通知用户）
+ */
+function startBackend({ pythonPath, port, daiflowHome, appRoot, onCrash }) {
   const backendProcess = spawn(
     pythonPath,
     ['-m', 'uvicorn', 'daiflow.main:app', '--host', '127.0.0.1', '--port', String(port)],
@@ -239,14 +285,15 @@ function startBackend(pythonPath, port, daiflowHome) {
     }
   )
 
-  // 收集日志
-  backendProcess.stdout.on('data', (data) => log.info(`[backend] ${data}`))
-  backendProcess.stderr.on('data', (data) => log.warn(`[backend] ${data}`))
+  // 收集日志到 console（Electron 的 console 输出到主进程日志）
+  backendProcess.stdout.on('data', (data) => console.log(`[backend] ${data}`))
+  backendProcess.stderr.on('data', (data) => console.warn(`[backend] ${data}`))
 
-  backendProcess.on('exit', (code) => {
-    if (code !== 0 && code !== null) {
-      // 非正常退出，通知用户
-      dialog.showErrorBox('DaiFlow 后端异常退出', `退出码: ${code}，请查看日志`)
+  backendProcess.on('exit', (code, signal) => {
+    // 正常退出（code=0）或被我们 kill 的（signal 存在）不处理
+    if (code !== 0 && code !== null && !signal) {
+      console.error(`[backend] 异常退出，code=${code}`)
+      if (onCrash) onCrash(code)
     }
   })
 
@@ -296,8 +343,8 @@ async function stopBackend(backendProcess) {
     })
 
     if (process.platform === 'win32') {
-      // Windows 不支持 SIGTERM，用 taskkill 优雅关停
-      spawn('taskkill', ['/pid', backendProcess.pid, '/T'])
+      // Windows 上 console 进程不响应 WM_CLOSE，需用 /F 强制终止进程树
+      spawn('taskkill', ['/pid', String(backendProcess.pid), '/T', '/F'])
     } else {
       backendProcess.kill('SIGTERM')
     }
@@ -305,7 +352,9 @@ async function stopBackend(backendProcess) {
 }
 ```
 
-**关停时序：** `SIGTERM` → 等待 5 秒 → `SIGKILL`。确保 FastAPI 的 `lifespan` shutdown 钩子（`stop_monitor` 等）有机会执行。
+**关停时序：**
+- **macOS/Linux：** `SIGTERM` → 等待 5 秒 → `SIGKILL`。确保 FastAPI 的 `lifespan` shutdown 钩子（`stop_monitor` 等）有机会执行。
+- **Windows：** `taskkill /T /F` 直接终止进程树（Windows 上 console 进程无法接收 POSIX 信号，uvicorn 的 shutdown 钩子不会执行）。
 
 ### 4.4 Electron 主进程
 
@@ -313,17 +362,39 @@ async function stopBackend(backendProcess) {
 
 ```javascript
 const { app, BrowserWindow, dialog, net } = require('electron')
+const { execFile } = require('child_process')
+const { promisify } = require('util')
 const path = require('path')
-const { findPython, ensureVenv } = require('./python-manager')
+const { findPython, ensureVenv, getPythonPath } = require('./python-manager')
 const { findAvailablePort } = require('./port-manager')
 const { startBackend, waitForBackend, stopBackend } = require('./backend-manager')
 
-const APP_ROOT = path.join(__dirname, '..')
+const execFileAsync = promisify(execFile)
+
+// --- 单实例锁：防止重复打开导致端口冲突和数据损坏 ---
+const gotLock = app.requestSingleInstanceLock()
+if (!gotLock) {
+  app.quit()  // 已有实例在运行，直接退出
+}
+// 第二个实例尝试打开时，将已有窗口聚焦到前台
+app.on('second-instance', () => {
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.focus()
+  }
+})
+
+// 打包后 __dirname 指向 app.asar 内部，Python 无法从中执行文件。
+// 使用 asarUnpack 将 Python 源码解包到 app.asar.unpacked/，此处自动选择正确路径。
+const APP_ROOT = app.isPackaged
+  ? path.join(process.resourcesPath, 'app.asar.unpacked')
+  : path.join(__dirname, '..')
+
 let mainWindow = null
 let splashWindow = null
 let backendProcess = null
 let backendPort = null
-let isQuitting = false  // 防止 stopBackend 被重复调用
+let isQuitting = false  // 防止关闭拦截重复触发
 
 // 数据目录：与 CLI 模式隔离，避免冲突
 const DAIFLOW_HOME = path.join(app.getPath('userData'), 'data')
@@ -415,21 +486,25 @@ async function bootstrap() {
 
     // Step 2: 确保 venv 和依赖
     updateSplash('正在准备 Python 环境...')
-    const { pythonPath } = await ensureVenv(python.command)
+    const { pythonPath } = await ensureVenv(python.command, APP_ROOT)
 
-    // Step 3: 查找可用端口
-    backendPort = await findAvailablePort()
-
-    // Step 4: 启动后端
-    updateSplash('正在启动 DaiFlow 服务...')
-    backendProcess = startBackend(pythonPath, backendPort, DAIFLOW_HOME)
-
-    // Step 5: 等待后端就绪
-    await waitForBackend(backendPort)
-
-    // Step 6: 运行数据库迁移（确保 schema 与最新版本一致）
+    // Step 3: 运行数据库迁移（在后端启动前执行，确保 schema 就绪）
+    // 这样 FastAPI lifespan 中的 init_db(create_all) 是 no-op，不会与 Alembic 冲突
     updateSplash('正在检查数据库...')
     await runMigrations(pythonPath)
+
+    // Step 4: 查找可用端口
+    backendPort = await findAvailablePort()
+
+    // Step 5: 启动后端
+    updateSplash('正在启动 DaiFlow 服务...')
+    backendProcess = startBackend({
+      pythonPath, port: backendPort, daiflowHome: DAIFLOW_HOME, appRoot: APP_ROOT,
+      onCrash: (code) => handleBackendCrash(code),
+    })
+
+    // Step 6: 等待后端就绪
+    await waitForBackend(backendPort)
 
     // Step 7: 打开主窗口
     createMainWindow()
@@ -441,9 +516,38 @@ async function bootstrap() {
   }
 }
 
-// 运行 Alembic 数据库迁移
+// 运行 Alembic 数据库迁移（传入 DAIFLOW_HOME 确保迁移目标数据库正确）
 async function runMigrations(pythonPath) {
-  return execAsync(`"${pythonPath}" -m alembic upgrade head`, { cwd: APP_ROOT })
+  return execFileAsync(pythonPath, ['-m', 'alembic', 'upgrade', 'head'], {
+    cwd: APP_ROOT,
+    env: { ...process.env, DAIFLOW_HOME },
+  })
+}
+
+// 后端异常退出处理
+async function handleBackendCrash(code) {
+  if (isQuitting) return  // 正在退出流程，不处理
+  const { response } = await dialog.showMessageBox(mainWindow || null, {
+    type: 'error',
+    buttons: ['重启服务', '退出应用'],
+    defaultId: 0,
+    title: '服务异常',
+    message: 'DaiFlow 后端服务意外停止',
+    detail: `退出码: ${code}。可以尝试重启服务，或退出应用后检查日志。`,
+  })
+  if (response === 0) {
+    // 重启后端
+    backendProcess = startBackend({
+      pythonPath: getPythonPath(path.join(app.getPath('userData'), 'python-env')),
+      port: backendPort, daiflowHome: DAIFLOW_HOME, appRoot: APP_ROOT,
+      onCrash: (c) => handleBackendCrash(c),
+    })
+    await waitForBackend(backendPort)
+    if (mainWindow) mainWindow.reload()
+  } else {
+    isQuitting = true
+    app.quit()
+  }
 }
 
 function updateSplash(message) {
@@ -455,15 +559,33 @@ function updateSplash(message) {
 app.whenReady().then(bootstrap)
 
 app.on('window-all-closed', async () => {
+  if (process.platform === 'darwin') {
+    // macOS：关闭所有窗口后保持 app 在 Dock 中运行，后端继续服务
+    // 用户可通过点击 Dock 图标重新打开窗口
+    return
+  }
+  // Windows/Linux：关闭窗口即退出
   await stopBackend(backendProcess)
   app.quit()
 })
 
-// macOS: 点击 dock 图标重新打开窗口
+// macOS: 点击 dock 图标重新打开窗口（后端仍在运行）
 app.on('activate', () => {
-  if (mainWindow === null && backendProcess) {
+  if (mainWindow === null && backendProcess && !backendProcess.killed) {
     isQuitting = false  // 重置标志，新窗口需要重新拦截
     createMainWindow()
+  }
+})
+
+// macOS: 用户通过 Cmd+Q 或菜单退出时，需要关停后端
+let backendStopped = false
+app.on('before-quit', async (e) => {
+  isQuitting = true  // 让 mainWindow.close handler 跳过 session 检查
+  if (!backendStopped && backendProcess && !backendProcess.killed) {
+    e.preventDefault()
+    await stopBackend(backendProcess)
+    backendStopped = true
+    app.quit()  // 后端已关停，重新触发退出流程（此时 backendStopped=true，不会再拦截）
   }
 })
 ```
@@ -518,7 +640,7 @@ async function checkRunningSessions(port) {
 在 `daiflow/routers/sessions.py` 中新增：
 
 ```python
-@router.get("/api/sessions/running")
+@router.get("/running")
 async def get_running_sessions(db: AsyncSession = Depends(get_db)):
     """返回当前正在运行的 session 数量，供 Electron 关闭保护使用。"""
     from sqlalchemy import func, select
@@ -653,9 +775,20 @@ copyright: Copyright © 2025-2026
 directories:
   output: dist-electron
 
+# 将 Python 源码、迁移脚本等解包到 asar 外部，
+# 因为 spawned 子进程（Python/pip/alembic）无法从 asar 归档中读取文件
+asarUnpack:
+  - daiflow/**/*
+  - alembic/**/*
+  - alembic.ini
+  - requirements.txt
+  - pyproject.toml
+
 files:
   - electron/**/*
   - daiflow/**/*
+  - alembic/**/*            # Alembic 迁移脚本
+  - alembic.ini              # Alembic 配置
   - requirements.txt
   - pyproject.toml
   - "!**/__pycache__"
