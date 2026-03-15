@@ -44,7 +44,31 @@ pytest tests/test_api_tasks.py -k "test_create_task"  # Run a single test
 alembic revision --autogenerate -m "description"  # Generate migration
 alembic upgrade head                               # Apply migrations
 # Note: alembic env.py auto-strips +aiosqlite from DATABASE_URL for sync Alembic
+
+# Version bump
+./scripts/bump-version.sh 0.6.0      # Update all version files at once
+pip install -e .                      # Re-install so Python picks up new version
 ```
+
+## Version Management
+
+Single source of truth: `VERSION` file (semver format, e.g. `0.5.0`).
+
+**`./scripts/bump-version.sh <version>` updates:**
+1. `VERSION` — primary source
+2. `frontend/package.json` — npm version
+3. `frontend/package-lock.json` — lock file consistency
+4. `electron/package.json` — desktop app version
+
+**Python side** reads version dynamically — no file to edit:
+- `pyproject.toml`: `dynamic = ["version"]` + `version = {file = "VERSION"}`
+- `main.py`: `importlib.metadata.version("daiflow")` (reads installed package metadata)
+- Requires `pip install -e .` after bump to refresh installed metadata
+
+**Release checklist:**
+1. `./scripts/bump-version.sh X.Y.Z`
+2. `pip install -e .`
+3. Verify: `python -c "from importlib.metadata import version; print(version('daiflow'))"`
 
 ## Architecture
 
