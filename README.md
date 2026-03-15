@@ -15,12 +15,13 @@
 
 | 层 | 技术 |
 |---|------|
-| 前端 | React 19 + TypeScript, Vite |
+| 前端 | React 19 + TypeScript, Vite 6 |
 | 后端 | Python 3.11+, FastAPI (async), WebSocket |
+| 桌面端 | Electron 33 + electron-builder |
 | AI 引擎 | Cody SDK（进程内，无外部服务） |
 | 数据库 | SQLite (SQLAlchemy ORM + aiosqlite) |
 | 迁移 | Alembic |
-| 本地存储 | `~/.daiflow/` |
+| 本地存储 | CLI: `~/.daiflow/`，桌面端: `{userData}/data/` |
 
 ## 快速开始
 
@@ -57,6 +58,88 @@ uvicorn daiflow.main:app --reload --port 8000
 
 # 终端 2：前端（HMR）
 cd frontend && npm run dev
+```
+
+### 桌面端（Electron）
+
+桌面端将后端打包进 Electron 应用，自动管理 Python 虚拟环境，双击即可使用。
+
+#### 环境要求
+
+- Node.js >= 18
+- Python >= 3.11（系统已安装，桌面端会自动创建 venv）
+
+#### 开发运行
+
+```bash
+# 1. 构建前端（产物输出到 frontend/dist，Electron 加载此目录）
+cd frontend && npm install && npm run build && cd ..
+
+# 2. 安装 Electron 依赖
+cd electron && npm install
+
+# 3. 启动桌面应用（开发模式）
+npm run dev
+```
+
+启动后 Electron 会自动：检测 Python → 创建 venv → 安装依赖 → 运行数据库迁移 → 启动后端 → 打开主窗口。
+
+#### 打包分发
+
+```bash
+cd electron
+
+# 打包当前平台安装包
+npm run dist
+
+# 指定平台打包
+npm run dist:mac       # macOS → .dmg + .zip
+npm run dist:win       # Windows → NSIS 安装包
+npm run dist:linux     # Linux → AppImage + .deb
+
+# 仅生成未打包目录（调试用）
+npm run pack
+```
+
+打包产物输出到 `electron/dist/` 目录。
+
+#### macOS 签名 & 公证
+
+需设置以下环境变量：
+
+```bash
+export APPLE_ID="your@apple.id"
+export APPLE_ID_PASSWORD="app-specific-password"
+export APPLE_TEAM_ID="XXXXXXXXXX"
+```
+
+未设置时跳过公证（本地开发不影响）。
+
+#### 桌面端数据目录
+
+桌面端数据与 CLI 模式隔离，存储在系统应用数据目录下：
+
+| 平台 | 路径 |
+|------|------|
+| macOS | `~/Library/Application Support/DaiFlow/data/` |
+| Windows | `%APPDATA%/DaiFlow/data/` |
+| Linux | `~/.config/DaiFlow/data/` |
+
+#### 桌面端架构
+
+```
+Electron Main Process
+  ├── 检测 Python 3.11+ → 创建 venv（{userData}/python-env/）
+  ├── pip install 后端依赖（依赖 hash 变更时才重装）
+  ├── alembic upgrade head（自动迁移）
+  ├── 探测可用端口（18900-18999）
+  ├── 启动 uvicorn 子进程
+  └── BrowserWindow 加载 http://127.0.0.1:{port}
+
+关闭时：
+  ├── 检查是否有正在运行的 Session
+  ├── SIGTERM 优雅关闭后端（5 秒超时）
+  └── 兜底 SIGKILL / taskkill
 ```
 
 ### 首次使用
@@ -118,6 +201,19 @@ daiflow/
 │       ├── hooks/            # React Hooks
 │       ├── api/              # API 客户端
 │       └── ws/               # WebSocket 客户端
+├── electron/                 # 桌面端 Electron 应用
+│   ├── main/                 # 主进程模块
+│   │   ├── index.js          # 应用生命周期 & 窗口管理
+│   │   ├── backend.js        # Python 后端子进程管理
+│   │   ├── python-env.js     # Python 检测 & venv 创建
+│   │   ├── port-manager.js   # 动态端口探测（18900-18999）
+│   │   └── splash-preload.js # Splash 预加载脚本
+│   ├── splash/               # 启动画面
+│   ├── icons/                # 应用图标（icns/ico/png）
+│   ├── scripts/              # 构建钩子（macOS 公证等）
+│   ├── build/                # 平台签名配置
+│   ├── package.json          # Electron 依赖 & 构建脚本
+│   └── electron-builder.yml  # 打包配置
 ├── tests/                    # 后端测试
 ├── alembic/                  # 数据库迁移
 ├── docs/                     # 文档
@@ -127,19 +223,24 @@ daiflow/
 ## 架构
 
 ```
-┌─────────────────┐
-│  React SPA      │
-│  (Vite + TS)    │
-└────────┬────────┘
-         │ HTTP REST + WebSocket
-┌────────┴────────┐
-│  FastAPI         │
-│  (async Python)  │
-├─────────┬────────┤
-│ Cody SDK│ SQLite │
-│ (AI)    │ (ORM)  │
-└─────────┴────────┘
+┌──────────────────────────────────┐
+│  Electron Shell（桌面端）         │
+│  进程托管 / venv 管理 / 端口分配   │
+└──────────────┬───────────────────┘
+               │ 内嵌
+┌──────────────┴───────────────────┐
+│  React SPA（Vite + TypeScript）   │
+└──────────────┬───────────────────┘
+               │ HTTP REST + WebSocket
+┌──────────────┴───────────────────┐
+│  FastAPI（async Python）          │
+├───────────────┬──────────────────┤
+│   Cody SDK    │     SQLite       │
+│   (AI 引擎)   │   (ORM + 迁移)   │
+└───────────────┴──────────────────┘
 ```
+
+> CLI 模式下 Electron 层不存在，前端构建产物由 FastAPI 直接 serve。
 
 ### 核心模式：SessionRunner + WSManager
 
