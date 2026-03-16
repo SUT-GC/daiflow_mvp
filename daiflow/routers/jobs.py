@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from daiflow.config import utc_iso
 from daiflow.database import get_db
 from daiflow.models import Job, JobRun, JobRunStatus
 from daiflow.services.repo_monitor import run_all_jobs, run_job
@@ -41,8 +42,8 @@ def _serialize_job(job: Job) -> dict:
         "enabled": bool(job.enabled),
         "interval": job.interval,
         "config": json.loads(job.config) if job.config else {},
-        "created_at": job.created_at.isoformat() if job.created_at else None,
-        "updated_at": job.updated_at.isoformat() if job.updated_at else None,
+        "created_at": utc_iso(job.created_at) if job.created_at else None,
+        "updated_at": utc_iso(job.updated_at) if job.updated_at else None,
     }
 
 
@@ -53,8 +54,8 @@ def _serialize_run(run: JobRun) -> dict:
         "status": JobRunStatus(run.status).name.lower(),
         "result": json.loads(run.result) if run.result else {},
         "error": run.error,
-        "started_at": run.started_at.isoformat() if run.started_at else None,
-        "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+        "started_at": utc_iso(run.started_at) if run.started_at else None,
+        "finished_at": utc_iso(run.finished_at) if run.finished_at else None,
     }
 
 

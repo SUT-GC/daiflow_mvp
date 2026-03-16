@@ -104,7 +104,8 @@ async def _do_fetch_code(db: AsyncSession, session_id: str, *, task_id: str, pro
     repos = await fetch_project_repos(db, project_id)
     _copy_code_to_task(project_id, task_id, repos)
 
-    now_iso = lambda: datetime.now(timezone.utc).isoformat()
+    from daiflow.config import utc_iso
+    now_iso = lambda: utc_iso(datetime.now(timezone.utc))
     await append_log(session_id, {"type": "text_delta", "ts": now_iso(), "content": f"Copied {len(repos)} repo(s) to task directory\n"})
 
     if branch:
@@ -126,7 +127,8 @@ async def _do_sync_skills(db: AsyncSession, session_id: str, *, task_id: str, pr
     from daiflow.session_runner import append_log
 
     sync_skills_to_task(project_id, task_id)
-    await append_log(session_id, {"type": "text_delta", "ts": datetime.now(timezone.utc).isoformat(), "content": "✓ Synced project skills to task\n"})
+    from daiflow.config import utc_iso
+    await append_log(session_id, {"type": "text_delta", "ts": utc_iso(datetime.now(timezone.utc)), "content": "✓ Synced project skills to task\n"})
 
 
 async def init_task(task_id: str, ws_manager: WSManager | None = None):

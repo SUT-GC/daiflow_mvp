@@ -43,6 +43,7 @@ export interface TaskData {
   description: string
   branch: string
   prd: string
+  prd_images: string[]
   tech_plan: string
   status: number
   mr_info: Record<string, any>
@@ -198,6 +199,22 @@ export const submitMR = (taskId: string, commitMessage: string) =>
     method: 'POST',
     body: JSON.stringify({ commit_message: commitMessage }),
   })
+
+// ── PRD Images ──
+export async function uploadPrdImage(taskId: string, file: File): Promise<{ filename: string }> {
+  const form = new FormData()
+  form.append('file', file)
+  const res = await fetch(`${BASE}/tasks/${taskId}/prd-images`, { method: 'POST', body: form })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new Error(body.detail || `Upload failed: ${res.status}`)
+  }
+  return res.json()
+}
+export const deletePrdImage = (taskId: string, filename: string) =>
+  request<{ ok: boolean }>(`/tasks/${taskId}/prd-images/${filename}`, { method: 'DELETE' })
+export const getPrdImageUrl = (taskId: string, filename: string) =>
+  `${BASE}/tasks/${taskId}/prd-images/${filename}`
 
 // ── Todos ──
 export const executeTodo = (todoId: string) =>

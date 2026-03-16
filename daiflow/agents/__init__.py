@@ -47,8 +47,8 @@ class AgentConfig:
 
     # --- Prompt & execution ---
 
-    async def build_prompt(self, ctx: AgentContext) -> str:
-        """Build the prompt to send to Cody."""
+    async def build_prompt(self, ctx: AgentContext) -> "str | Any":
+        """Build the prompt to send to Cody. Returns str or MultimodalPrompt."""
         raise NotImplementedError
 
     async def resolve_cody_session_id(self, ctx: AgentContext) -> str | None:

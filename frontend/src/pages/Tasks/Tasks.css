@@ -199,3 +199,63 @@
   font-size: 12px !important;
   line-height: 1.6;
 }
+
+/* PRD Image Upload */
+.prd-image-drop-zone {
+  border: 1.5px dashed var(--border);
+  border-radius: var(--r);
+  padding: 16px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+
+.prd-image-drop-zone:hover {
+  border-color: var(--blue);
+  background: var(--blue-d);
+}
+
+.drop-zone-text {
+  font-size: 12px;
+  color: var(--t3);
+}
+
+.prd-image-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.prd-image-thumb {
+  position: relative;
+  width: 72px;
+  height: 72px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.prd-image-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.prd-image-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: rgba(0,0,0,.6);
+  color: #fff;
+  border: none;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
