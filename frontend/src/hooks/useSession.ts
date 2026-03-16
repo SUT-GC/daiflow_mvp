@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { getSessionStatus, getSessionLogs, SessionStatusData } from '../api'
+import { getSessionStatus, getSessionLogs } from '../api'
 import { SessionStatus } from '../types/enums'
-import { wsClient } from '../ws'
+import { useWsSync } from './useWsSync'
 
 export interface SessionEvent {
   type: string
@@ -35,6 +35,10 @@ function convertLogToEvent(log: Record<string, unknown>): SessionEvent {
   }
 }
 
+function isTerminal(status: number): boolean {
+  return status === SessionStatus.DONE || status === SessionStatus.FAILED
+}
+
 export function useSession(sessionId: string | null, refreshKey?: number) {
   const [status, setStatus] = useState<number>(0)
   const [logs, setLogs] = useState<SessionEvent[]>([])
@@ -49,23 +53,41 @@ export function useSession(sessionId: string | null, refreshKey?: number) {
     setLogs([...logsRef.current])
   }, [])
 
+  // Cleanup rAF on unmount
   useEffect(() => {
-    if (!sessionId) return
+    return () => {
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current)
+        rafRef.current = null
+      }
+    }
+  }, [])
 
-    let unsub: (() => void) | null = null
-    // Reset state on re-run (e.g. regenerate)
-    logsRef.current = []
-    setLogs([])
-    setStatus(0)
-    setError(null)
-
-    async function load() {
+  useWsSync({
+    channel: sessionId ? `session:${sessionId}` : null,
+    refreshKey,
+    onReset: () => {
+      logsRef.current = []
+      setLogs([])
+      setStatus(0)
+      setError(null)
+    },
+    onEvent: (event) => {
+      logsRef.current.push(event)
+      if (rafRef.current === null) {
+        rafRef.current = requestAnimationFrame(flushLogs)
+      }
+      if (event.type === 'status_change') {
+        if (event.status != null) setStatus(event.status)
+        if (event.error) setError(event.error)
+        return event.status != null && isTerminal(event.status)
+      }
+    },
+    fetchData: async () => {
       try {
-        // 1. Fetch status
         const statusData = await getSessionStatus(sessionId!)
         setStatus(statusData.status)
 
-        // 2. Fetch logs
         const logsData = await getSessionLogs(sessionId!)
         if (Array.isArray(logsData)) {
           const events = logsData.map(convertLogToEvent)
@@ -73,37 +95,29 @@ export function useSession(sessionId: string | null, refreshKey?: number) {
           setLogs(events)
         }
 
-        // 3. Subscribe via WebSocket if not already finished
-        if (statusData.status !== SessionStatus.DONE && statusData.status !== SessionStatus.FAILED) {
-          unsub = wsClient.subscribe(
-            `session:${sessionId}`,
-            (event) => {
-              logsRef.current.push(event)
-              // Batch log updates via rAF
-              if (rafRef.current === null) {
-                rafRef.current = requestAnimationFrame(flushLogs)
-              }
-              if (event.type === 'status_change') {
-                if (event.status != null) setStatus(event.status)
-                if (event.error) setError(event.error)
-              }
-            },
-          )
-        }
+        return isTerminal(statusData.status)
       } catch (err: any) {
         setError(err.message)
+        return false
       }
-    }
-
-    load()
-    return () => {
-      unsub?.()
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current)
-        rafRef.current = null
+    },
+    pollCheck: async () => {
+      // Lightweight: only check status, don't re-fetch logs (WS provides them in real-time)
+      const s = await getSessionStatus(sessionId!)
+      setStatus(s.status)
+      if (isTerminal(s.status)) {
+        // Fetch logs one final time to get complete state
+        const finalLogs = await getSessionLogs(sessionId!)
+        if (Array.isArray(finalLogs)) {
+          const events = finalLogs.map(convertLogToEvent)
+          logsRef.current = events
+          setLogs(events)
+        }
+        return true
       }
-    }
-  }, [sessionId, refreshKey, flushLogs])
+      return false
+    },
+  })
 
   return { status, logs, error }
 }

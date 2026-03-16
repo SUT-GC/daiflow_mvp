@@ -6,10 +6,10 @@ import { getTask, getTaskInitSessions, confirmInit, retryTaskInit, type TaskData
 import { useLocale } from '../../../hooks/useLocale'
 import { useToast } from '../../../components/Toast/ToastContext'
 import { sessionIds } from '../../../utils/sessionIds'
-import { wsClient, type WSEvent } from '../../../ws'
 import type { TranslationKey } from '../../../i18n'
 import SessionLogModal from '../../../components/SessionLogModal/SessionLogModal'
 import { isStageReadonly } from '../../../components/StageLayout/StageLayout'
+import { useWsSync } from '../../../hooks/useWsSync'
 import '../../Projects/ProjectInit.css'
 
 const SESSION_LABELS: Record<string, TranslationKey> = {
@@ -31,22 +31,19 @@ export default function InitStage() {
   const [viewSession, setViewSession] = useState<{ id: string; label: string } | null>(null)
 
   const loadData = useCallback(async () => {
-    if (!taskId) return
+    if (!taskId) return []
     const [taskData, sessionsData] = await Promise.all([
       getTask(taskId),
       getTaskInitSessions(taskId),
     ])
     setTask(taskData)
     setSessions(sessionsData)
+    return sessionsData
   }, [taskId])
 
-  useEffect(() => { loadData() }, [loadData])
-
-  // Subscribe to init WS channel for real-time updates
-  useEffect(() => {
-    if (!taskId) return
-    const channel = sessionIds.taskInitBus(taskId)
-    const unsub = wsClient.subscribe(channel, (event: WSEvent) => {
+  useWsSync({
+    channel: taskId ? sessionIds.taskInitBus(taskId) : null,
+    onEvent: (event) => {
       if (event.type === 'session_status') {
         setSessions(prev => prev.map(s =>
           s.session_id === event.session_id
@@ -55,12 +52,14 @@ export default function InitStage() {
         ))
       }
       if (event.type === 'done') {
-        // Reload to get final state
         loadData()
       }
-    })
-    return unsub
-  }, [taskId, loadData])
+    },
+    fetchData: async () => {
+      const sessionsData = await loadData()
+      return sessionsData.length > 0 && sessionsData.every(s => s.status === 2 || s.status === 3)
+    },
+  })
 
   const totalCount = sessions.length
   const doneCount = sessions.filter(s => s.status === 2).length

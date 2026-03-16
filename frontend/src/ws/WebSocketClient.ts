@@ -22,6 +22,7 @@ export type WSEventType =
   | 'session_status'
   | 'user_message'
   | 'compact'
+  | '_reconnected'
 
 export interface WSEvent {
   type: WSEventType
@@ -68,6 +69,7 @@ class WebSocketClient {
   private pingInterval: ReturnType<typeof setInterval> | null = null
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private intentionalClose = false
+  private wasConnectedBefore = false
   private pendingSubscribes: string[] = []
 
   private getWsUrl(): string {
@@ -104,6 +106,16 @@ class WebSocketClient {
         this.send({ action: 'subscribe', channel })
       }
       this.pendingSubscribes = []
+
+      // Notify all subscribers of reconnection so they can re-fetch state
+      if (this.wasConnectedBefore) {
+        for (const handlers of this.subscriptions.values()) {
+          for (const handler of handlers) {
+            try { handler({ type: '_reconnected' }) } catch { /* ignore */ }
+          }
+        }
+      }
+      this.wasConnectedBefore = true
     }
 
     this.ws.onmessage = (e: MessageEvent) => {
