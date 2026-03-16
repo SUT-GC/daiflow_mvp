@@ -9,6 +9,7 @@ import { sessionIds } from '../../../utils/sessionIds'
 import { wsClient, type WSEvent } from '../../../ws'
 import type { TranslationKey } from '../../../i18n'
 import SessionLogModal from '../../../components/SessionLogModal/SessionLogModal'
+import { isStageReadonly } from '../../../components/StageLayout/StageLayout'
 import '../../Projects/ProjectInit.css'
 
 const SESSION_LABELS: Record<string, TranslationKey> = {
@@ -67,12 +68,7 @@ export default function InitStage() {
   const allDone = totalCount > 0 && doneCount === totalCount
   const progress = totalCount > 0 ? Math.round((doneCount / totalCount) * 100) : 0
 
-  // If task has moved past INITIALIZING, redirect to appropriate stage
-  useEffect(() => {
-    if (task && task.status >= 2) {
-      navigate(`/devflow/${taskId}/plan`, { replace: true })
-    }
-  }, [task, taskId, navigate])
+  const readonly = task ? isStageReadonly(task.status, 1) : false
 
   // Elapsed time
   const startTime = useMemo(() => {
@@ -208,25 +204,27 @@ export default function InitStage() {
               })}
             </div>
 
-            <div className="init-footer">
-              <div style={{ flex: 1 }} />
-              {hasFailed && (
+            {!readonly && (
+              <div className="init-footer">
+                <div style={{ flex: 1 }} />
+                {hasFailed && (
+                  <button
+                    className="btn btn-secondary"
+                    disabled={retrying}
+                    onClick={handleRetry}
+                  >
+                    {retrying ? '...' : t('init_stage.retry')}
+                  </button>
+                )}
                 <button
-                  className="btn btn-secondary"
-                  disabled={retrying}
-                  onClick={handleRetry}
+                  className="btn btn-primary"
+                  disabled={!allDone || confirming}
+                  onClick={handleConfirm}
                 >
-                  {retrying ? '...' : t('init_stage.retry')}
+                  {confirming ? '...' : t('init_stage.confirm')}
                 </button>
-              )}
-              <button
-                className="btn btn-primary"
-                disabled={!allDone || confirming}
-                onClick={handleConfirm}
-              >
-                {confirming ? '...' : t('init_stage.confirm')}
-              </button>
-            </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
