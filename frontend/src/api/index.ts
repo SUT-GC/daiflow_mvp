@@ -127,6 +127,8 @@ export const getSettings = () => request<Record<string, string>>('/settings')
 export const updateSettings = (data: Record<string, string>) =>
   request('/settings', { method: 'PUT', body: JSON.stringify(data) })
 export const checkSettings = () => request<{ configured: boolean; model: string }>('/settings/check')
+export const testConnection = (data: { cody_model: string; cody_base_url: string; cody_api_key: string }) =>
+  request<{ ok: boolean; model: string }>('/settings/test', { method: 'POST', body: JSON.stringify(data) })
 
 // ── Projects ──
 export const listProjects = () => request<ProjectData[]>('/projects')

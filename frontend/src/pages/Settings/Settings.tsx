@@ -1,12 +1,15 @@
 import { useState, useEffect } from 'react'
 import Topbar from '../../components/Shell/Topbar'
-import { getSettings, updateSettings } from '../../api'
+import { getSettings, updateSettings, testConnection } from '../../api'
 import { useTheme } from '../../hooks/useTheme'
 import { useLocale } from '../../hooks/useLocale'
 import { useSettingsContext } from '../../App'
 import { useToast } from '../../components/Toast/ToastContext'
 import type { Locale } from '../../i18n'
 import './Settings.css'
+
+// 'idle' = default, 'testing' = in progress, 'ok' = test passed, 'error' = test failed
+type TestState = 'idle' | 'testing' | 'ok' | 'error'
 
 export default function Settings() {
   const { theme, toggleTheme } = useTheme()
@@ -18,20 +21,42 @@ export default function Settings() {
   const [apiKey, setApiKey] = useState('')
   const [apiKeyChanged, setApiKeyChanged] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [testState, setTestState] = useState<TestState>('idle')
+  const [testError, setTestError] = useState('')
 
   useEffect(() => {
     getSettings().then(data => {
       setModel(data.cody_model || '')
       setBaseUrl(data.cody_base_url || '')
-      // API key comes back masked, show the masked value
       setApiKey(data.cody_api_key || '')
       setApiKeyChanged(false)
-      // Sync locale from server if available
       if (data.language && (data.language === 'en' || data.language === 'zh')) {
         setLocale(data.language as Locale)
       }
     }).catch(() => {})
   }, [])
+
+  // Reset test state when user edits any field
+  const onFieldChange = (setter: (v: string) => void, value: string, isApiKey = false) => {
+    setter(value)
+    if (isApiKey) setApiKeyChanged(true)
+    if (testState === 'ok' || testState === 'error') {
+      setTestState('idle')
+      setTestError('')
+    }
+  }
+
+  const handleTest = async () => {
+    setTestState('testing')
+    setTestError('')
+    try {
+      await testConnection({ cody_model: model, cody_base_url: baseUrl, cody_api_key: apiKey })
+      setTestState('ok')
+    } catch (err: any) {
+      setTestState('error')
+      setTestError(err.message || 'Connection failed')
+    }
+  }
 
   const handleSave = async () => {
     setSaving(true)
@@ -42,13 +67,13 @@ export default function Settings() {
         theme,
         language: locale,
       }
-      // Only send API key if user actually changed it
       if (apiKeyChanged) {
         data.cody_api_key = apiKey
       }
       await updateSettings(data)
       toast.success(t('settings.saved'))
       setApiKeyChanged(false)
+      setTestState('idle')
       recheck()
     } catch (err: any) {
       toast.error(err.message)
@@ -57,11 +82,17 @@ export default function Settings() {
     }
   }
 
+  const handleCancel = () => {
+    setTestState('idle')
+    setTestError('')
+  }
+
   const handleLocaleChange = (newLocale: Locale) => {
     setLocale(newLocale)
-    // Also persist to backend
     updateSettings({ language: newLocale }).catch(() => {})
   }
+
+  const formDisabled = testState === 'testing'
 
   return (
     <>
@@ -81,7 +112,8 @@ export default function Settings() {
                 className="input"
                 placeholder="e.g. claude-sonnet-4-20250514"
                 value={model}
-                onChange={e => setModel(e.target.value)}
+                disabled={formDisabled}
+                onChange={e => onFieldChange(setModel, e.target.value)}
               />
             </div>
             <div className="field">
@@ -92,7 +124,8 @@ export default function Settings() {
                 className="input"
                 placeholder="e.g. https://api.anthropic.com"
                 value={baseUrl}
-                onChange={e => setBaseUrl(e.target.value)}
+                disabled={formDisabled}
+                onChange={e => onFieldChange(setBaseUrl, e.target.value)}
               />
             </div>
             <div className="field">
@@ -104,13 +137,37 @@ export default function Settings() {
                 type="password"
                 placeholder="sk-..."
                 value={apiKey}
-                onChange={e => { setApiKey(e.target.value); setApiKeyChanged(true) }}
+                disabled={formDisabled}
+                onChange={e => onFieldChange(setApiKey, e.target.value, true)}
               />
             </div>
+
+            {testState === 'ok' && (
+              <div className="test-result test-ok">{t('settings.test_ok')}</div>
+            )}
+            {testState === 'error' && (
+              <div className="test-result test-fail">{testError}</div>
+            )}
+
             <div className="actions">
-              <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
-                {saving ? t('settings.saving') : t('settings.save')}
-              </button>
+              {testState === 'ok' ? (
+                <>
+                  <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
+                    {saving ? t('settings.saving') : t('settings.save')}
+                  </button>
+                  <button className="btn btn-ghost" onClick={handleCancel}>
+                    {t('settings.cancel')}
+                  </button>
+                </>
+              ) : (
+                <button
+                  className="btn btn-primary"
+                  onClick={handleTest}
+                  disabled={testState === 'testing' || !model || !baseUrl || !apiKey}
+                >
+                  {testState === 'testing' ? t('settings.testing') : t('settings.test')}
+                </button>
+              )}
             </div>
           </div>
 

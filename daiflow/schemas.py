@@ -182,5 +182,11 @@ class SettingsUpdate(BaseModel):
     language: str | None = None
 
 
+class ConnectionTest(BaseModel):
+    cody_model: str
+    cody_base_url: str
+    cody_api_key: str
+
+
 class SubmitMR(BaseModel):
     commit_message: str = ""

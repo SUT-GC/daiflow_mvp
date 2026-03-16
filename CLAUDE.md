@@ -80,12 +80,15 @@ Backend (FastAPI)
 Cody SDK       SQLite DB
 ```
 
-### Core Workflow (4 Stages)
+### Core Workflow (5 Stages)
 
-1. **Technical Plan** — AI generates plan from task description; user discusses/adjusts
-2. **Task Decomposition** — Plan broken into sequential todos
-3. **Code Implementation** — Each todo executed independently by AI; user reviews
-4. **Code Review & Submit** — Review all diffs, generate commit message, push MR
+1. **Init** — Fetch code (copy repos to task dir, checkout branch) + sync skills; user confirms to proceed
+2. **Plan** — AI generates technical plan; user discusses/adjusts, then locks
+3. **Todo** — Locked plan auto-decomposed into sequential todos; user confirms to start coding
+4. **Coding** — Each todo executed independently by AI; user reviews results
+5. **Review** — Review all diffs, generate commit message, push MR
+
+Frontend routes: `/devflow/:taskId/{init,plan,todo,coding,review}`. Each stage uses `isStageReadonly()` to become read-only once the task moves past it; users can click back to previous stages to review in readonly mode.
 
 ### Session Architecture (SessionRunner + WSManager)
 
@@ -138,7 +141,7 @@ Output: `~/.daiflow/projects/{project_id}/skills/{knowledge_type}/SKILL.md`
 |----------|--------------|
 | Settings | `GET/PUT /api/settings`, `GET /api/settings/check` |
 | Projects | CRUD `/api/projects`, `POST .../init`, `GET .../init/sessions` |
-| Tasks | CRUD `/api/tasks`, `POST .../lock-plan`, `POST .../start-coding`, `POST .../start-review` |
+| Tasks | CRUD `/api/tasks`, `POST .../confirm-init`, `POST .../lock-plan`, `POST .../start-coding`, `POST .../start-review` |
 | Dev Flow | `POST /api/tasks/{id}/plan`, `POST .../todo`, `POST /api/todos/{id}/execute` |
 | Sessions | `GET /api/sessions/{id}/status`, `GET .../logs` |
 | WebSocket | `WS /api/ws` — subscribe to channels, real-time events, stage chat |
@@ -179,7 +182,7 @@ Defined in `daiflow/models.py`. All primary keys use UUID hex strings (`uuid.uui
 - All AI tasks go through SessionRunner → WSManager → WebSocket push
 - Cody SDK StreamChunk types: `text_delta`, `thinking`, `tool_call`, `tool_result`, `done`, `compact`
 - DaiFlow event types: above + `status_change` (converted from done), `plan_updated` / `todo_updated` / `code_updated` (file write detection per stage), `skill_loaded` (read_skill detection), `session_status` (init bus)
-- All 4 stage chats go through `WS /api/ws` chat action, shared pattern: `useStageChat` hook + `chat_service.prepare_stage_chat()` + `run_stage_chat()` backend generator
+- Stage chats (Plan/Todo/Coding/Review) go through `WS /api/ws` chat action, shared pattern: `useStageChat` hook + `chat_service.prepare_stage_chat()` + `run_stage_chat()` backend generator (Init stage has no chat)
 - Stage-specific updated events: `plan_updated` (push full content), `todo_updated` (push full content), `code_updated` (push null, frontend re-fetches diff), `skill_loaded` (push skill_name when Cody calls read_skill)
 - Session logs persisted to `~/.daiflow/sessions/{session_id}.jsonl` for replay after restart
 - Multi-repo support via `allowed_roots` in Cody client config

@@ -39,6 +39,23 @@
   position: relative;
 }
 
+.test-result {
+  font-size: 13px;
+  padding: 10px 14px;
+  border-radius: var(--r2);
+  margin-bottom: 12px;
+}
+
+.test-ok {
+  color: var(--green);
+  background: var(--green-d, rgba(34, 197, 94, 0.1));
+}
+
+.test-fail {
+  color: var(--red);
+  background: var(--red-d, rgba(239, 68, 68, 0.1));
+}
+
 .actions {
   display: flex;
   gap: 10px;
