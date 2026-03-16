@@ -145,6 +145,7 @@ class SessionRunner:
         on_tool_result=None,
         cody_session_id: str | None = None,
         language: str | None = None,
+        on_before_done=None,
     ):
         """Execute a Cody task with full lifecycle management.
 
@@ -200,6 +201,7 @@ class SessionRunner:
         try:
             result_cody_session_id = None
             done_finished_at = _now()  # Default; overwritten when done chunk arrives
+            done_ts = _now_iso()  # Default; overwritten when done chunk arrives
             stream_kwargs = {}
             if cody_session_id:
                 stream_kwargs["session_id"] = cody_session_id
@@ -217,21 +219,8 @@ class SessionRunner:
                     if event["type"] == "done":
                         if hasattr(chunk, "session_id"):
                             result_cody_session_id = chunk.session_id
-
-                        status_event = {"type": "status_change", "status": SessionStatus.DONE, "ts": event["ts"]}
-                        await self._ws.publish(channel, status_event)
-                        await append_log(session_id, status_event)
-
                         done_finished_at = _now()
-                        if extra_channels:
-                            for ch in extra_channels:
-                                await self._ws.publish(ch, {
-                                    "type": "session_status",
-                                    "session_id": session_id,
-                                    "status": SessionStatus.DONE,
-                                    "finished_at": utc_iso(done_finished_at),
-                                    "ts": event["ts"],
-                                })
+                        done_ts = event["ts"]
                     else:
                         await self._ws.publish(channel, event)
 
@@ -263,6 +252,25 @@ class SessionRunner:
                 )
             )
             await db.commit()
+
+            # Run post-execution hook before publishing terminal event,
+            # so dependent DB writes (e.g. todo status) are visible to frontend.
+            if on_before_done:
+                await on_before_done()
+
+            # Now publish status_change(DONE) — frontend can safely reload.
+            status_event = {"type": "status_change", "status": SessionStatus.DONE, "ts": done_ts}
+            await self._ws.publish(channel, status_event)
+            await append_log(session_id, status_event)
+            if extra_channels:
+                for ch in extra_channels:
+                    await self._ws.publish(ch, {
+                        "type": "session_status",
+                        "session_id": session_id,
+                        "status": SessionStatus.DONE,
+                        "finished_at": utc_iso(done_finished_at),
+                        "ts": done_ts,
+                    })
 
         except Exception as e:
             error_msg = traceback.format_exc()

@@ -120,6 +120,8 @@ async def run_agent(
         on_tool_result = config.build_artifact_detector(ctx)
 
         # 8. Execute via SessionRunner
+        # on_complete is passed as on_before_done so it runs after DB update
+        # but before status_change(DONE) is published to WS.
         runner = SessionRunner(client)
         async with client:
             await runner.run(
@@ -128,10 +130,8 @@ async def run_agent(
                 on_tool_result=on_tool_result,
                 cody_session_id=cody_session_id,
                 language=lang,
+                on_before_done=lambda: config.on_complete(ctx),
             )
-
-        # 9. Post-execution hook
-        await config.on_complete(ctx)
 
     except Exception:
         logger.exception("Agent %s execution failed for entity %s", agent_type, entity_id)
