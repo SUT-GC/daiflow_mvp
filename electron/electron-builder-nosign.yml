@@ -1,0 +1,81 @@
+appId: com.daiflow.desktop
+productName: DaiFlow
+copyright: Copyright © 2026 DaiFlow
+
+directories:
+  output: dist
+
+# electron-builder files are relative to the electron/ directory.
+# Backend code lives at the project root, so we use extraResources
+# to copy them into the packaged app's resources directory.
+asar: true
+
+files:
+  - "main/**/*"
+  - "splash/**/*"
+  - "icons/**/*"
+  - "package.json"
+
+# Copy backend code, migrations, and dependency declarations into
+# resources/ (unpacked, so Python subprocess can read them directly)
+extraResources:
+  - from: "../daiflow"
+    to: "backend/daiflow"
+    filter:
+      - "**/*"
+  - from: "../alembic"
+    to: "backend/alembic"
+    filter:
+      - "**/*"
+  - from: "../alembic.ini"
+    to: "backend/alembic.ini"
+  - from: "../requirements.txt"
+    to: "backend/requirements.txt"
+  - from: "../pyproject.toml"
+    to: "backend/pyproject.toml"
+  # Bundled Python runtime (arm64 & x64)
+  - from: "python-runtime/darwin-arm64"
+    to: "python-arm64"
+    filter:
+      - "**/*"
+  - from: "python-runtime/darwin-x64"
+    to: "python-x64"
+    filter:
+      - "**/*"
+
+mac:
+  category: public.app-category.developer-tools
+  icon: icons/icon.icns
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+    - target: zip
+      arch:
+        - x64
+        - arm64
+
+
+win:
+  icon: icons/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  installerIcon: icons/icon.ico
+
+linux:
+  icon: icons
+  category: Development
+  target:
+    - target: AppImage
+      arch:
+        - x64
+    - target: deb
+      arch:
+        - x64

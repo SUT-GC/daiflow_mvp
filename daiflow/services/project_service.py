@@ -6,6 +6,7 @@ from pathlib import Path
 
 from sqlalchemy import select, update
 
+from daiflow.config import utc_iso
 from daiflow.database import get_background_db
 from daiflow.models import ProjectRepo, Session, SessionStatus
 from daiflow.prompts import KNOWLEDGE_PROMPTS, PROJECT_MD_PROMPT
@@ -239,7 +240,7 @@ async def prepare_init_sessions(db, project_id: str, repos: list) -> list[dict]:
             # Append run_boundary marker (preserves historical logs)
             await append_log(sd["session_id"], {
                 "type": "run_boundary",
-                "ts": datetime.now(timezone.utc).isoformat(),
+                "ts": utc_iso(datetime.now(timezone.utc)),
             })
         else:
             db.add(Session(**sd, status=SessionStatus.WAITING))
@@ -266,8 +267,8 @@ async def get_init_layer_status(db, project_id: str) -> list[dict]:
             "session_id": s.session_id,
             "status": s.status,
             "error": s.error,
-            "started_at": s.started_at.isoformat() if s.started_at else None,
-            "finished_at": s.finished_at.isoformat() if s.finished_at else None,
+            "started_at": utc_iso(s.started_at) if s.started_at else None,
+            "finished_at": utc_iso(s.finished_at) if s.finished_at else None,
         })
 
     for layer in layers.values():
@@ -303,7 +304,7 @@ async def run_init(project_id: str, ws_manager: WSManager | None = None):
         # Layer 1: skill_fetch + repo_clone (parallel via run_simple_task)
         async def _do_skill_fetch(task_db, session_id):
             await append_log(session_id, {
-                "type": "text_delta", "ts": datetime.now(timezone.utc).isoformat(),
+                "type": "text_delta", "ts": utc_iso(datetime.now(timezone.utc)),
                 "content": "Skill fetch: no external skills configured, skipping.\n",
             })
 
@@ -311,14 +312,14 @@ async def run_init(project_id: str, ws_manager: WSManager | None = None):
             git_repos = [r for r in repos if r.git_url and not r.local_path]
             if not git_repos:
                 await append_log(session_id, {
-                    "type": "text_delta", "ts": datetime.now(timezone.utc).isoformat(),
+                    "type": "text_delta", "ts": utc_iso(datetime.now(timezone.utc)),
                     "content": "No remote repos to clone, skipping.\n",
                 })
                 return
             for r in git_repos:
                 clone_dir = project_dir / "code" / repo_dir_name(r.git_url)
                 await append_log(session_id, {
-                    "type": "text_delta", "ts": datetime.now(timezone.utc).isoformat(),
+                    "type": "text_delta", "ts": utc_iso(datetime.now(timezone.utc)),
                     "content": f"Cloning/pulling {r.git_url} → {clone_dir} ...\n",
                 })
                 await clone_or_pull(r.git_url, str(clone_dir))
@@ -331,7 +332,7 @@ async def run_init(project_id: str, ws_manager: WSManager | None = None):
                 except Exception:
                     pass
                 await append_log(session_id, {
-                    "type": "text_delta", "ts": datetime.now(timezone.utc).isoformat(),
+                    "type": "text_delta", "ts": utc_iso(datetime.now(timezone.utc)),
                     "content": f"✓ {repo_dir_name(r.git_url)} ready.\n",
                 })
 

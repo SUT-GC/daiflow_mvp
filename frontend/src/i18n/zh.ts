@@ -138,6 +138,8 @@ const zh: Record<TranslationKey, string> = {
   'tasks.branch_placeholder': 'feature/my-branch',
   'tasks.prd_label': 'PRD（Markdown）',
   'tasks.prd_placeholder': '在此粘贴 PRD 内容...',
+  'tasks.prd_images_label': '参考图片',
+  'tasks.prd_images_hint': '点击上传或拖拽图片（也支持粘贴）',
   'tasks.tech_hint': '可选：留空后 AI 将自动生成技术方案。',
   'tasks.tech_label': '技术方案（Markdown）',
   'tasks.tech_placeholder': '输入现有技术思路...',

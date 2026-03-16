@@ -136,6 +136,8 @@ const en = {
   'tasks.branch_placeholder': 'feature/my-branch',
   'tasks.prd_label': 'PRD (Markdown)',
   'tasks.prd_placeholder': 'Paste PRD content here...',
+  'tasks.prd_images_label': 'Reference Images',
+  'tasks.prd_images_hint': 'Click to upload or drag & drop images (also supports paste)',
   'tasks.tech_hint': 'Optional: leave empty and AI will generate the technical plan automatically.',
   'tasks.tech_label': 'Technical Plan (Markdown)',
   'tasks.tech_placeholder': 'Enter existing technical ideas...',

@@ -8,7 +8,7 @@ from pathlib import Path
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from daiflow.config import FILE_WRITE_TOOLS, LANGUAGE_INSTRUCTIONS, SESSIONS_DIR, safe_filename
+from daiflow.config import FILE_WRITE_TOOLS, LANGUAGE_INSTRUCTIONS, SESSIONS_DIR, safe_filename, utc_iso
 from daiflow.models import Session, SessionStatus
 from daiflow.ws_manager import WSManager, ws_manager as _default_ws_manager
 
@@ -22,6 +22,10 @@ MAX_TOOL_CALL_ARGS = 200
 
 def _now():
     return datetime.now(timezone.utc)
+
+
+def _now_iso():
+    return utc_iso(_now())
 
 
 def _chunk_to_event(chunk) -> dict | None:
@@ -136,7 +140,7 @@ class SessionRunner:
         self,
         db: AsyncSession,
         session_id: str,
-        prompt: str,
+        prompt,
         extra_channels: list[str] | None = None,
         on_tool_result=None,
         cody_session_id: str | None = None,
@@ -147,20 +151,22 @@ class SessionRunner:
         Args:
             db: Database session (must be an independent session for background tasks)
             session_id: DaiFlow business session ID
-            prompt: The prompt to send to Cody
+            prompt: The prompt to send to Cody (str or MultimodalPrompt)
             extra_channels: Additional WebSocket channels to publish status to
             on_tool_result: Optional callback(event) for detecting file writes
             cody_session_id: Optional Cody session ID to continue a previous conversation
             language: Language code (e.g. 'zh', 'en') to append language instruction
         """
-        if language:
+        if language and isinstance(prompt, str):
             prompt = prompt + LANGUAGE_INSTRUCTIONS.get(language, "")
+        elif language and hasattr(prompt, "text"):
+            prompt.text = prompt.text + LANGUAGE_INSTRUCTIONS.get(language, "")
         channel = f"session:{session_id}"
 
         # Append run_boundary marker instead of deleting (preserves previous attempts)
         log_file = _log_path(session_id)
         if log_file.exists():
-            await append_log(session_id, {"type": "run_boundary", "ts": _now().isoformat()})
+            await append_log(session_id, {"type": "run_boundary", "ts": _now_iso()})
 
         # Update session status to running; store cody_session_id immediately if reusing
         run_started_at = _now()
@@ -181,11 +187,14 @@ class SessionRunner:
                     "type": "session_status",
                     "session_id": session_id,
                     "status": SessionStatus.RUNNING,
-                    "started_at": run_started_at.isoformat(),
+                    "started_at": utc_iso(run_started_at),
                 })
 
-        # Log user message
-        user_event = {"type": "user_message", "content": prompt, "ts": _now().isoformat()}
+        # Log user message (text + image filenames; base64 data is not logged)
+        log_content = prompt.text if hasattr(prompt, "text") else prompt
+        user_event = {"type": "user_message", "content": log_content, "ts": _now_iso()}
+        if hasattr(prompt, "images") and prompt.images:
+            user_event["images"] = [img.filename for img in prompt.images]
         await append_log(session_id, user_event)
 
         try:
@@ -199,10 +208,10 @@ class SessionRunner:
                 async for chunk in self.client.stream(prompt, **stream_kwargs):
                     event = _chunk_to_event(chunk)
                     if event is None:
-                        await append_log(session_id, {"type": "compact", "ts": _now().isoformat()})
+                        await append_log(session_id, {"type": "compact", "ts": _now_iso()})
                         continue
 
-                    event["ts"] = _now().isoformat()
+                    event["ts"] = _now_iso()
                     await append_log(session_id, event)
 
                     if event["type"] == "done":
@@ -220,7 +229,7 @@ class SessionRunner:
                                     "type": "session_status",
                                     "session_id": session_id,
                                     "status": SessionStatus.DONE,
-                                    "finished_at": done_finished_at.isoformat(),
+                                    "finished_at": utc_iso(done_finished_at),
                                     "ts": event["ts"],
                                 })
                     else:
@@ -257,10 +266,10 @@ class SessionRunner:
 
         except Exception as e:
             error_msg = traceback.format_exc()
-            error_event = {"type": "error", "content": str(e), "ts": _now().isoformat()}
+            error_event = {"type": "error", "content": str(e), "ts": _now_iso()}
             await append_log(session_id, error_event)
 
-            status_event = {"type": "status_change", "status": SessionStatus.FAILED, "error": str(e), "ts": _now().isoformat()}
+            status_event = {"type": "status_change", "status": SessionStatus.FAILED, "error": str(e), "ts": _now_iso()}
             await self._ws.publish(channel, status_event)
 
             failed_finished_at = _now()
@@ -271,8 +280,8 @@ class SessionRunner:
                         "session_id": session_id,
                         "status": SessionStatus.FAILED,
                         "error": str(e),
-                        "finished_at": failed_finished_at.isoformat(),
-                        "ts": failed_finished_at.isoformat(),
+                        "finished_at": utc_iso(failed_finished_at),
+                        "ts": utc_iso(failed_finished_at),
                     })
 
             await db.execute(
@@ -303,7 +312,7 @@ async def run_stage_chat(
         message = message + LANGUAGE_INSTRUCTIONS.get(language, "")
 
     # Log user message
-    user_event = {"type": "user_message", "content": message, "ts": _now().isoformat()}
+    user_event = {"type": "user_message", "content": message, "ts": _now_iso()}
     await append_log(session_id, user_event)
 
     tracker = _ToolCallTracker()
@@ -319,7 +328,7 @@ async def run_stage_chat(
                 if event is None:
                     continue
 
-                event["ts"] = _now().isoformat()
+                event["ts"] = _now_iso()
                 await append_log(session_id, event)
 
                 if event["type"] == "done":
@@ -341,7 +350,7 @@ async def run_stage_chat(
                         yield updated_event
 
     except Exception as e:
-        error_event = {"type": "error", "content": str(e), "ts": _now().isoformat()}
+        error_event = {"type": "error", "content": str(e), "ts": _now_iso()}
         await append_log(session_id, error_event)
         yield error_event
 
