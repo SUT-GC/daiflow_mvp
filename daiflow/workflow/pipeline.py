@@ -18,6 +18,7 @@ from daiflow.database import get_background_db
 from daiflow.models import ProjectRepo, Session, SessionStatus
 from daiflow.services.settings_service import get_language_setting
 from daiflow.services.skill_service import get_project_dir
+from daiflow.config import utc_iso
 from daiflow.session_runner import append_log
 from daiflow.ws_manager import WSManager, ws_manager as _default_ws_manager
 
@@ -51,14 +52,14 @@ async def run_simple_task(
             "session_id": session_id,
             "status": SessionStatus.RUNNING,
             "layer": session.layer,
-            "started_at": started.isoformat(),
+            "started_at": utc_iso(started),
         })
 
         try:
             await fn(db, session_id)
 
             finished = datetime.now(timezone.utc)
-            await append_log(session_id, {"type": "done", "ts": finished.isoformat()})
+            await append_log(session_id, {"type": "done", "ts": utc_iso(finished)})
             session.status = SessionStatus.DONE
             session.finished_at = finished
             await db.commit()
@@ -67,17 +68,17 @@ async def run_simple_task(
                 "session_id": session_id,
                 "status": SessionStatus.DONE,
                 "layer": session.layer,
-                "finished_at": finished.isoformat(),
+                "finished_at": utc_iso(finished),
             })
 
         except Exception as e:
             failed_at = datetime.now(timezone.utc)
             logger.error("Simple task %s failed: %s", session_id, e)
             await append_log(session_id, {
-                "type": "text_delta", "ts": failed_at.isoformat(),
+                "type": "text_delta", "ts": utc_iso(failed_at),
                 "content": f"✗ Failed: {e}\n",
             })
-            await append_log(session_id, {"type": "done", "ts": failed_at.isoformat()})
+            await append_log(session_id, {"type": "done", "ts": utc_iso(failed_at)})
             session.status = SessionStatus.FAILED
             session.error = str(e)[:500]
             session.finished_at = failed_at
@@ -88,6 +89,6 @@ async def run_simple_task(
                 "status": SessionStatus.FAILED,
                 "error": str(e)[:500],
                 "layer": session.layer,
-                "finished_at": failed_at.isoformat(),
+                "finished_at": utc_iso(failed_at),
             })
             raise

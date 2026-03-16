@@ -20,6 +20,14 @@ def safe_filename(session_id: str) -> str:
     return re.sub(r'[:\\/*?"<>|]', '_', session_id)
 
 
+def utc_iso(dt) -> str:
+    """Format a datetime as ISO string with 'Z' suffix for UTC."""
+    s = dt.isoformat()
+    if s.endswith("+00:00"):
+        return s[:-6] + "Z"
+    return s + "Z"
+
+
 LANGUAGE_INSTRUCTIONS = {
     "zh": "\n\n[IMPORTANT: 请用中文(简体)生成所有输出内容，包括文档、分析、计划和回复。]",
     "en": "\n\n[IMPORTANT: Please write ALL output in English.]",

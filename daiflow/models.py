@@ -91,6 +91,7 @@ class Task(Base):
     description = Column(Text, default="")
     branch = Column(String, default="")
     prd = Column(Text, default="")
+    prd_images = Column(Text, default="[]")  # JSON array of image file paths
     tech_plan = Column(Text, default="")
     status = Column(Integer, default=0)  # 0=created..7=done
     mr_info = Column(Text, default="{}")  # JSON

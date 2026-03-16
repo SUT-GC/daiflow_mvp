@@ -8,11 +8,20 @@ from pydantic import BaseModel, ConfigDict, field_validator
 
 
 def _serialize_dt(v):
-    """Convert datetime objects to ISO strings for JSON serialization."""
+    """Convert datetime objects to ISO strings for JSON serialization.
+
+    Appends 'Z' for UTC datetimes so JavaScript parses them correctly
+    (without 'Z', JS treats ISO strings as local time).
+    """
     if v is None:
         return None
     if isinstance(v, datetime):
-        return v.isoformat()
+        s = v.isoformat()
+        if s.endswith("+00:00"):
+            return s[:-6] + "Z"
+        if v.tzinfo is None:
+            return s + "Z"
+        return s
     return v
 
 
@@ -67,11 +76,17 @@ class TaskResponse(_ORMBase):
     description: str
     branch: str
     prd: str
+    prd_images: list[str] = []
     tech_plan: str
     status: int
     mr_info: dict | list = {}
     created_at: str | None = None
     updated_at: str | None = None
+
+    @field_validator("prd_images", mode="before")
+    @classmethod
+    def parse_prd_images(cls, v):
+        return _parse_json_str(v, [])
 
     @field_validator("mr_info", mode="before")
     @classmethod

@@ -1,12 +1,15 @@
 import json
 import logging
+import os
 import shutil
+import uuid
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from daiflow.config import TASKS_DIR
+from daiflow.config import TASKS_DIR, utc_iso
 from daiflow.database import get_db
 from daiflow.models import Session, SessionStatus, Task, TaskStatus, Todo
 from daiflow.schemas import SubmitMR, TaskCreate, TaskResponse, TaskUpdate, TodoResponse
@@ -110,6 +113,93 @@ async def update_task(
             setattr(task, field, value)
     await db.commit()
     return _task_to_dict(task)
+
+
+ALLOWED_IMAGE_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
+MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10 MB
+_EXT_TO_MEDIA = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif"}
+
+
+@router.get("/{task_id}/prd-images/{filename}")
+async def get_prd_image(task_id: str, filename: str):
+    """Serve a PRD image file."""
+    img_path = TASKS_DIR / task_id / "prd_images" / filename
+    # Prevent path traversal
+    if ".." in filename or "/" in filename or not img_path.resolve().is_relative_to((TASKS_DIR / task_id / "prd_images").resolve()):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    if not img_path.exists():
+        raise HTTPException(status_code=404, detail="Image not found")
+    ext = os.path.splitext(filename)[1].lower()
+    media_type = _EXT_TO_MEDIA.get(ext, "application/octet-stream")
+    return FileResponse(img_path, media_type=media_type)
+
+
+@router.post("/{task_id}/prd-images")
+async def upload_prd_image(
+    task_id: str,
+    file: UploadFile,
+    db: AsyncSession = Depends(get_db),
+):
+    """Upload an image for the task's PRD. Returns the image filename."""
+    task = await db.get(Task, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    if file.content_type not in ALLOWED_IMAGE_TYPES:
+        raise HTTPException(status_code=400, detail=f"Unsupported image type: {file.content_type}")
+
+    data = await file.read()
+    if len(data) > MAX_IMAGE_SIZE:
+        raise HTTPException(status_code=400, detail="Image too large (max 10 MB)")
+
+    # Determine extension from content type
+    ext = {
+        "image/png": ".png",
+        "image/jpeg": ".jpg",
+        "image/webp": ".webp",
+        "image/gif": ".gif",
+    }[file.content_type]
+    filename = f"{uuid.uuid4().hex[:12]}{ext}"
+
+    img_dir = TASKS_DIR / task_id / "prd_images"
+    img_dir.mkdir(parents=True, exist_ok=True)
+    (img_dir / filename).write_bytes(data)
+
+    # Update prd_images JSON array in DB
+    images: list = json.loads(task.prd_images or "[]")
+    images.append(filename)
+    task.prd_images = json.dumps(images)
+    await db.commit()
+
+    return {"filename": filename}
+
+
+@router.delete("/{task_id}/prd-images/{filename}")
+async def delete_prd_image(
+    task_id: str,
+    filename: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a PRD image by filename."""
+    task = await db.get(Task, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    images: list = json.loads(task.prd_images or "[]")
+    if filename not in images:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    # Remove file
+    img_path = TASKS_DIR / task_id / "prd_images" / filename
+    if img_path.exists():
+        img_path.unlink()
+
+    # Update DB
+    images.remove(filename)
+    task.prd_images = json.dumps(images)
+    await db.commit()
+
+    return {"ok": True}
 
 
 @router.delete("/{task_id}")
@@ -251,8 +341,8 @@ async def get_init_sessions(task_id: str, db: AsyncSession = Depends(get_db)):
             "session_id": s.session_id,
             "status": s.status,
             "error": s.error,
-            "started_at": s.started_at.isoformat() if s.started_at else None,
-            "finished_at": s.finished_at.isoformat() if s.finished_at else None,
+            "started_at": utc_iso(s.started_at) if s.started_at else None,
+            "finished_at": utc_iso(s.finished_at) if s.finished_at else None,
         }
         for s in sessions
     ]
