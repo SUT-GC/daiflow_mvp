@@ -353,6 +353,10 @@ async def run_stage_chat(
         error_event = {"type": "error", "content": str(e), "ts": _now_iso()}
         await append_log(session_id, error_event)
         yield error_event
+        # Always send done so frontend chat handler cleans up
+        done_event = {"type": "done", "ts": _now_iso()}
+        await append_log(session_id, done_event)
+        yield done_event
 
 
 def _extract_file_path(event: dict) -> str:

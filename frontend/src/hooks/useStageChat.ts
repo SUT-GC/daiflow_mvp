@@ -160,7 +160,21 @@ export function useStageChat({ sessionId, stage, entityId, onUpdated, sessionLog
         onUpdated?.(event)
       } else if (event.type === 'error') {
         aiContentRef.current += `\n\n[Error: ${event.content || 'Unknown error'}]`
-        scheduleFlush()
+        // Treat error as terminal — stop streaming and finalize message
+        if (rafRef.current !== null) {
+          cancelAnimationFrame(rafRef.current)
+          rafRef.current = null
+        }
+        setMessages(prev => {
+          const last = prev[prev.length - 1]
+          if (last && last.role === 'ai') {
+            return [...prev.slice(0, -1), { ...last, content: aiContentRef.current, events: [...aiEventsRef.current], done: true }]
+          }
+          return prev
+        })
+        setStreaming(false)
+        cancelRef.current = null
+        return
       } else if (event.type === 'done') {
         if (rafRef.current !== null) {
           cancelAnimationFrame(rafRef.current)
